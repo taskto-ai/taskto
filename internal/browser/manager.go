@@ -12,14 +12,16 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 type Host interface {
 	Bin(prog Program) string
-	Start(user int64, spec ProcSpec, extra []*os.File) (*exec.Cmd, error)
-	DialVNC(ctx context.Context, user int64) (io.ReadWriteCloser, error)
-	Clean(user int64) error
-	Purge(user int64) error
+	Start(a cliowner.Account, spec ProcSpec, extra []*os.File) (*exec.Cmd, error)
+	DialVNC(ctx context.Context, a cliowner.Account) (io.ReadWriteCloser, error)
+	Clean(a cliowner.Account) error
+	Purge(a cliowner.Account) error
 }
 
 type Config struct {
@@ -29,6 +31,15 @@ type Config struct {
 	NoSandbox               bool
 	StartTimeout, StopGrace time.Duration
 	Tick                    time.Duration
+	Allow                   func(a cliowner.Account) error
+	Fence                   func(ctx context.Context, a cliowner.Account, do func() error) error
+}
+
+func (m *Manager) allowed(a cliowner.Account) error {
+	if m.cfg.Allow == nil {
+		return nil
+	}
+	return m.cfg.Allow(a)
 }
 
 type Manager struct {
@@ -37,19 +48,20 @@ type Manager struct {
 	mu        sync.Mutex
 	sessions  map[key]*session
 	stopping  map[key][]*session
-	forgotten map[int64]struct{}
+	forgotten map[string]time.Time
 	closed    bool
 	stopTick  chan struct{}
 	wg        sync.WaitGroup
 }
 
 type key struct {
-	user int64
+	id   string
 	kind Kind
 }
 
 type session struct {
 	key      key
+	acct     cliowner.Account
 	ready    chan struct{}
 	err      error
 	inst     *instance
@@ -80,7 +92,7 @@ func NewManager(cfg Config) *Manager {
 	if cfg.Tick <= 0 {
 		cfg.Tick = 15 * time.Second
 	}
-	m := &Manager{cfg: cfg, sessions: map[key]*session{}, stopping: map[key][]*session{}, forgotten: map[int64]struct{}{}, stopTick: make(chan struct{})}
+	m := &Manager{cfg: cfg, sessions: map[key]*session{}, stopping: map[key][]*session{}, forgotten: map[string]time.Time{}, stopTick: make(chan struct{})}
 	m.wg.Add(1)
 	go m.idleLoop()
 	return m
@@ -106,12 +118,15 @@ func (m *Manager) Availability(context.Context) map[Kind]bool {
 	return map[Kind]bool{Personal: m.Available(Personal), Testing: m.Available(Testing)}
 }
 
-func (m *Manager) Status(ctx context.Context, user int64) (map[Kind]State, error) {
+func (m *Manager) Status(ctx context.Context, a cliowner.Account) (map[Kind]State, error) {
+	if err := m.allowed(a); err != nil {
+		return nil, err
+	}
 	out := map[Kind]State{}
 	for _, kind := range []Kind{Personal, Testing} {
 		st := State{Available: m.Available(kind)}
 		m.mu.Lock()
-		s := m.sessions[key{user, kind}]
+		s := m.sessions[key{a.Identity, kind}]
 		var inst *instance
 		if s != nil && !s.ending && isClosed(s.ready) && s.err == nil {
 			st.Running, st.Live, inst = true, s.live > 0, s.inst
@@ -140,20 +155,20 @@ func isClosed(ch chan struct{}) bool {
 	}
 }
 
-func (m *Manager) Start(ctx context.Context, user int64, kind Kind) error {
+func (m *Manager) Start(ctx context.Context, a cliowner.Account, kind Kind) error {
 	if !kind.Valid() {
 		return badf("browser must be %q or %q", Personal, Testing)
 	}
-	_, err := m.session(ctx, user, kind, true)
+	_, err := m.session(ctx, a, kind, true)
 	return err
 }
 
-func (m *Manager) Stop(_ context.Context, user int64, kind Kind) error {
+func (m *Manager) Stop(_ context.Context, a cliowner.Account, kind Kind) error {
 	if !kind.Valid() {
 		return badf("browser must be %q or %q", Personal, Testing)
 	}
 	m.mu.Lock()
-	s := m.sessions[key{user, kind}]
+	s := m.sessions[key{a.Identity, kind}]
 	if s != nil {
 		m.endLocked(s)
 	}
@@ -164,16 +179,60 @@ func (m *Manager) Stop(_ context.Context, user int64, kind Kind) error {
 	return nil
 }
 
-func (m *Manager) Forget(ctx context.Context, user int64) error {
-	if user <= 0 {
-		return badf("invalid user")
+func (m *Manager) Forget(ctx context.Context, a cliowner.Account) error {
+	if a.User <= 0 || (a.Identity != "" && !cliowner.IsIdentity(a.Identity)) {
+		return badf("invalid account")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if a.Identity != "" && m.cfg.Fence != nil {
+		return m.cfg.Fence(ctx, a, func() error { return m.forget(ctx, a) })
+	}
+	return m.forget(ctx, a)
+}
+
+func (m *Manager) forget(ctx context.Context, a cliowner.Account) error {
+	if a.Identity != "" {
+		if err := m.stopAll(ctx, a, true); err != nil {
+			return err
+		}
+	}
+	if m.cfg.Host == nil {
+		return nil
+	}
+	if err := m.cfg.Host.Purge(a); err != nil {
+		return fmt.Errorf("removing the browser files: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) StopAll(ctx context.Context, a cliowner.Account) error {
+	if !a.Valid() {
+		return badf("invalid account")
+	}
+	return m.stopAll(ctx, a, false)
+}
+
+func (m *Manager) Unforget(again func(identity string) bool, before time.Time) {
 	m.mu.Lock()
-	m.forgotten[user] = struct{}{}
+	defer m.mu.Unlock()
+	for id, at := range m.forgotten {
+		if at.Before(before) && again(id) {
+			delete(m.forgotten, id)
+		}
+	}
+}
+
+func (m *Manager) stopAll(ctx context.Context, a cliowner.Account, forget bool) error {
+	m.mu.Lock()
+	if forget {
+		m.forgotten[a.Identity] = time.Now()
+	}
 	var wait []*session
 	var conns []*liveConn
 	for _, kind := range []Kind{Personal, Testing} {
-		k := key{user, kind}
+		k := key{a.Identity, kind}
 		wait = append(wait, m.stopping[k]...)
 		if s := m.sessions[k]; s != nil {
 			for c := range s.conns {
@@ -194,20 +253,14 @@ func (m *Manager) Forget(ctx context.Context, user int64) error {
 			return ctx.Err()
 		}
 	}
-	if m.cfg.Host == nil {
-		return nil
-	}
-	if err := m.cfg.Host.Purge(user); err != nil {
-		return fmt.Errorf("removing the browser files: %w", err)
-	}
 	return nil
 }
 
-func (m *Manager) Do(ctx context.Context, user int64, a Action) (Result, error) {
+func (m *Manager) Do(ctx context.Context, acct cliowner.Account, a Action) (Result, error) {
 	if err := a.Check(); err != nil {
 		return Result{}, err
 	}
-	s, err := m.session(ctx, user, a.Browser, a.Op != OpTabs)
+	s, err := m.session(ctx, acct, a.Browser, a.Op != OpTabs)
 	if errors.Is(err, ErrNotRunning) && a.Op == OpTabs {
 		return Result{Tabs: []Tab{}}, nil
 	}
@@ -224,8 +277,8 @@ func (m *Manager) Do(ctx context.Context, user int64, a Action) (Result, error) 
 
 const MaxLive = 4
 
-func (m *Manager) OpenLive(ctx context.Context, user int64) (io.ReadWriteCloser, error) {
-	s, err := m.session(ctx, user, Personal, false)
+func (m *Manager) OpenLive(ctx context.Context, a cliowner.Account) (io.ReadWriteCloser, error) {
+	s, err := m.session(ctx, a, Personal, false)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +290,7 @@ func (m *Manager) OpenLive(ctx context.Context, user int64) (io.ReadWriteCloser,
 	s.live++
 	s.lastUse = time.Now()
 	m.mu.Unlock()
-	conn, err := m.cfg.Host.DialVNC(ctx, user)
+	conn, err := m.cfg.Host.DialVNC(ctx, a)
 	if err != nil {
 		m.mu.Lock()
 		s.live--
@@ -303,16 +356,23 @@ func (m *Manager) touch(s *session) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) session(ctx context.Context, user int64, kind Kind, start bool) (*session, error) {
-	k := key{user, kind}
+func (m *Manager) session(ctx context.Context, a cliowner.Account, kind Kind, start bool) (*session, error) {
+	if !a.Valid() {
+		return nil, badf("invalid account")
+	}
+	k := key{a.Identity, kind}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
 		return nil, ErrClosed
 	}
-	if _, gone := m.forgotten[user]; gone {
+	if _, gone := m.forgotten[a.Identity]; gone {
 		m.mu.Unlock()
 		return nil, ErrAccountClosing
+	}
+	if err := m.allowed(a); err != nil {
+		m.mu.Unlock()
+		return nil, err
 	}
 	s := m.sessions[k]
 	if s == nil {
@@ -328,7 +388,7 @@ func (m *Manager) session(ctx context.Context, user int64, kind Kind, start bool
 			m.mu.Unlock()
 			return nil, ErrBusy
 		}
-		s = &session{key: k, ready: make(chan struct{}), ended: make(chan struct{}), lastUse: time.Now()}
+		s = &session{key: k, acct: a, ready: make(chan struct{}), ended: make(chan struct{}), lastUse: time.Now()}
 		m.sessions[k] = s
 		prev := append([]*session(nil), m.stopping[k]...)
 		m.wg.Add(1)
@@ -360,7 +420,7 @@ func (m *Manager) evictLocked() bool {
 	if lru == nil {
 		return false
 	}
-	slog.Info("browser: stopping the least recently used browser to make room", "user", lru.key.user, "browser", lru.key.kind)
+	slog.Info("browser: stopping the least recently used browser to make room", "user", lru.acct.User, "browser", lru.key.kind)
 	m.endLocked(lru)
 	return true
 }
@@ -400,7 +460,7 @@ func (m *Manager) idleLoop() {
 			m.mu.Lock()
 			for _, s := range m.sessions {
 				if s.live == 0 && isClosed(s.ready) && now.Sub(s.lastUse) >= m.cfg.Idle {
-					slog.Info("browser: stopping an idle browser", "user", s.key.user, "browser", s.key.kind)
+					slog.Info("browser: stopping an idle browser", "user", s.acct.User, "browser", s.key.kind)
 					m.endLocked(s)
 				}
 			}
@@ -427,7 +487,7 @@ func (m *Manager) launch(s *session, prev []*session) {
 		err = m.start(ctx, s)
 	}
 	if err != nil {
-		slog.Warn("browser: could not start", "user", s.key.user, "browser", s.key.kind, "err", err)
+		slog.Warn("browser: could not start", "user", s.acct.User, "browser", s.key.kind, "err", err)
 		s.err = fmt.Errorf("the browser could not start: %w", err)
 		close(s.ready)
 		m.mu.Lock()
@@ -444,7 +504,7 @@ func (m *Manager) launch(s *session, prev []*session) {
 		}
 		m.mu.Lock()
 		if !s.ending {
-			slog.Warn("browser: it exited on its own", "user", s.key.user, "browser", s.key.kind)
+			slog.Warn("browser: it exited on its own", "user", s.acct.User, "browser", s.key.kind)
 		}
 		m.endLocked(s)
 		m.mu.Unlock()
@@ -452,14 +512,14 @@ func (m *Manager) launch(s *session, prev []*session) {
 }
 
 func (m *Manager) start(ctx context.Context, s *session) error {
-	h, user := m.cfg.Host, s.key.user
+	h, acct := m.cfg.Host, s.acct
 	display := 0
 	if s.key.kind == Personal {
 		r, w, err := os.Pipe()
 		if err != nil {
 			return err
 		}
-		err = m.add(s, h, user, ProcSpec{Program: Xvfb, Kind: Personal}, w)
+		err = m.add(s, h, acct, ProcSpec{Program: Xvfb, Kind: Personal}, w)
 		w.Close()
 		if err != nil {
 			r.Close()
@@ -481,7 +541,7 @@ func (m *Manager) start(ctx context.Context, s *session) error {
 		cmdW.Close()
 		return err
 	}
-	err = m.add(s, h, user, ProcSpec{Program: Chromium, Kind: s.key.kind, Display: display, NoSandbox: m.cfg.NoSandbox}, cmdR, outW)
+	err = m.add(s, h, acct, ProcSpec{Program: Chromium, Kind: s.key.kind, Display: display, NoSandbox: m.cfg.NoSandbox}, cmdR, outW)
 	cmdR.Close()
 	outW.Close()
 	if err != nil {
@@ -496,15 +556,15 @@ func (m *Manager) start(ctx context.Context, s *session) error {
 		return fmt.Errorf("the browser didn't answer: %w", err)
 	}
 	if s.key.kind == Personal {
-		if err := m.add(s, h, user, ProcSpec{Program: X11vnc, Kind: Personal, Display: display}); err != nil {
+		if err := m.add(s, h, acct, ProcSpec{Program: X11vnc, Kind: Personal, Display: display}); err != nil {
 			return fmt.Errorf("starting x11vnc: %w", err)
 		}
 	}
 	return nil
 }
 
-func (m *Manager) add(s *session, h Host, user int64, spec ProcSpec, extra ...*os.File) error {
-	cmd, err := h.Start(user, spec, extra)
+func (m *Manager) add(s *session, h Host, acct cliowner.Account, spec ProcSpec, extra ...*os.File) error {
+	cmd, err := h.Start(acct, spec, extra)
 	if err != nil {
 		return err
 	}
@@ -558,8 +618,8 @@ func (m *Manager) stop(s *session) {
 		stopGroup(s.procs[i], s.waits[i], wait, m.cfg.StopGrace)
 	}
 	if s.key.kind == Testing && m.cfg.Host != nil {
-		if err := m.cfg.Host.Clean(s.key.user); err != nil {
-			slog.Warn("browser: removing the testing profile", "user", s.key.user, "err", err)
+		if err := m.cfg.Host.Clean(s.acct); err != nil {
+			slog.Warn("browser: removing the testing profile", "user", s.acct.User, "err", err)
 		}
 	}
 }

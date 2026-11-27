@@ -47,7 +47,10 @@ func (s *Service) withAccount(h accountHandler) http.HandlerFunc {
 		if !s.usable(w, r) {
 			return
 		}
-		if !s.worker.Available(a.cli) {
+		if ok, err := s.cliAvailable(a.cli); err != nil {
+			workerError(w, r, a, err)
+			return
+		} else if !ok {
 			writeError(w, http.StatusServiceUnavailable, apierr.CodeCLINotInstalled, a.cli.Name()+" is not installed on this server",
 				apierr.Params{"cli": a.cli.Name()})
 			return
@@ -99,6 +102,10 @@ func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, a := range refs {
 			acct, err := s.account(r.Context(), caller(r), a)
+			if outage(err) {
+				workerError(w, r, a, err)
+				return
+			}
 			if err != nil {
 				serverError(w, r, err)
 				return
@@ -153,7 +160,11 @@ func (s *Service) handleStartLogin(w http.ResponseWriter, r *http.Request, user 
 }
 
 func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request, user int64, a ref) {
-	info, ok := s.worker.LoginInfo(user, a.cli, a.slot)
+	info, ok, err := s.worker.LoginInfo(user, a.cli, a.slot)
+	if err != nil {
+		workerError(w, r, a, err)
+		return
+	}
 	if !ok {
 		writeError(w, http.StatusNotFound, apierr.CodeCLINoLogin, cliworker.ErrNoLogin.Error())
 		return
@@ -176,7 +187,11 @@ func (s *Service) handleCode(w http.ResponseWriter, r *http.Request, user int64,
 		workerError(w, r, a, err)
 		return
 	}
-	info, ok := s.worker.LoginInfo(user, a.cli, a.slot)
+	info, ok, err := s.worker.LoginInfo(user, a.cli, a.slot)
+	if err != nil {
+		workerError(w, r, a, err)
+		return
+	}
 	if !ok {
 		writeError(w, http.StatusNotFound, apierr.CodeCLINoLogin, cliworker.ErrNoLogin.Error())
 		return
@@ -184,8 +199,11 @@ func (s *Service) handleCode(w http.ResponseWriter, r *http.Request, user int64,
 	writeJSON(w, http.StatusAccepted, info)
 }
 
-func (s *Service) handleCancel(w http.ResponseWriter, _ *http.Request, user int64, a ref) {
-	s.worker.CancelLogin(user, a.cli, a.slot)
+func (s *Service) handleCancel(w http.ResponseWriter, r *http.Request, user int64, a ref) {
+	if err := s.worker.CancelLogin(user, a.cli, a.slot); err != nil {
+		workerError(w, r, a, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -263,7 +281,7 @@ func (s *Service) handleDisconnect(w http.ResponseWriter, r *http.Request, user 
 	key := watchKey{user, a}
 	unlock := s.lockAccount(key)
 	defer unlock()
-	info, ok := s.worker.LoginInfo(user, a.cli, a.slot)
+	info, ok, _ := s.worker.LoginInfo(user, a.cli, a.slot)
 	s.forget(key, info, ok)
 	s.mu.Lock()
 	delete(s.started, key)
@@ -288,6 +306,8 @@ func workerError(w http.ResponseWriter, r *http.Request, a ref, err error) {
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLINotInstalled, err.Error(), apierr.Params{"cli": a.cli.Name()})
 	case errors.Is(err, cliworker.ErrClosed):
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerClosing, err.Error())
+	case outage(err):
+		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, ErrNotReady.Error())
 	case errors.Is(err, cliworker.ErrForgotten):
 		writeError(w, http.StatusGone, apierr.CodeCLIAccountForgotten, err.Error())
 	case errors.Is(err, cliworker.ErrRemoving):

@@ -16,6 +16,7 @@ import (
 
 	"taskto.ai/taskto/internal/agenttools"
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/usage"
@@ -35,15 +36,18 @@ func (l localWorker) StartTurn(spec cliworker.TurnSpec) (Turn, bool, error) {
 	return t, attached, nil
 }
 
-func (l localWorker) FindTurn(id string) (Turn, bool) {
-	t, ok := l.Turn(id)
+func (l localWorker) FindTurn(a cliowner.Account, id string) (Turn, error) {
+	t, ok := l.TurnOf(a, id)
 	if !ok {
-		return nil, false
+		return nil, cliworker.ErrNotFound
 	}
-	return t, true
+	return t, nil
 }
 
-func (l localWorker) StopTurn(id string) { l.Stop(id) }
+func (l localWorker) StopTurn(a cliowner.Account, id string) error {
+	l.StopTurnOf(a, id)
+	return nil
+}
 
 type Authorizer func(*http.Request) (conversations.Principal, error)
 
@@ -63,7 +67,11 @@ func (s *Service) authorized(authorize Authorizer, h principalHandler) http.Hand
 		var refusal *agenttools.Refusal
 		switch {
 		case errors.As(err, &refusal):
-			writeError(w, refusal.Status, refusalCode(refusal.Status), refusal.Message)
+			code := refusal.Code
+			if code == "" {
+				code = refusalCode(refusal.Status)
+			}
+			writeError(w, refusal.Status, code, refusal.Message)
 			return
 		case err != nil:
 			serverError(w, r, err)
@@ -130,13 +138,21 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 		serverError(w, r, err)
 		return
 	}
-	if !s.worker.Available(req.CLI) {
+	if ok, err := s.cliAvailable(req.CLI); err != nil {
+		workerError(w, r, ref{cli: req.CLI}, err)
+		return
+	} else if !ok {
 		fail(cliworker.StatusFailed, req.CLI.Name()+" is not installed on this server")
 		return
 	}
 	id := fmt.Sprintf("c%d-%s", p.Conversation, req.Turn)
 
-	if t, ok := s.worker.FindTurn(id); ok {
+	t, found, err := s.worker.FindTurn(p.User, id)
+	if err != nil {
+		workerError(w, r, ref{cli: req.CLI}, err)
+		return
+	}
+	if found {
 		if sp := t.Spec(); sp.User != p.User || sp.Conversation != p.Conversation || sp.CLI != req.CLI {
 			fail(cliworker.StatusFailed, "this turn belongs to another conversation")
 			return
@@ -171,23 +187,27 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 			return
 		}
 	}
-	if req.Replay {
-		out.write(cliworker.Event{Type: cliworker.EventInterrupted, Text: "the previous run of this turn was interrupted by a restart; resuming"})
-	}
-	if notice != "" {
-		out.write(cliworker.Event{Type: cliworker.EventNotice, Text: notice})
-		s.switchModel(r.Context(), p, req.CLI, c.cli())
-	}
 	note := ""
 	if req.Replay {
 		note = "Your previous turn was interrupted by a restart, so some of its steps may already have run: " +
 			"check before you repeat anything. Continue the task:\n\n"
 	}
-	t, err := s.start(r.Context(), p, req, id, c, note)
+	t, err = s.start(r.Context(), p, req, id, c, note)
+	if err != nil && !out.started && outage(err) {
+		workerError(w, r, ref{cli: req.CLI}, err)
+		return
+	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "cli turn: the worker refused it", "conversation", p.Conversation, "cli", c.cli(), "err", err)
 		fail(cliworker.StatusFailed, "the CLI worker refused the turn: "+err.Error())
 		return
+	}
+	if req.Replay {
+		out.write(cliworker.Event{Type: cliworker.EventInterrupted, Text: "the previous run of this turn was interrupted by a restart; resuming"})
+	}
+	if notice != "" {
+		s.switchModel(r.Context(), p, req.CLI, c.cli())
+		out.write(cliworker.Event{Type: cliworker.EventNotice, Text: notice})
 	}
 	s.chain(r.Context(), out, p, req, id, t)
 }
@@ -202,11 +222,15 @@ func (s *Service) start(ctx context.Context, p conversations.Principal, req turn
 	if req.Model != "default" && cli == req.CLI {
 		spec.Model = req.Model
 	}
-	if spec.Tools, err = s.toolsFor(id, p); err != nil {
+	if spec.Tools, err = s.toolsFor(ctx, id, p); err != nil {
 		return nil, err
 	}
 	if c.shared != nil {
-		token, err := s.mintToken(proxyClaims{Account: c.shared.ID, User: p.User, Conversation: p.Conversation, Turn: id})
+		a, err := s.Account(ctx, p.User)
+		if err != nil {
+			return nil, err
+		}
+		token, err := s.mintToken(proxyClaims{Account: c.shared.ID, User: p.User, Identity: a.Identity, Workspace: p.Workspace, Conversation: p.Conversation, Turn: id})
 		if err != nil {
 			return nil, err
 		}
@@ -305,7 +329,7 @@ func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.P
 			return
 		}
 		nextID := chainID(id, n+1)
-		next, found := s.worker.FindTurn(nextID)
+		next, found, _ := s.worker.FindTurn(p.User, nextID)
 		notice := s.switchNotice(nextID)
 		if !found && n < maxSwitches {
 			next, notice = s.switchAfter(ctx, out, p, req, t, res, id, nextID, tried)
@@ -462,7 +486,7 @@ func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversat
 		return nil, ""
 	}
 	if s.isStopped(id) {
-		s.worker.StopTurn(nextID)
+		_ = s.worker.StopTurn(p.User, nextID)
 	}
 	notice := fmt.Sprintf("%s %s: continuing on %s", from, why, next.title())
 	s.mu.Lock()
@@ -652,12 +676,19 @@ func (s *Service) handleStop(w http.ResponseWriter, r *http.Request, p conversat
 	id := fmt.Sprintf("c%d-%s", p.Conversation, req.Turn)
 	s.markStopped(id)
 	for n := 0; n <= maxSwitches; n++ {
-		t, ok := s.worker.FindTurn(chainID(id, n))
+		t, ok, err := s.worker.FindTurn(p.User, chainID(id, n))
+		if err != nil {
+			workerError(w, r, ref{}, err)
+			return
+		}
 		if !ok {
 			continue
 		}
 		if t.Spec().User == p.User && t.Spec().Conversation == p.Conversation {
-			s.worker.StopTurn(chainID(id, n))
+			if err := s.worker.StopTurn(p.User, chainID(id, n)); err != nil {
+				workerError(w, r, ref{}, err)
+				return
+			}
 			slog.InfoContext(r.Context(), "cli turn stopped", "conversation", p.Conversation, "turn", chainID(id, n))
 		}
 	}

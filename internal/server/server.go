@@ -140,6 +140,7 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	if opts.CLIAccounts != nil {
 		opts.CLIAccounts.Routes(mux, accounts)
 		opts.CLIAccounts.SharedRoutes(mux, accounts)
+		opts.CLIAccounts.OperatorRoutes(mux, accounts)
 		opts.CLIAccounts.SwitchingRoutes(mux, accounts)
 	}
 	if opts.Dictation != nil {

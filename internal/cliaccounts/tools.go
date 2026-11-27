@@ -1,9 +1,8 @@
 package cliaccounts
 
 import (
-	"crypto/hmac"
+	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/agenttools"
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/conversations"
 )
@@ -26,12 +26,16 @@ func (s *Service) SetTools(t Tools) { s.tools.Store(&t) }
 
 func (s *Service) ToolsReachable() bool { return s.shared != nil && s.shared.ProxyURL != "" }
 
-func (s *Service) toolsFor(id string, p conversations.Principal) (*cliworker.Tools, error) {
+func (s *Service) toolsFor(ctx context.Context, id string, p conversations.Principal) (*cliworker.Tools, error) {
 	t := s.tools.Load()
 	if t == nil || !s.ToolsReachable() {
 		return nil, nil
 	}
-	token, err := s.mintToolsToken(toolsClaims{User: p.User, Conversation: p.Conversation, Turn: id})
+	a, err := s.Account(ctx, p.User)
+	if err != nil {
+		return nil, err
+	}
+	token, err := s.mintToolsToken(toolsClaims{User: p.User, Identity: a.Identity, Workspace: p.Workspace, Conversation: p.Conversation, Turn: id})
 	if err != nil {
 		return nil, err
 	}
@@ -43,6 +47,8 @@ const toolsTokenLife = proxyTokenLife
 type toolsClaims struct {
 	Nonce        string `json:"n"`
 	User         int64  `json:"u"`
+	Identity     string `json:"i"`
+	Workspace    int64  `json:"w"`
 	Conversation int64  `json:"c"`
 	Turn         string `json:"t"`
 	Expires      int64  `json:"e"`
@@ -57,30 +63,18 @@ func (s *Service) mintToolsToken(c toolsClaims) (string, error) {
 	var nonce [12]byte
 	_, _ = rand.Read(nonce[:])
 	c.Nonce = b64.EncodeToString(nonce[:])
-	payload, err := json.Marshal(c)
+	token, err := sealToken(s.shared.Key, toolsTokenPrefix, toolsTokenPurpose, c)
 	if err != nil {
 		return "", err
 	}
 	s.track(toolsTokenPurpose, c.Turn, c.Nonce)
-	return toolsTokenPrefix + b64.EncodeToString(payload) + "." + b64.EncodeToString(s.shared.Key.MAC(toolsTokenPurpose, payload)), nil
+	return token, nil
 }
 
 func (s *Service) readToolsToken(token string) (toolsClaims, bool) {
 	var c toolsClaims
-	rest, ok := strings.CutPrefix(token, toolsTokenPrefix)
-	if !ok || s.shared == nil {
-		return c, false
-	}
-	parts := strings.Split(rest, ".")
-	if len(parts) != 2 {
-		return c, false
-	}
-	payload, err1 := b64.DecodeString(parts[0])
-	mac, err2 := b64.DecodeString(parts[1])
-	if err1 != nil || err2 != nil || !hmac.Equal(mac, s.shared.Key.MAC(toolsTokenPurpose, payload)) {
-		return c, false
-	}
-	if err := json.Unmarshal(payload, &c); err != nil || time.Now().Unix() > c.Expires || c.User <= 0 || c.Conversation <= 0 {
+	if s.shared == nil || !openToken(s.shared.Key, toolsTokenPrefix, toolsTokenPurpose, token, &c) ||
+		time.Now().Unix() > c.Expires || c.User <= 0 || c.Conversation <= 0 {
 		return c, false
 	}
 	return c, !s.retired(c.Nonce)
@@ -99,11 +93,24 @@ func (s *Service) ToolsCaller(r *http.Request) (agenttools.Caller, error) {
 		return agenttools.Caller{}, errToolsToken
 	}
 	c, ok := s.readToolsToken(strings.TrimSpace(raw))
-	if !ok || !s.turnRunning(c) {
+	if !ok {
+		return agenttools.Caller{}, errToolsToken
+	}
+	if same, err := s.sameAccount(r.Context(), c.User, c.Identity); err != nil {
+		return agenttools.Caller{}, fmt.Errorf("checking a tools token: %w", err)
+	} else if !same {
+		return agenttools.Caller{}, errToolsToken
+	}
+	running, err := s.turnRunning(c)
+	if err != nil {
+		return agenttools.Caller{}, &agenttools.Refusal{Status: http.StatusServiceUnavailable, Code: apierr.CodeCLIWorkerNotReady,
+			Message: "the CLI worker isn't ready yet: try again in a moment"}
+	}
+	if !running {
 		return agenttools.Caller{}, errToolsToken
 	}
 	p, err := conversations.PrincipalOf(r.Context(), s.db, c.Conversation)
-	if errors.Is(err, conversations.ErrInactive) || (err == nil && p.User != c.User) {
+	if errors.Is(err, conversations.ErrInactive) || (err == nil && (p.User != c.User || p.Workspace != c.Workspace)) {
 		return agenttools.Caller{}, errToolsConversation
 	}
 	if err != nil {
@@ -112,14 +119,34 @@ func (s *Service) ToolsCaller(r *http.Request) (agenttools.Caller, error) {
 	return agenttools.Caller{Workspace: p.Workspace, User: p.User, Conversation: p.Conversation}, nil
 }
 
-func (s *Service) turnRunning(c toolsClaims) bool {
+func (s *Service) turnRunning(c toolsClaims) (bool, error) {
 	if s.worker == nil {
-		return false
+		return false, nil
 	}
-	t, ok := s.worker.FindTurn(c.Turn)
+	t, ok, err := s.worker.FindTurn(c.User, c.Turn)
+	if err != nil {
+		if outage(err) {
+			return false, err
+		}
+		return false, nil
+	}
 	if !ok || t.Over() {
-		return false
+		return false, nil
 	}
 	spec := t.Spec()
-	return spec.User == c.User && spec.Conversation == c.Conversation
+	return spec.User == c.User && spec.Conversation == c.Conversation, nil
+}
+
+func (s *Service) sameAccount(ctx context.Context, user int64, identity string) (bool, error) {
+	if identity == "" {
+		return false, nil
+	}
+	a, err := s.Account(ctx, user)
+	if errors.Is(err, cliworker.ErrForgotten) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return a.Identity == identity, nil
 }

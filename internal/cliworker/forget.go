@@ -5,114 +5,196 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
-func (w *Worker) forgottenMark(user int64) string {
-	return filepath.Join(w.stateDir(), "forgotten-u"+strconv.FormatInt(user, 10))
-}
+var ErrForgotten = errors.New("this account's CLI files were removed with it")
 
-func (w *Worker) isForgotten(user int64) bool {
-	_, err := os.Stat(w.forgottenMark(user))
-	return !errors.Is(err, fs.ErrNotExist)
-}
+var ErrIncomplete = errors.New("some retired accounts' files could not be removed yet; they are refused, and it is tried again")
 
-func (w *Worker) markForgotten(user int64) error {
-	w.marks.Lock()
-	defer w.marks.Unlock()
-	if err := os.MkdirAll(w.stateDir(), 0o700); err != nil {
+func (w *Worker) Forget(ctx context.Context, a cliowner.Account) error {
+	if a.User <= 0 || (a.Identity != "" && !cliowner.IsIdentity(a.Identity)) {
+		return badRequest{errors.New("invalid account")}
+	}
+	w.censusMu.Lock()
+	defer w.censusMu.Unlock()
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(w.forgottenMark(user), os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
+	if err := w.deletionFence(a); err != nil {
 		return err
 	}
-	if now := time.Now(); os.Chtimes(w.forgottenMark(user), now, now) != nil {
-		_ = f.Close()
-		return errors.New("recording the time of the mark")
+	if a.Identity == "" {
+		return w.removeLegacy(a.User)
 	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	d, err := os.Open(w.stateDir())
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	if err := d.Sync(); err != nil {
-		return err
-	}
-	root, err := os.Open(w.cfg.Layout.Root)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	return root.Sync()
-}
-
-func (w *Worker) Forget(ctx context.Context, user int64) error {
-	if user <= 0 {
-		return errors.New("invalid user")
-	}
-	sc := scope{user: user, all: true}
-	end, err := w.beginGate(ctx, sc)
+	end, err := w.beginGate(ctx, scope{id: a.Identity, all: true})
 	if err != nil {
 		return err
 	}
 	defer end()
-	if err := w.markForgotten(user); err != nil {
-		return fmt.Errorf("recording that the user was forgotten: %w", err)
-	}
-	if err := w.quiesce(ctx, sc); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	_, _, err = w.runHelper(ctx, user, helperRequest{Op: "forget"})
-	return err
+	if err := w.retire(a.Identity, a.User); err != nil {
+		return fmt.Errorf("recording that the account is gone: %w", err)
+	}
+	r, ok, err := w.find(a.Identity)
+	if err != nil || !ok || r.Home == 0 {
+		return err
+	}
+	if err := w.removeAccount(ctx, account{id: a.Identity, user: r.User, home: r.Home}); err != nil {
+		return err
+	}
+	return w.markCleaned(a.Identity)
 }
 
-func (w *Worker) Reconcile(_ context.Context, live []int64, next int64, before time.Time) error {
-	entries, err := os.ReadDir(w.stateDir())
+type Census struct {
+	Owners       map[int64]string `json:"owners"`
+	Boot         string           `json:"boot"`
+	Installation string           `json:"installation"`
+	Before       time.Time        `json:"before"`
+}
+
+func (c Census) check() error {
+	if c.Before.IsZero() || !cliowner.IsIdentity(c.Boot) || !cliowner.IsIdentity(c.Installation) {
+		return errors.New("invalid census")
+	}
+	for user, id := range c.Owners {
+		if user <= 0 || !cliowner.IsIdentity(id) {
+			return errors.New("invalid census")
+		}
+	}
+	return nil
+}
+
+func (w *Worker) Reconcile(ctx context.Context, c Census) error {
+	if err := c.check(); err != nil {
+		return badRequest{err}
+	}
+	n := w.reserveBoot(c.Boot)
+	defer w.unreserveBoot(c.Boot)
+	if hook := w.arrivedHookForTest; hook != nil {
+		hook(c.Boot)
+	}
+	w.censusMu.Lock()
+	defer w.censusMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	seq, err := w.registerCensus(c, n)
 	if err != nil {
 		return err
 	}
-	isLive := make(map[int64]bool, len(live))
-	for _, id := range live {
-		isLive[id] = true
+	live := make(map[string]bool, len(c.Owners))
+	for _, id := range c.Owners {
+		live[id] = true
+	}
+	recs, err := w.records()
+	if err != nil {
+		return err
 	}
 	var errs []error
-	for _, e := range entries {
-		id, ok := strings.CutPrefix(e.Name(), "forgotten-u")
-		if !ok {
-			continue
-		}
-		user, err := strconv.ParseInt(id, 10, 64)
-		if err != nil || user <= 0 || (!isLive[user] && user < next) {
-			continue
-		}
-		if err := w.removeOldMark(e, before); err != nil {
-			errs = append(errs, err)
+	for id, r := range recs {
+		switch {
+		case live[id]:
+			if err := w.unretire(id, seq); err != nil {
+				return err
+			}
+		case r.Installation != "" && r.Installation != c.Installation:
+		case !r.Retired && (r.Boot == c.Boot || r.Gen >= seq):
+		default:
+			if err := ctx.Err(); err != nil {
+				return errors.Join(append(errs, err)...)
+			}
+			_, err := w.retireNow(id, r.User)
+			if err != nil {
+				return err
+			}
+			if hook := w.retiredHookForTest; hook != nil {
+				hook(id)
+			}
+			if r.Home == 0 {
+				continue
+			}
+			if err := w.tidy(context.WithoutCancel(ctx), account{id: id, user: r.User, home: r.Home}, r.Retired && r.Cleaned); err != nil {
+				if ctx.Err() != nil {
+					return errors.Join(append(errs, err)...)
+				}
+				errs = append(errs, fmt.Errorf("account %d: %w", r.User, err))
+			}
 		}
 	}
-	return errors.Join(errs...)
+	if !w.cfg.AdoptLegacy {
+		legacy, err := w.legacyDirs()
+		if err != nil {
+			return err
+		}
+		for _, user := range legacy {
+			if err := w.removeLegacy(user); err != nil {
+				errs = append(errs, fmt.Errorf("the directory of number %d from before homes: %w", user, err))
+			} else {
+				slog.Info("cliworker: removed a directory from before homes", "user", user)
+			}
+		}
+	}
+	if err := w.sweepTrash(); err != nil {
+		errs = append(errs, err)
+	}
+	if b := w.browserStopper(); b != nil {
+		b.Unforget(func(id string) bool { return live[id] && !w.retired(id) }, time.Now())
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%w: %w", ErrIncomplete, errors.Join(errs...))
+	}
+	return nil
 }
 
-func (w *Worker) removeOldMark(e fs.DirEntry, before time.Time) error {
-	w.marks.Lock()
-	defer w.marks.Unlock()
-	info, err := os.Lstat(filepath.Join(w.stateDir(), e.Name()))
-	if err != nil || !info.ModTime().Before(before) {
+func (w *Worker) tidy(ctx context.Context, acct account, cleaned bool) error {
+	if _, err := os.Lstat(w.cfg.Layout.Home(acct.home).Root); cleaned && errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
-	if err := os.Remove(filepath.Join(w.stateDir(), e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	end, err := w.beginGate(ctx, scope{id: acct.id, all: true})
+	if err != nil {
 		return err
+	}
+	defer end()
+	if err := w.removeAccount(ctx, acct); err != nil {
+		return err
+	}
+	slog.Info("cliworker: removed a retired account's directory", "user", acct.user)
+	return w.markCleaned(acct.id)
+}
+
+func ForgetLocal(layout Layout, identity string, user int64) error {
+	if identity != "" {
+		if !cliowner.IsIdentity(identity) {
+			return badRequest{errors.New("invalid account")}
+		}
+		w := &Worker{cfg: Config{Layout: layout}, accounts: map[string]accountRecord{}}
+		r, ok, err := w.find(identity)
+		if err != nil {
+			return err
+		}
+		if ok {
+			if err := w.retire(identity, r.User); err != nil {
+				return err
+			}
+			if r.Home != 0 {
+				if err := removeTree(layout.Home(r.Home).Root, false); err != nil {
+					return err
+				}
+				if err := syncDir(layout.Root); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return err
+				}
+			}
+		}
+	}
+	if user > 0 {
+		return removeTree(layout.legacy(user), false)
 	}
 	return nil
 }

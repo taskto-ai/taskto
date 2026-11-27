@@ -4,12 +4,12 @@ package cliaccounts
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +17,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/agenttools"
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/cliworker"
@@ -68,7 +69,7 @@ func mcpResult(answer, tool string) string {
 
 func (e *turnEnv) toolsToken(c *client, cli cliworker.CLI) string {
 	e.t.Helper()
-	calls := clitest.Calls(e.t, e.layout.User(c.id).Config(cli))
+	calls := clitest.Calls(e.t, e.dirs(c.id).Config(cli))
 	if len(calls) == 0 {
 		e.t.Fatal("the CLI never ran")
 	}
@@ -110,7 +111,7 @@ func TestTurnsUseTaskToTools(t *testing.T) {
 		who         *client
 		mine, other int64
 	}{{e.owner, ownerSpace, otherSpace}, {e.other, otherSpace, ownerSpace}} {
-		clitest.WriteScenario(t, e.layout.User(c.who.id).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{
+		clitest.WriteScenario(t, e.dirs(c.who.id).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{
 			{Tool: "list_spaces"},
 			{Tool: "write_doc", Args: map[string]any{"space_id": c.mine, "path": "from-the-cli.md", "content": "# Mine\n"}},
 			{Tool: "read_doc", Args: map[string]any{"space_id": c.other, "path": "from-the-cli.md"}},
@@ -154,14 +155,14 @@ func TestToolsTokenRefusals(t *testing.T) {
 	e := newToolsEnv(t)
 	conv := e.conversation(e.owner)
 	ctx := t.Context()
-	dirs, err := e.layout.Ensure(e.owner.id)
+	dirs, err := e.dirs(e.owner.id), error(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	clitest.SignIn(t, "claude", dirs.Config(cliworker.Claude))
 	clitest.WriteScenario(t, dirs.Config(cliworker.Claude), clitest.Scenario{SleepMS: 20000})
 	id := fmt.Sprintf("c%d-running", conv)
-	turn, _, err := e.worker.Start(cliworker.TurnSpec{ID: id, User: e.owner.id, CLI: cliworker.Claude, Conversation: conv,
+	turn, _, err := e.worker.Start(cliworker.TurnSpec{ID: id, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, CLI: cliworker.Claude, Conversation: conv,
 		Session: "00000000-0000-4000-8000-000000000042", Prompt: "work"})
 	if err != nil {
 		t.Fatal(err)
@@ -190,26 +191,35 @@ func TestToolsTokenRefusals(t *testing.T) {
 		}
 		return token
 	}
-	claims := toolsClaims{User: e.owner.id, Conversation: conv, Turn: id}
+	claims := toolsClaims{User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: id}
 
 	good := mint(claims)
 	if c, status := caller(good); status != http.StatusOK || c != (agenttools.Caller{Workspace: e.ws, User: e.owner.id, Conversation: conv}) {
 		t.Fatalf("a running turn's token: %d %+v", status, c)
 	}
 
+	before := claims
+	before.Identity = strings.Repeat("ab", 16)
+	if _, status := caller(mint(before)); status == http.StatusOK {
+		t.Error("a token of the number's earlier account was accepted")
+	}
+	elsewhere := claims
+	elsewhere.Workspace = e.ws + 1
+	if _, status := caller(mint(elsewhere)); status == http.StatusOK {
+		t.Error("a token of another workspace's conversation was accepted")
+	}
+
 	forged := good[:len(good)-4] + "AAAA"
-	proxyToken, err := e.svc.mintToken(proxyClaims{Account: 1, User: e.owner.id, Conversation: conv, Turn: id})
+	proxyToken, err := e.svc.mintToken(proxyClaims{Account: 1, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: id})
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, _ := json.Marshal(toolsClaims{Nonce: "old", User: e.owner.id, Conversation: conv, Turn: id, Expires: time.Now().Add(-time.Minute).Unix()})
-	expired := toolsTokenPrefix + b64.EncodeToString(payload) + "." + b64.EncodeToString(e.svc.shared.Key.MAC(toolsTokenPurpose, payload))
+	expired, _ := sealToken(e.svc.shared.Key, toolsTokenPrefix, toolsTokenPurpose, toolsClaims{Nonce: "old", User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: id, Expires: time.Now().Add(-time.Minute).Unix()})
 	otherKey, err := serverkey.Load(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, _ = json.Marshal(toolsClaims{Nonce: "x", User: e.owner.id, Conversation: conv, Turn: id, Expires: time.Now().Add(time.Hour).Unix()})
-	otherServer := toolsTokenPrefix + b64.EncodeToString(payload) + "." + b64.EncodeToString(otherKey.MAC(toolsTokenPurpose, payload))
+	otherServer, _ := sealToken(otherKey, toolsTokenPrefix, toolsTokenPurpose, toolsClaims{Nonce: "x", User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: id, Expires: time.Now().Add(time.Hour).Unix()})
 	for name, token := range map[string]string{
 		"forged": forged, "a proxy token": proxyToken, "expired": expired, "another server's": otherServer,
 		"none": "", "malformed": "ttm1.nope", "an access token's shape": "ttp_0123456789abcdef0123456789abcdef",
@@ -220,9 +230,9 @@ func TestToolsTokenRefusals(t *testing.T) {
 	}
 
 	for name, c := range map[string]toolsClaims{
-		"a turn the worker doesn't know":     {User: e.owner.id, Conversation: conv, Turn: "c1-unknown"},
-		"the turn, for another user":         {User: e.other.id, Conversation: conv, Turn: id},
-		"the turn, for another conversation": {User: e.owner.id, Conversation: e.conversation(e.owner), Turn: id},
+		"a turn the worker doesn't know":     {User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: "c1-unknown"},
+		"the turn, for another user":         {User: e.other.id, Identity: e.acct(e.other.id).Identity, Workspace: e.ws, Conversation: conv, Turn: id},
+		"the turn, for another conversation": {User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: e.conversation(e.owner), Turn: id},
 	} {
 		if _, status := caller(mint(c)); status == http.StatusOK {
 			t.Errorf("%s: accepted", name)
@@ -297,12 +307,35 @@ func waitOver(t *testing.T, turn *cliworker.Turn) {
 func TestTurnsWithoutTaskToTools(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Claude)
-	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{{Tool: "list_spaces"}}})
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{{Tool: "list_spaces"}}})
 	answer := done(e.turn(e.conversation(e.owner), turnBody{Turn: "bare", CLI: "claude", Model: "default", Prompt: "go"})).Text
 	if got := mcpResult(answer, "list_spaces"); got != "error no MCP settings" {
 		t.Errorf("a turn without tools: %s", got)
 	}
 	if status, _ := e.listSpaces("ttm1.anything.at-all"); status != http.StatusNotFound {
 		t.Errorf("the endpoint while the tools are off: %d", status)
+	}
+}
+
+func TestAToolsTokenCheckDuringAnOutageIsNotReady(t *testing.T) {
+	e := newTurnEnv(t)
+	sw := e.swappable()
+	conv := e.conversation(e.owner)
+	token, err := e.svc.mintToolsToken(toolsClaims{User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: fmt.Sprintf("c%d-t1", conv)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp("", "gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sw.use(RemoteWorker(cliworker.NewRemote(filepath.Join(dir, "w.sock"))))
+	r := httptest.NewRequest(http.MethodPost, ToolsPath, nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	_, err = e.svc.ToolsCaller(r)
+	var refused *agenttools.Refusal
+	if !errors.As(err, &refused) || refused.Status != http.StatusServiceUnavailable || refused.Code != apierr.CodeCLIWorkerNotReady {
+		t.Errorf("the check during an outage: %v, want a 503 refusal with %s", err, apierr.CodeCLIWorkerNotReady)
 	}
 }

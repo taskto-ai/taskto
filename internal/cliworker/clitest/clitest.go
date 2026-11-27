@@ -33,6 +33,7 @@ type Scenario struct {
 	StatusSleepMS    int       `json:"status_sleep_ms,omitempty"`
 	LogoutSleepMS    int       `json:"logout_sleep_ms,omitempty"`
 	Background       bool      `json:"background,omitempty"`
+	Detached         bool      `json:"detached,omitempty"`
 	HoldStdout       bool      `json:"hold_stdout,omitempty"`
 	Expired          bool      `json:"expired,omitempty"`
 	RateLimits       bool      `json:"rate_limits,omitempty"`
@@ -227,6 +228,9 @@ func (f *fake) garbage() {
 func (f *fake) work() error {
 	if f.scenario.Background {
 		bg := exec.Command("sleep", "300")
+		if f.scenario.Detached {
+			bg.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		}
 		if f.scenario.HoldStdout {
 			bg.Stdout = os.Stdout
 		}
@@ -343,6 +347,9 @@ func probe(p string) string {
 			}
 		}
 		return "ok unknown"
+	case "self":
+		cwd, _ := os.Getwd()
+		return "ok " + strings.Join(append(append(os.Environ(), os.Args...), cwd), " ")
 	case "uid":
 		return fmt.Sprintf("ok %d %d", os.Getuid(), os.Getgid())
 	case "connect":
