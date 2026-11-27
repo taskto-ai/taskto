@@ -775,6 +775,87 @@ export type RecordVersion = {
   synthetic?: boolean
 }
 
+export type SearchCardResult = {
+  space_id: number
+  space_name: string
+  board_id: number
+  board_name: string
+  card_id: number
+  title: string
+  column: string
+  snippet: SearchSegment[] | null
+}
+
+export type SearchConversationResult = {
+  conversation_id: number
+  title: string
+  archived: boolean
+  updated_at: string
+  snippet: SearchSegment[] | null
+}
+
+export type SearchPalette = {
+  places: SearchPlaceResults
+  docs: SearchResult[] | null
+  cards: SearchCardResult[] | null
+  records: SearchRecordResult[] | null
+  conversations: SearchConversationResult[] | null
+  incomplete: boolean
+}
+
+export type SearchPlaceApp = {
+  space_id: number
+  space_name: string
+  app_id: number
+  name: string
+}
+
+export type SearchPlaceBoard = {
+  space_id: number
+  space_name: string
+  board_id: number
+  name: string
+  kind: string
+}
+
+export type SearchPlaceResults = {
+  spaces: SearchPlaceSpace[] | null
+  apps: SearchPlaceApp[] | null
+  boards: SearchPlaceBoard[] | null
+}
+
+export type SearchPlaceSpace = {
+  id: number
+  name: string
+  kind: string
+}
+
+export type SearchRecordResult = {
+  space_id: number
+  space_name: string
+  app_id: number
+  app_name: string
+  record_id: number
+  snippet: SearchSegment[] | null
+}
+
+export type SearchResult = {
+  space_id: number
+  space_name: string
+  path: string
+  title: string
+  snippet: SearchSegment[] | null
+  score: number
+  match: string
+  version: string
+  commit: string
+}
+
+export type SearchSegment = {
+  text: string
+  match?: boolean
+}
+
 export type Space = {
   id: number
   workspace_id: number
