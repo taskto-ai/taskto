@@ -104,7 +104,9 @@ func (s *Service) SaveLayout(ctx context.Context, workspaceID, userID, id, versi
 	if version == 0 {
 		if _, err = tx.ExecContext(ctx, `
 			INSERT INTO desks (user_id, workspace_id, name, layout, version)
-			VALUES (?, ?, '', ?, 0) ON CONFLICT (user_id, workspace_id, name) DO NOTHING`, userID, workspaceID, string(emptyLayout)); err != nil {
+			SELECT ?, ?, '', ?, 0
+			WHERE EXISTS (SELECT 1 FROM memberships WHERE user_id = ? AND workspace_id = ?)
+			ON CONFLICT (user_id, workspace_id, name) DO NOTHING`, userID, workspaceID, string(emptyLayout), userID, workspaceID); err != nil {
 			return Desk{}, err
 		}
 	}
@@ -119,6 +121,13 @@ func (s *Service) SaveLayout(ctx context.Context, workspaceID, userID, id, versi
 		return Desk{}, err
 	}
 	if changed == 0 {
+		var members int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE user_id = ? AND workspace_id = ?`, userID, workspaceID).Scan(&members); err != nil {
+			return Desk{}, err
+		}
+		if members == 0 {
+			return Desk{}, ErrNotFound
+		}
 		current, readErr := getMainWith(ctx, tx, workspaceID, userID)
 		if readErr != nil {
 			return Desk{}, readErr

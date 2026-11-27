@@ -1,5 +1,9 @@
+-- AUTOINCREMENT: a desk's id is never given to another desk. A person who leaves a workspace
+-- loses their desks (the trigger below), and without it their next desk would get the old id with
+-- version 1, so a client holding the old id and version would overwrite it instead of being told
+-- the desk changed.
 CREATE TABLE desks (
-    id           INTEGER PRIMARY KEY,
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id      INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     workspace_id INTEGER NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
     -- '' is the person's main desk in the workspace; named desks come later.
