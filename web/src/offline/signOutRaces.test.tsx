@@ -1626,6 +1626,21 @@ test('an account that signs in again and saves a record as its discard finishes 
   expect(next.foreign).toMatchObject({ users: [8], count: 1 })
 })
 
+test('an account whose login takes the browser as its database is deleted stays registered', async () => {
+  await sealedOf(8)
+  await unreadableOwnDatabase(7)
+  await activate(7, 'Pat')
+  const real = IDBFactory.prototype.deleteDatabase
+  vi.spyOn(indexedDB, 'deleteDatabase').mockImplementation(function (this: IDBFactory, name: string) {
+    const request = real.call(this, name)
+    if (name === 'taskto-offline-8') localStorage.setItem(LAST, JSON.stringify({ id: 8, name: 'Kim' }))
+    return request
+  })
+  await discardForeign()
+  vi.restoreAllMocks()
+  expect(JSON.parse(localStorage.getItem('taskto:offline-users') ?? '[]')).toContain(8)
+})
+
 test("a prompt about another account's records ends when another login takes the browser, with no runtime open", async () => {
   await sealedOf(8)
   await unreadableOwnDatabase(7)
