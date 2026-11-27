@@ -46,6 +46,10 @@ The panel shows what the person is relying on:
 - **A write that fails** (the storage is full, it is not available) is shown as the failure it is,
   and no copy is kept as if it were.
 
+A **`Table`** (a screen's records as sortable columns) works offline from the downloaded records:
+its rows are the same `/items` the screen reads, with the labels of choice fields and the offline
+changes on top, and sorting is done on the device.
+
 A release that **requires a capability this client lacks** (a newer component, a newer definition
 format) isn't downloaded, and one already on the device shows *update required* instead of a broken
 app, with the same button online does.

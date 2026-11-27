@@ -37,6 +37,12 @@
     "offlineNamed": "{name} está fora do ar: não pode ser aberto.",
     "openInApps": "Abrir em Apps",
     "openNamedInApps": "Abrir {name} em Apps",
+    "table": {
+      "yes": "Sim",
+      "no": "Não",
+      "more": "Mostrando {shown} de {total}",
+      "open": "Abrir {title}"
+    },
     "invalidScreen": "O app enviou uma tela que não pode ser mostrada: {error}",
     "noDataChanges": "Seu papel neste app permite ver, mas não alterar os dados.",
     "ownRecords": "Você vê apenas os registros que adicionou.",

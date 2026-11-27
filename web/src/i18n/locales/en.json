@@ -36,6 +36,12 @@
     "offlineNamed": "{name} is offline: it can’t be launched.",
     "openInApps": "Open in Apps",
     "openNamedInApps": "Open {name} in Apps",
+    "table": {
+      "yes": "Yes",
+      "no": "No",
+      "more": "Showing {shown} of {total}",
+      "open": "Open {title}"
+    },
     "invalidScreen": "The app sent a screen that can’t be shown: {error}",
     "noDataChanges": "Your role in this app lets you view it, not change its data.",
     "ownRecords": "You see only the records you added.",
