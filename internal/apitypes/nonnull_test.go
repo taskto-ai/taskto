@@ -20,6 +20,7 @@ var kept = map[string]struct {
 	"taskto.ai/taskto/internal/integrations": {
 		"integrations/nonnull_test.go", []string{"TestIntegrationListsAreNeverNil"},
 	},
+	"taskto.ai/taskto/internal/skills": {"skills/nonnull_test.go", []string{"TestSkillListsAreNeverNil"}},
 	"taskto.ai/taskto/internal/apps": {
 		"apps/nonnull_test.go",
 		[]string{"TestAppListsAreNeverNil", "TestRecordDataIsNeverNil", "TestHomeListsAreNeverNil", "TestTemplateListsAreNeverNil"},

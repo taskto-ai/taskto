@@ -20,8 +20,8 @@ Each event is one row of `audit_events` (`internal/db/migrations/0036_audit_even
 | `actor_id` | the user who did it; empty for an anonymous attempt (a login to an account that doesn't exist, a refused single sign-on) or once that user is deleted (`actor_deleted` then says which) |
 | `actor_deleted`, `target_deleted` | 1 when the actor's account, or the account the event is about, was [deleted](#deleted-accounts) |
 | `action` | a stable snake_case code, from the table below |
-| `target_type`, `target_id`, `target_created_at` | what it was done to: a `user`, `invite`, `space`, `access_token`, `provider_account`, `shared_cli_account`, `integration` or `workspace`, and when that object was created (see below) |
-| `details` | a small JSON of facts the action declares: a role before and after, the names of the fields that changed, a provider's host. Never a name or other text a person typed |
+| `target_type`, `target_id`, `target_created_at` | what it was done to: a `user`, `invite`, `space`, `access_token`, `provider_account`, `shared_cli_account`, `integration`, `skill` or `workspace`, and when that object was created (see below) |
+| `details` | a small JSON of facts the action declares: a role before and after, the names of the fields that changed, a provider's host. Never a name or other text a person typed (a skill's `name` is the one exception: a short identifier of lowercase letters, digits and hyphens that the agent's index and the lists show, so it says which skill; its title, description and instructions are never recorded) |
 | `client_addr` | the address the request came from, found as the login limits find it (the direct peer, or the client behind a [trusted proxy](install.md)); empty for an event with no request |
 
 A workspace's events are deleted with it. An index serves the log of one workspace, newest
@@ -98,6 +98,7 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `app_integration_approved` | an admin approves a contract and binds an integration | the workspace | app integration approval | `kind`, `app_id`, `integration_id`, `provider`, `space_allowed` (whether approving also allowed the space) |
 | `app_integration_rejected` | an admin turns a request down | the workspace | app integration approval | `kind`, `app_id` |
 | `app_integration_revoked` | an admin withdraws an approval | the workspace | app integration approval | `kind`, `app_id`, `integration_id` |
+| `skill_created`, `skill_updated`, `skill_removed` | a skill of a shared space or of the workspace is made, changed or removed ([skills](skills.md)): they change what the agent is told for other people. A person's own skills, which change nobody else's access, record nothing | the skill's | skill | `scope` (`space` or `workspace`), `space_id` (a space's), `name`; `fields` on an update (`name`, `title`, `description`, `body`, `enabled`: which changed, never the text) |
 
 The names a person gives things (a token's, a space's, a shared account's label, an integration's name, a model's) are
 not recorded: they are free text, and people paste secrets into such boxes. The target's id

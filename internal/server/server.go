@@ -31,6 +31,7 @@ import (
 	"taskto.ai/taskto/internal/quota"
 	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/search"
+	"taskto.ai/taskto/internal/skills"
 	"taskto.ai/taskto/internal/webui"
 )
 
@@ -128,7 +129,9 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	if opts.Notifications != nil {
 		opts.Notifications.Routes(mux, accounts)
 	}
-	export.New(sqlDB, spaces, kb, boardSvc, appsService, opts.Conversations, opts.Export).Routes(mux, accounts)
+	skillStore := skills.New(sqlDB, spaces)
+	skillStore.Routes(mux, accounts, spaces)
+	export.New(sqlDB, spaces, kb, boardSvc, appsService, opts.Conversations, opts.Export).WithSkills(skillStore).Routes(mux, accounts)
 	if opts.Providers != nil {
 		opts.Providers.Routes(mux, accounts)
 	}

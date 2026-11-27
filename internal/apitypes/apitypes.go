@@ -13,6 +13,7 @@ import (
 	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/notifications"
+	"taskto.ai/taskto/internal/skills"
 	"taskto.ai/taskto/internal/updatestatus"
 )
 
@@ -74,6 +75,9 @@ func Roots() []Root {
 		root[integrations.SpaceIntegration]("SpaceIntegration"),
 		root[integrations.Registry]("IntegrationRegistry"),
 		root[integrations.CheckResult]("IntegrationCheck"),
+
+		root[skills.Skill]("Skill"),
+		root[skills.SkillList]("SkillList"),
 
 		root[updatestatus.Report]("UpdateReport"),
 		root[updatestatus.Requested]("UpdateRequested"),

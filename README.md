@@ -56,6 +56,7 @@ step-by-step install on a fresh Ubuntu VM.
 | [docs/web-e2e.md](docs/web-e2e.md) | the web app's end to end tests: what they cover, how to run them, and the traces a failure leaves |
 | [docs/offline.md](docs/offline.md) | apps offline: downloads, the durable outbox for records made offline, sync, sign-out and revocation |
 | [docs/sso.md](docs/sso.md) | single sign-on with Google, Authentik or any OpenID Connect provider |
+| [docs/skills.md](docs/skills.md) | skills: named instructions for the agent, of a person, a space or the workspace, and what they are not |
 | [docs/audit.md](docs/audit.md) | the audit log of security and admin actions: what is recorded, never recorded, and for how long |
 | [docs/api.md](docs/api.md) | the HTTP API |
 | [docs/mcp.md](docs/mcp.md) | using it from your own agents (Claude Code, Codex, any MCP client) with an access token |

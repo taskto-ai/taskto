@@ -951,6 +951,13 @@
     "session_current": "That is the session you are using: log out instead.",
     "token_expiry_invalid": "The expiry must be a time in the future.",
     "too_many_tokens": "You can have at most {max} access tokens in a workspace: revoke one first.",
+    "skill_not_found": "Skill not found.",
+    "skill_name_invalid": "A skill's name starts with a lowercase letter and has 2 to 40 lowercase letters, digits and hyphens.",
+    "skill_name_taken": "A skill with this name exists already.",
+    "skill_title_length": "A skill's title is 1 to {max} characters on one line.",
+    "skill_description_length": "A skill's description is 1 to {max} characters on one line.",
+    "skill_body_length": "A skill's instructions are text of up to {max_kib} KiB, and not empty.",
+    "too_many_skills": "At most {max} skills fit here: remove one first.",
     "space_not_found": "Space not found.",
     "space_read_only": "You can only read this space.",
     "space_archived": "This space is archived: it is read-only.",
@@ -2163,6 +2170,9 @@
         "app_integration_approved": "App's use of an integration approved",
         "app_integration_rejected": "App's use of an integration turned down",
         "app_integration_revoked": "App's use of an integration revoked",
+        "skill_created": "Skill added",
+        "skill_updated": "Skill changed",
+        "skill_removed": "Skill removed",
         "data_export_started": "Data export started",
         "workspace_export_started": "Workspace export started",
         "server_update_requested": "Update requested",
@@ -2183,7 +2193,8 @@
         "provider_account": "Model provider account",
         "shared_cli_account": "Shared CLI account",
         "integration": "Integration",
-        "app_integration_approval": "App integration approval"
+        "app_integration_approval": "App integration approval",
+        "skill": "Skill"
       },
       "details": {
         "account": "Account",
@@ -2240,7 +2251,9 @@
         "app_id": "App number",
         "integration_id": "Integration number",
         "effect_id": "Payment number",
-        "space_allowed": "Space allowed too"
+        "space_allowed": "Space allowed too",
+        "name": "Name",
+        "space_id": "Space number"
       },
       "values": {
         "admin": "Admin",
@@ -2276,7 +2289,12 @@
         "currencies": "Currencies",
         "webhook_secret": "Webhook secret",
         "test": "Test",
-        "live": "Live"
+        "live": "Live",
+        "space": "Shared space",
+        "title": "Title",
+        "description": "Description",
+        "body": "Instructions",
+        "enabled": "On or off"
       },
       "event": "Event",
       "when": "When"

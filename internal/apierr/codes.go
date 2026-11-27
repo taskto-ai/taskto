@@ -409,4 +409,12 @@ const (
 	CodeIntegrationNothingToConfirm    Code = "integration_nothing_to_confirm"
 	CodeIntegrationLinkNotConfirmable  Code = "integration_link_not_confirmable"
 	CodeIntegrationConditionChanged    Code = "integration_condition_changed"
+
+	CodeSkillNotFound          Code = "skill_not_found"
+	CodeSkillNameInvalid       Code = "skill_name_invalid"
+	CodeSkillNameTaken         Code = "skill_name_taken"
+	CodeSkillTitleLength       Code = "skill_title_length"
+	CodeSkillDescriptionLength Code = "skill_description_length"
+	CodeSkillBodyLength        Code = "skill_body_length"
+	CodeTooManySkills          Code = "too_many_skills"
 )

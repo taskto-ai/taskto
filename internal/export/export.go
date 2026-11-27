@@ -24,6 +24,7 @@ import (
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/skills"
 )
 
 const Format = 1
@@ -46,6 +47,7 @@ type Service struct {
 	boards        *boards.Service
 	apps          *apps.Service
 	conversations *conversations.Service
+	skills        *skills.Store
 	gate          *gate
 	tickets       *tickets
 	wsTickets     *tickets
@@ -70,6 +72,11 @@ const (
 	WorkspacePath         = Path + "/workspace"
 	WorkspaceDownloadPath = WorkspacePath + "/{token}"
 )
+
+func (s *Service) WithSkills(store *skills.Store) *Service {
+	s.skills = store
+	return s
+}
 
 func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	s.auth = a
@@ -310,7 +317,7 @@ func (s *Service) prepare(ctx context.Context, u auth.User, m auth.Membership) (
 		Format: Format, Scope: "user", ExportedAt: ex.at.Format(time.RFC3339),
 		Workspace: manifestWS{ID: m.WorkspaceID, Name: m.WorkspaceName},
 		User:      manifestUser{ID: u.ID, Name: u.Name, Email: u.Email},
-		Counts:    map[string]int{"documents": 0, "boards": 0, "cards": 0, "comments": 0, "conversations": 0, "apps": 0, "records": 0},
+		Counts:    map[string]int{"documents": 0, "boards": 0, "cards": 0, "comments": 0, "conversations": 0, "apps": 0, "records": 0, "skills": 0},
 		Skipped:   []skipped{},
 	}
 	return ex, nil
@@ -318,7 +325,7 @@ func (s *Service) prepare(ctx context.Context, u auth.User, m auth.Membership) (
 
 func (ex *run) write(ctx context.Context, out io.Writer) error {
 	ex.zw = zip.NewWriter(out)
-	steps := []func(context.Context) error{ex.privateDocuments, ex.privateBoards, ex.conversations, ex.privateApps}
+	steps := []func(context.Context) error{ex.privateDocuments, ex.privateBoards, ex.conversations, ex.privateApps, ex.personalSkills}
 	if ex.mf.Scope == "workspace" {
 		steps = []func(context.Context) error{ex.members, ex.spaces}
 	}
@@ -739,6 +746,31 @@ func (ex *run) conversation(ctx context.Context, c conversations.Conversation) e
 		return err
 	}
 	ex.mf.Counts["conversations"]++
+	return nil
+}
+
+func (ex *run) personalSkills(ctx context.Context) error {
+	if ex.svc.skills == nil {
+		ex.skip(place{}, "skills", "off", "")
+		return nil
+	}
+	list, err := ex.svc.skills.List(ctx, skills.Owner{Scope: skills.ScopeUser, WorkspaceID: ex.ws.WorkspaceID, UserID: ex.user.ID}, true)
+	if err != nil {
+		return fmt.Errorf("listing skills: %w", err)
+	}
+	for _, sk := range list {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		w, err := ex.entry(ex.names.claim("skills", cleanElem(sk.Name, maxElemBytes)+".md"), false)
+		if err != nil {
+			return err
+		}
+		if err := writeSkillMarkdown(w, sk); err != nil {
+			return err
+		}
+		ex.mf.Counts["skills"]++
+	}
 	return nil
 }
 
