@@ -63,21 +63,15 @@ func (r *repo) commit(msg string) {
 	r.git("commit", "-q", "--allow-empty", "-m", msg)
 }
 
+func (r *repo) diff(base, head string) ([]change, error) {
+	r.t.Helper()
+	r.t.Chdir(r.dir)
+	return diff(base, head)
+}
+
 func (r *repo) count(base, head string) tally {
 	r.t.Helper()
-	wd, err := os.Getwd()
-	if err != nil {
-		r.t.Fatal(err)
-	}
-	if err := os.Chdir(r.dir); err != nil {
-		r.t.Fatal(err)
-	}
-	defer func() {
-		if err := os.Chdir(wd); err != nil {
-			r.t.Fatal(err)
-		}
-	}()
-	changes, err := diff(base, head)
+	changes, err := r.diff(base, head)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -202,14 +196,14 @@ func TestOnlyRevisionsReachGit(t *testing.T) {
 		return err != nil && strings.HasPrefix(err.Error(), "not a revision")
 	}
 	for _, bad := range []string{"--output=/tmp/x", "-p", "main..main", "main...main", "", "a b"} {
-		if _, err := diff(bad, "main"); !refusedBeforeGit(err) {
+		if _, err := r.diff(bad, "main"); !refusedBeforeGit(err) {
 			t.Errorf("base %q: %v, want it refused before git runs", bad, err)
 		}
-		if _, err := diff("main", bad); !refusedBeforeGit(err) {
+		if _, err := r.diff("main", bad); !refusedBeforeGit(err) {
 			t.Errorf("head %q: %v, want it refused before git runs", bad, err)
 		}
 	}
-	if _, err := diff("main", "main"); err != nil {
+	if _, err := r.diff("main", "main"); err != nil {
 		t.Errorf("a plain revision was refused: %v", err)
 	}
 }
