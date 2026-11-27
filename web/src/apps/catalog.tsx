@@ -43,7 +43,7 @@ const MarkdownApi = {
 
 const Markdown = createComponentImplementation(MarkdownApi, ({ props }) => (
   <div className="ui-app-markdown">
-    <MarkdownText text={props.text} headingShift={2} links="text" />
+    <MarkdownText text={props.text ?? ''} headingShift={2} links="text" />
   </div>
 ))
 
