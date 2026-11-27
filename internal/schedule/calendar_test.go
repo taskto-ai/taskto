@@ -168,6 +168,37 @@ func TestLocalTimeNormalizesOverflowDateBeforeComparing(t *testing.T) {
 	}
 }
 
+func TestCalendarNextAdvancesAcrossAYearOfTransitions(t *testing.T) {
+	zones := []string{"Europe/Lisbon", "America/Santiago", "Australia/Lord_Howe", "America/Sao_Paulo"}
+	cals := []Calendar{
+		{At: "00:00"},
+		{At: "01:30"},
+		{At: "02:30"},
+		{EveryMin: 60},
+		{EveryMin: 1440},
+		{Days: []string{"sat", "sun"}, EveryMin: 90},
+	}
+	for _, zone := range zones {
+		for _, cal := range cals {
+			cal.Zone = zone
+			after := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+			for range 24 * 365 / 5 {
+				got, err := cal.Next(after)
+				if err != nil {
+					t.Fatalf("%s %+v after %v: %v", zone, cal, after, err)
+				}
+				if !got.After(after) {
+					t.Fatalf("%s %+v: Next(%v) = %v, not after", zone, cal, after, got)
+				}
+				if got.Sub(after) > 8*24*time.Hour {
+					t.Fatalf("%s %+v: Next(%v) = %v, too far", zone, cal, after, got)
+				}
+				after = after.Add(5 * time.Hour)
+			}
+		}
+	}
+}
+
 func mustLocation(t *testing.T, name string) *time.Location {
 	t.Helper()
 	loc, err := time.LoadLocation(name)
