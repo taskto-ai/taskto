@@ -101,8 +101,10 @@ export function ConversationView({
     [workspace],
   )
   const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
-  const [picked, setPicked] = useState<ModelRef | null>(null)
-  const model = picked ?? loadedModel.data
+  const [picked, setPicked] = useState<{ ref: ModelRef; read: number } | null>(null)
+  const model = picked && picked.read === loadedModel.settled ? picked.ref : loadedModel.data
+  const turnChanged = useChanged(running)
+  if (turnChanged && !running) loadedModel.reload()
   const usesCli = Boolean(cliOfProvider(model?.provider) || providers.data?.some((p) => p.scope === 'cli'))
   const cli = useLoad(() => (usesCli ? api<CliAccounts>(CLI_ACCOUNTS) : Promise.resolve(null)), [usesCli])
   const asks = messages.reduce((n, m) => n + m.tools.filter((t) => t.cli && t.output?.includes('⚠')).length, 0)
@@ -229,7 +231,7 @@ export function ConversationView({
             providers={providers.data}
             current={model}
             cli={cli.data}
-            onChosen={setPicked}
+            onChosen={(ref) => setPicked({ ref, read: loadedModel.settled ?? 0 })}
             disabled={archived || unreadable}
           />
         )}

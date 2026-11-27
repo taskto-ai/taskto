@@ -307,8 +307,10 @@ func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.P
 		nextID := chainID(id, n+1)
 		next, found := s.worker.FindTurn(nextID)
 		notice := s.switchNotice(nextID)
-		if !found && n < maxSwitches {
-			next, notice = s.switchAfter(ctx, out, p, req, t, &res, id, nextID, tried)
+		if !found {
+			if res.hop = s.hopOf(t.Spec().ID); res.hop == nil {
+				next, notice = s.switchAfter(ctx, out, p, req, t, &res, id, nextID, tried, n < maxSwitches)
+			}
 		}
 		if next == nil {
 			s.finish(out, res, offset)
@@ -333,6 +335,26 @@ type passed struct {
 
 type modelHop struct {
 	notice, note string
+	at           time.Time
+}
+
+func (s *Service) rememberHop(turn string, h *modelHop) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	for k, old := range s.hops {
+		if now.Sub(old.at) > time.Hour {
+			delete(s.hops, k)
+		}
+	}
+	h.at = now
+	s.hops[turn] = h
+}
+
+func (s *Service) hopOf(turn string) *modelHop {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hops[turn]
 }
 
 func (s *Service) finish(out *eventWriter, res passed, offset int) {
@@ -446,9 +468,9 @@ func (s *Service) stopped(ctx context.Context, p conversations.Principal, t Turn
 	return ""
 }
 
-func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversations.Principal, req turnRequest, t Turn, res *passed, id, nextID string, tried map[string]bool) (Turn, string) {
+func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversations.Principal, req turnRequest, t Turn, res *passed, id, nextID string, tried map[string]bool, canSwitch bool) (Turn, string) {
 	why := s.stopped(ctx, p, t, *res)
-	if why == "" || s.isStopped(id) {
+	if why == "" || s.isStopped(id) || !s.stillActive(ctx, p) {
 		return nil, ""
 	}
 	if on, err := s.switchingOn(ctx, p.User); err != nil || !on {
@@ -464,13 +486,19 @@ func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversat
 	if strings.TrimSpace(res.text) != "" {
 		note += "\n\nWhat it had said so far:\n\n" + strings.TrimSpace(res.text)
 	}
-	next, ok, err := s.nextChoice(ctx, p, tried)
-	if err != nil {
-		slog.ErrorContext(ctx, "cli turn: choosing the next account", "conversation", p.Conversation, "err", err)
-		return nil, ""
+	var next choice
+	ok := false
+	if canSwitch {
+		var err error
+		if next, ok, err = s.nextChoice(ctx, p, tried); err != nil {
+			slog.ErrorContext(ctx, "cli turn: choosing the next account", "conversation", p.Conversation, "err", err)
+			return nil, ""
+		}
 	}
 	if !ok {
-		res.hop = s.hopToModel(ctx, p, from+" "+why, note)
+		if res.hop = s.hopToModel(ctx, p, from+" "+why, note); res.hop != nil {
+			s.rememberHop(t.Spec().ID, res.hop)
+		}
 		return nil, ""
 	}
 	note += "\n\n"
@@ -490,6 +518,11 @@ func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversat
 	return tn, notice
 }
 
+func (s *Service) stillActive(ctx context.Context, p conversations.Principal) bool {
+	now, err := conversations.PrincipalOf(ctx, s.db, p.Conversation)
+	return err == nil && now == p
+}
+
 func (s *Service) hopToModel(ctx context.Context, p conversations.Principal, stopped, note string) *modelHop {
 	models, err := s.modelsAfter(ctx, p)
 	if err != nil {
@@ -497,7 +530,7 @@ func (s *Service) hopToModel(ctx context.Context, p conversations.Principal, sto
 		return nil
 	}
 	for _, m := range models {
-		if s.setModel == nil {
+		if s.setModel == nil || ctx.Err() != nil {
 			return nil
 		}
 		if err := s.setModel(context.WithoutCancel(ctx), p.AgentConversation, m.provider, m.model); err != nil {

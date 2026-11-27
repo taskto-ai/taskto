@@ -31,6 +31,7 @@ func modelEntry(provider, model string) map[string]any {
 
 func TestALimitedTurnEndsWithAContinueOnTheQueuedModel(t *testing.T) {
 	e, conv, models := limitedClaudeEnv(t, true)
+	e.provide(mine(e, "api"), "big")
 	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
 	events := e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it", History: history})
 	d := done(events)
@@ -68,6 +69,7 @@ func TestALimitedTurnEndsWithAContinueOnTheQueuedModel(t *testing.T) {
 
 func TestNoContinueOnAModelWhenSwitchingIsOff(t *testing.T) {
 	e, conv, models := limitedClaudeEnv(t, false)
+	e.provide(mine(e, "api"), "big")
 	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
 	d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it"}))
 	if d.Continue || d.Note != "" || d.Status != cliworker.StatusFailed || !strings.Contains(d.Text, "usage limit") {
@@ -87,6 +89,7 @@ func TestNoContinueOnAModelWhenTheQueueHoldsNone(t *testing.T) {
 
 func TestAnAvailableCLIAccountComesBeforeAModel(t *testing.T) {
 	e, conv, models := limitedClaudeEnv(t, true)
+	e.provide(mine(e, "api"), "big")
 	e.owner.connect(cliworker.Codex)
 	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big"), {"account": "codex"}}})
 	d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it"}))
@@ -105,6 +108,8 @@ func TestAModelNotUsableInTheConversationsWorkspaceIsSkipped(t *testing.T) {
 	other := e.secondWorkspace(e.owner)
 	foreign := fmt.Sprintf("ws%d-team", other)
 	home := fmt.Sprintf("ws%d-team", e.ws)
+	e.provide(foreign, "far")
+	e.provide(home, "near")
 	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(foreign, "far"), modelEntry(home, "near")}})
 	d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it"}))
 	if !d.Continue || !strings.Contains(done([]cliworker.Event{d}).Note, "stopped part-way") {
@@ -123,6 +128,8 @@ func TestAModelNotUsableInTheConversationsWorkspaceIsSkipped(t *testing.T) {
 func TestAModelTheRuntimeRefusesIsSkipped(t *testing.T) {
 	e, conv, models := limitedClaudeEnv(t, true)
 	gone, ok := mine(e, "gone"), mine(e, "ok")
+	e.provide(gone, "m")
+	e.provide(ok, "m")
 	models.refuse = map[string]bool{gone: true}
 	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(gone, "m"), modelEntry(ok, "m")}})
 	d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it"}))
@@ -150,11 +157,15 @@ func TestSwitchingAPIKeepsModelsApartFromAccounts(t *testing.T) {
 		return c.do(http.MethodPut, switchingPath, map[string]any{"queue": entries}).Code
 	}
 	own := fmt.Sprintf("u%d-api", owner.id)
-	st := owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(own, "big"), modelEntry(fmt.Sprintf("ws%d-team", ws), "m"), modelEntry("shared", "m")}})
+	e.provide(own, "big", "small")
+	e.provide(fmt.Sprintf("ws%d-team", ws), "m")
+	e.provide(fmt.Sprintf("u%d-api", other.id), "big")
+	e.provide(fmt.Sprintf("ws%d-team", foreignWS), "m")
+	st := owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(own, "big"), modelEntry(fmt.Sprintf("ws%d-team", ws), "m"), modelEntry("script", "script-1")}})
 	if len(st.Queue) != 4 || st.Queue[1].Kind != "model" || st.Queue[1].ID != own || st.Queue[1].ModelID != "big" || st.Queue[0].Kind != "own" {
 		t.Fatalf("queue = %+v", st.Queue)
 	}
-	if got := decode[switchingState](t, other.do(http.MethodGet, switchingPath, nil)); len(got.Queue) != 0 {
+	if got := decode[SwitchingState](t, other.do(http.MethodGet, switchingPath, nil)); len(got.Queue) != 0 {
 		t.Fatalf("another user's queue = %+v", got.Queue)
 	}
 	for name, c := range map[string]struct {
@@ -170,6 +181,9 @@ func TestSwitchingAPIKeepsModelsApartFromAccounts(t *testing.T) {
 		"a model and an account":                    {owner, map[string]any{"provider": own, "model_id": "m", "account": "claude"}, http.StatusBadRequest},
 		"a model with a shared account":             {owner, map[string]any{"provider": own, "model_id": "m", "shared": 1}, http.StatusBadRequest},
 		"a provider of someone outside a workspace": {outsider, modelEntry(fmt.Sprintf("ws%d-team", ws), "m"), http.StatusNotFound},
+		"a model the provider does not list":        {owner, modelEntry(own, "invented"), http.StatusNotFound},
+		"a provider nobody made":                    {owner, modelEntry(fmt.Sprintf("u%d-ghost", owner.id), "big"), http.StatusNotFound},
+		"an unscoped provider the server lacks":     {owner, modelEntry("ghost", "big"), http.StatusNotFound},
 		"a model with an oversized id":              {owner, modelEntry(own, strings.Repeat("x", maxModelRef+1)), http.StatusNotFound},
 	} {
 		if got := put(c.who, c.entry); got != c.want {
@@ -182,13 +196,14 @@ func TestSwitchingAPIKeepsModelsApartFromAccounts(t *testing.T) {
 	if got := put(owner, modelEntry(own, "big"), modelEntry(own, "small")); got != http.StatusOK {
 		t.Errorf("two models of one provider: %d", got)
 	}
-	if st := decode[switchingState](t, owner.do(http.MethodGet, switchingPath, nil)); len(st.Queue) != 2 {
+	if st := decode[SwitchingState](t, owner.do(http.MethodGet, switchingPath, nil)); len(st.Queue) != 2 {
 		t.Errorf("queue after the refusals = %+v", st.Queue)
 	}
 }
 
 func TestAnExpiredLoginContinuesOnTheQueuedModel(t *testing.T) {
 	e, conv, models := limitedClaudeEnv(t, true)
+	e.provide(mine(e, "api"), "big")
 	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Expired: true})
 	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
 	d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it"}))

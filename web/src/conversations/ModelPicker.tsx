@@ -1,6 +1,7 @@
 import { type ReactNode, useId, useState } from 'react'
 import { api, CLI_PRODUCTS, type CliAccounts, cliAccountFor, cliOfProvider, codeText, errorText } from '../api'
 import { useT } from '../i18n'
+import { useChanged } from '../memo'
 import { Link, routePath } from '../router'
 import { Select } from '../ui/Select'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
@@ -32,6 +33,7 @@ export function ModelPicker({
   const [chosen, setChosen] = useState<ModelRef | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  if (useChanged(modelKey(current))) setChosen(null)
   const selected = chosen ?? current
   const known = providers.some(
     (p) => p.provider === selected.provider && p.models.some((m) => m.id === selected.model_id),

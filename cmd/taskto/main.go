@@ -307,6 +307,8 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		index.SetConversations(convs)
 	}
 	convs.SetCLIQuestions(cliAccounts)
+	providerSvc := providerAPI(store, agent.feed, egressOf(cfg))
+	cliAccounts.SetModelCatalog(providerSvc)
 
 	if cfg.InsecureCookies {
 		slog.Warn("the session cookie is sent over plain http (insecure_cookies): use this only on localhost")
@@ -359,7 +361,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		Auth:             authOpts,
 		DataDir:          cfg.DataDir,
 		AgentState:       agent.state,
-		Providers:        providerAPI(store, agent.feed, egressOf(cfg)),
+		Providers:        providerSvc,
 		Search:           index,
 		Conversations:    convs,
 		Tools:            tools,

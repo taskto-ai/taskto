@@ -9,6 +9,7 @@ import (
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/desk"
 	"taskto.ai/taskto/internal/integrations"
@@ -52,6 +53,7 @@ func Roots() []Root {
 
 		root[conversations.Conversation]("Conversation"),
 		root[conversations.NoteReply]("NoteReply"),
+		root[cliaccounts.SwitchingState]("SwitchingState"),
 		root[notifications.Item]("NotificationItem"),
 		root[notifications.List]("NotificationList"),
 

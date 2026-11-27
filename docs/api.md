@@ -5428,7 +5428,9 @@ CLI) and `workspace_name` are there for a client to name it in its user's langua
 `{"enabled"?: true, "queue"?: [{"account": "claude-2"}, {"shared": 4}, {"provider": "u3-api", "model_id": "big"}]}`.
 A queue replaces the one before. `200` with the state. An account that isn't the caller's, or a
 shared account of a workspace they aren't a member of, is a `404`; so is a model of another
-person's provider, of a workspace they aren't a member of, or of a CLI's provider (`cli-…`). An
+person's provider, of a workspace they aren't a member of, of a CLI's provider (`cli-…`), or one
+the provider doesn't list. `GET` leaves out a model entry that is no longer one of those, so what
+it shows can be saved back. An
 entry that is more than one of the three, or a model with only one of `provider` and `model_id`,
 is a `400`, and so is an account or a model twice. When every account of the queue is at its
 limit, a turn goes on with the first model of it that the conversation's workspace allows

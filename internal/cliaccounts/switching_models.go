@@ -2,10 +2,10 @@ package cliaccounts
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"taskto.ai/taskto/internal/conversations"
-	"taskto.ai/taskto/internal/providers"
 )
 
 const maxModelRef = 256
@@ -17,25 +17,42 @@ func queueableRef(provider, model string) bool {
 		!strings.HasPrefix(provider, cliProviderPrefix)
 }
 
-func (s *Service) modelQueueable(ctx context.Context, user int64, provider, model string) (bool, error) {
-	if !queueableRef(provider, model) {
+type ModelCatalog interface {
+	Offers(ctx context.Context, provider, model string, user, workspace int64) (bool, error)
+}
+
+func (s *Service) SetModelCatalog(c ModelCatalog) { s.catalog = c }
+
+func (s *Service) offers(ctx context.Context, provider, model string, user, workspace int64) (bool, error) {
+	if s.catalog == nil || !queueableRef(provider, model) {
 		return false, nil
 	}
+	return s.catalog.Offers(ctx, provider, model, user, workspace)
+}
+
+func (s *Service) modelQueueable(ctx context.Context, user int64, provider, model string) (bool, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT workspace_id FROM memberships WHERE user_id = ?`, user)
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	var workspaces []int64
 	for rows.Next() {
 		var ws int64
 		if err := rows.Scan(&ws); err != nil {
+			_ = rows.Close()
 			return false, err
 		}
-		if providers.Usable(provider, user, ws) {
-			return true, nil
+		workspaces = append(workspaces, ws)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return false, err
+	}
+	for _, ws := range workspaces {
+		if ok, err := s.offers(ctx, provider, model, user, ws); err != nil || ok {
+			return ok, err
 		}
 	}
-	return false, rows.Err()
+	return false, nil
 }
 
 func (s *Service) modelsAfter(ctx context.Context, p conversations.Principal) ([]queueEntry, error) {
@@ -45,7 +62,14 @@ func (s *Service) modelsAfter(ctx context.Context, p conversations.Principal) ([
 	}
 	var out []queueEntry
 	for _, e := range q {
-		if e.isModel() && queueableRef(e.provider, e.model) && providers.Usable(e.provider, p.User, p.Workspace) {
+		if !e.isModel() {
+			continue
+		}
+		ok, err := s.offers(ctx, e.provider, e.model, p.User, p.Workspace)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			out = append(out, e)
 		}
 	}

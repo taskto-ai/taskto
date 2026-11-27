@@ -36,6 +36,7 @@ function modelEntries(providers: ModelProvider[]): QueueModel[] {
       p.models.map((m) => ({
         kind: 'model' as const,
         id: p.provider,
+        cli: '' as const,
         model_id: m.id,
         title: m.name || m.id,
         limited: false,

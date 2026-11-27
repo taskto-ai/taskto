@@ -857,6 +857,7 @@ export type QueueCli = {
 export type QueueModel = {
   kind: 'model'
   id: string
+  cli: ''
   model_id: string
   title: string
   limited: boolean

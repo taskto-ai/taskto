@@ -172,8 +172,9 @@ shared accounts of their workspaces, with a switch that is **off by default**.
 - Table `cli_switching` (user, enabled) and `cli_switch_queue` (user, position, and exactly one
   of an own account, a shared account, or a model: a provider and a model id).
 - The queue can only hold the user's own accounts, shared accounts of workspaces they are a
-  member of, and models of providers the user may use: the instance's, their own, and those of a
-  workspace they are in. A CLI's own provider (`cli-…`) is refused: those are accounts. At a turn, entries the conversation's workspace doesn't allow are skipped: a shared
+  member of, and models that a provider the user may use lists now: the instance's, their own,
+  and those of a workspace they are in. Entries that stopped being so (the person left the
+  workspace, the provider or the model was removed) are not shown and drop out at the next save. A CLI's own provider (`cli-…`) is refused: those are accounts. At a turn, entries the conversation's workspace doesn't allow are skipped: a shared
   account of another workspace, or what the member's mode rules out.
 
 **When switching is off**, a turn runs on the account the mode picks, as above: the first own
@@ -205,10 +206,17 @@ turns on. The turn ends with the limit's message, as before.
 - **One worker turn per account.** Each run is a worker turn of its own (`c<conversation>-<turn>`,
   then `…-s1`, `…-s2`). The server numbers their events in one sequence, so a sidecar that
   re-attaches reads the whole chain once.
-- **A model at the end**: when no account can run, the first model of the queue (in queue
-  order, so accounts always come before models) that the conversation's workspace allows takes
-  over. A model of another workspace's provider is skipped, and so is one the agent runtime
-  refuses (a provider that was removed). The server sets the conversation's model to it, then
+- **A model at the end**: when no account can run (also after the last switch the cap allows),
+  the first model of the queue (in queue order, so accounts always come before models) that the
+  conversation's workspace allows takes over. The server asks again, at that moment, whether the
+  conversation is still its owner's (not archived, owner still a member and not disabled), and
+  reads the provider and its model list from the database, which is the truth before the agent
+  runtime has reloaded: a model of another workspace's provider, of a provider that was removed,
+  or one the provider no longer lists is skipped, and so is one the agent runtime refuses. The
+  hop is recorded for the turn, so a sidecar that re-attaches after its stream was cut gets the
+  same notice and final event at the same sequence numbers, whatever was changed meanwhile, and
+  the model is not set a second time. A caller that is gone ends the hop: the conversation's
+  model is then left as it is, for the person to choose. The server sets the conversation's model to it, then
   ends the CLI turn with a notice ("Claude Code reached its usage limit: continuing on Big
   model") and a final event with `continue: true` and the same hand-off note the next account
   would get. The sidecar (`agent/src/cli.ts`) hands that note to the agent as the turn's result

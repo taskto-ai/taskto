@@ -283,10 +283,10 @@ type QueueAccount struct {
 	LimitedUntil  string        `json:"limited_until,omitempty"`
 }
 
-type switchingState struct {
+type SwitchingState struct {
 	Enabled   bool           `json:"enabled"`
-	Queue     []QueueAccount `json:"queue"`
-	Available []QueueAccount `json:"available"`
+	Queue     []QueueAccount `json:"queue" apitypes:"nonnull"`
+	Available []QueueAccount `json:"available" apitypes:"nonnull"`
 }
 
 func (s *Service) SwitchingRoutes(mux *http.ServeMux, a interface {
@@ -352,33 +352,44 @@ func limitFields(limited bool, until time.Time) (bool, string) {
 }
 
 func (s *Service) handleSwitching(w http.ResponseWriter, r *http.Request) {
-	ctx, user := r.Context(), caller(r)
-	on, err := s.switchingOn(ctx, user)
+	out, err := s.state(r.Context(), caller(r))
 	if err != nil {
 		serverError(w, r, err)
 		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Service) state(ctx context.Context, user int64) (SwitchingState, error) {
+	on, err := s.switchingOn(ctx, user)
+	if err != nil {
+		return SwitchingState{}, err
 	}
 	avail, err := s.available(ctx, user)
 	if err != nil {
-		serverError(w, r, err)
-		return
+		return SwitchingState{}, err
 	}
 	q, err := s.queue(ctx, user)
 	if err != nil {
-		serverError(w, r, err)
-		return
+		return SwitchingState{}, err
 	}
-	out := switchingState{Enabled: on, Queue: []QueueAccount{}, Available: avail.list}
+	out := SwitchingState{Enabled: on, Queue: []QueueAccount{}, Available: avail.list}
 	for _, e := range q {
 		if e.isModel() {
-			out.Queue = append(out.Queue, QueueAccount{Kind: "model", ID: e.provider, ModelID: e.model, Title: e.model})
+			ok, err := s.modelQueueable(ctx, user, e.provider, e.model)
+			if err != nil {
+				return SwitchingState{}, err
+			}
+			if ok {
+				out.Queue = append(out.Queue, QueueAccount{Kind: "model", ID: e.provider, ModelID: e.model, Title: e.model})
+			}
 		} else if a, ok := avail.byRow[e.account]; ok && e.account != 0 {
 			out.Queue = append(out.Queue, a)
 		} else if a, ok := avail.shared[e.shared]; ok && e.shared != 0 {
 			out.Queue = append(out.Queue, a)
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	return out, nil
 }
 
 const maxQueue = 32

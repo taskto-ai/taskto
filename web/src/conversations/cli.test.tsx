@@ -572,3 +572,25 @@ test('the answer on its way shows on its own button', async () => {
   expect(allow.getAttribute('aria-busy')).toBeNull()
   expect(allow.disabled).toBe(true)
 })
+
+test('the model the server moved a conversation to after a limit replaces the one shown, also a picked one', async () => {
+  let server = { provider: 'cli-claude', model_id: 'default' }
+  const { calls, es } = await open(
+    {
+      ...cliRoutes,
+      'GET /api/workspaces/1/conversations/7/model': () => ({ body: server }),
+      'PUT /api/workspaces/1/conversations/7/model': (call) => ({ body: call.body }),
+    },
+    running('$ go test\n'),
+  )
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-claude', 'default'])))
+  fireEvent.change(select, { target: { value: JSON.stringify(['cli-claude', 'opus']) } })
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-claude', 'opus'])))
+
+  server = { provider: 'u2-home', model_id: 'llama' }
+  const reads = count(calls, 'GET', '/api/workspaces/1/conversations/7/model')
+  act(() => es.send(done('$ go test\nok')))
+  await waitFor(() => expect(count(calls, 'GET', '/api/workspaces/1/conversations/7/model')).toBe(reads + 1))
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['u2-home', 'llama'])))
+})
