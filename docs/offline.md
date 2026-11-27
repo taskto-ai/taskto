@@ -95,6 +95,8 @@ recomputed from those records with the same rules the server uses
 given, and the rows a `month_of` summary counts, with [`dates.ts`](../web/src/offline/dates.ts),
 and the server and the device are tested against the same list of dates
 (`internal/apps/testdata/dates.json`).
+Declared chart series are recomputed from the downloaded rows plus queued changes, with the same
+grouping and bucket rules as the server.
 
 ## The outbox
 

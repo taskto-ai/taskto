@@ -60,6 +60,7 @@ export const catalogCapabilities: ReadonlySet<string> = new Set([
   'field.signature',
   'field.barcode',
   'summary.month_of',
+  'data.series',
   'data.labels',
   'icon.svg_path',
   'slot.home_widgets.v1',

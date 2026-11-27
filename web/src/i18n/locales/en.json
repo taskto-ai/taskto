@@ -1257,6 +1257,8 @@
     "home_limit": "You can have at most {max} of these.",
     "home_order_invalid": "That order isn’t made of your own items.",
     "home_defaults_shared": "Defaults are only for the apps of shared spaces.",
+    "desk_changed": "Someone changed this desk meanwhile: reload and try again.",
+    "desk_invalid": "This desk layout is invalid ({reason}).",
     "app_query_cursor": "That page can no longer be found. Start again from the first page.",
     "app_query_field": "The app has no field “{field}” that can be used here.",
     "app_query_condition": "The filter on “{field}” doesn’t fit the field.",
