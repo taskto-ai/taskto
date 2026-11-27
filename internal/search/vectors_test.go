@@ -14,7 +14,7 @@ import (
 )
 
 // bruteNearest is nearest without the vector cache: the reference.
-func (x *Index) bruteNearest(t *testing.T, in, key string, qv []float32, limit int) []near {
+func (x *Index) bruteNearest(t *testing.T, in string, key rankEndpoint, qv []float32, limit int) []near {
 	t.Helper()
 	return rank(must[[]near](t)(x.nearestBrute(ctx, in, key, qv)), limit)
 }
@@ -60,10 +60,10 @@ func TestVectorCacheMatchesBruteForce(t *testing.T) {
 			in := spacesJSON(t, spaces...)
 			for _, q := range queries {
 				for _, limit := range []int{10, hybridDepth} {
-					want := x.bruteNearest(t, in, key, q, limit)
+					want := x.bruteNearest(t, in, w.rank(key), q, limit)
 					// Twice: loading the cache, then from it.
 					for range 2 {
-						got := must[[]near](t)(x.nearest(ctx, w.ws, in, key, q, limit))
+						got := must[[]near](t)(x.nearest(ctx, w.ws, in, w.rank(key), q, limit))
 						if len(want) == 0 || !slices.Equal(got, want) {
 							t.Fatalf("spaces %s, limit %d: %d found, want %d equal to brute force", in, limit, len(got), len(want))
 						}
@@ -73,7 +73,7 @@ func TestVectorCacheMatchesBruteForce(t *testing.T) {
 		}
 		// The document with two equal passages: the first; and the tie between documents,
 		// by ID.
-		got := must[[]near](t)(x.nearest(ctx, w.ws, spacesJSON(t, w.team), key, same, 2))
+		got := must[[]near](t)(x.nearest(ctx, w.ws, spacesJSON(t, w.team), w.rank(key), same, 2))
 		if got[0].similarity != got[1].similarity || got[0].doc != ties[0] || got[0].seq != 1 || got[1].doc != ties[1] {
 			t.Fatalf("ties: %+v", got)
 		}
@@ -93,9 +93,9 @@ func TestVectorCacheMatchesBruteForce(t *testing.T) {
 	// Room for some of the spaces only: the others are read from SQLite, in the same search.
 	t.Run("partly", func(t *testing.T) {
 		x.vectors = newVectorCache(1 << 40)
-		must[[]near](t)(x.nearest(ctx, w.ws, spacesJSON(t, w.team), key, same, 1))
+		must[[]near](t)(x.nearest(ctx, w.ws, spacesJSON(t, w.team), w.rank(key), same, 1))
 		x.vectors = newVectorCache(x.vectors.used + 1)
-		must[[]near](t)(x.nearest(ctx, w.ws, spacesJSON(t, all...), key, same, 1))
+		must[[]near](t)(x.nearest(ctx, w.ws, spacesJSON(t, all...), w.rank(key), same, 1))
 		cached := map[bool]int{}
 		for _, s := range x.vectors.spaces {
 			cached[s.snap != nil]++
@@ -119,8 +119,8 @@ func TestVectorCacheBudget(t *testing.T) {
 	search := func(spaces ...access.Space) {
 		t.Helper()
 		in := spacesJSON(t, spaces...)
-		got := must[[]near](t)(x.nearest(ctx, w.ws, in, key, q, hybridDepth))
-		if want := x.bruteNearest(t, in, key, q, hybridDepth); !slices.Equal(got, want) {
+		got := must[[]near](t)(x.nearest(ctx, w.ws, in, w.rank(key), q, hybridDepth))
+		if want := x.bruteNearest(t, in, w.rank(key), q, hybridDepth); !slices.Equal(got, want) {
 			t.Fatalf("spaces %s: not as brute force", in)
 		}
 	}
@@ -199,7 +199,7 @@ func TestVectorCacheConcurrent(t *testing.T) {
 	for g := range 6 {
 		wg.Go(func() {
 			for i := range 30 {
-				if _, err := x.nearest(ctx, w.ws, spacesJSON(t, sets[(g+i)%len(sets)]...), key, q, 50); err != nil {
+				if _, err := x.nearest(ctx, w.ws, spacesJSON(t, sets[(g+i)%len(sets)]...), w.rank(key), q, 50); err != nil {
 					errs <- err
 					return
 				}
@@ -232,7 +232,7 @@ func TestVectorCacheConcurrent(t *testing.T) {
 	}
 	for _, set := range sets {
 		in := spacesJSON(t, set...)
-		if got, want := must[[]near](t)(x.nearest(ctx, w.ws, in, key, q, 50)), x.bruteNearest(t, in, key, q, 50); !slices.Equal(got, want) {
+		if got, want := must[[]near](t)(x.nearest(ctx, w.ws, in, w.rank(key), q, 50)), x.bruteNearest(t, in, w.rank(key), q, 50); !slices.Equal(got, want) {
 			t.Fatalf("spaces %s: not as brute force", in)
 		}
 	}
@@ -368,23 +368,23 @@ func testVectorsFollowChanges(t *testing.T, cache bool) {
 	// only those of the spaces searched, cached for other members or not.
 	key := Embeddings{Account: account, Model: fakeModel}.key()
 	qv := normalize(fakeVector("vehicle"))
-	if found := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, spacesJSON(t, bobs), key, qv, 10)); len(found) != 1 {
+	if found := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, spacesJSON(t, bobs), w.rank(key), qv, 10)); len(found) != 1 {
 		t.Fatalf("bob's spaces: %+v", found)
 	}
 
 	// A space deleted: its vectors aren't compared, even by a search that still names it.
 	in := spacesJSON(t, w.team, mine)
-	if n := len(must[[]near](t)(w.e.idx.nearest(ctx, w.ws, in, key, qv, 10))); n != 3 {
+	if n := len(must[[]near](t)(w.e.idx.nearest(ctx, w.ws, in, w.rank(key), qv, 10))); n != 3 {
 		t.Fatalf("%d documents found before the space was deleted, want 3", n)
 	}
 	if _, err := w.e.idx.db.ExecContext(ctx, `DELETE FROM spaces WHERE id = ?`, w.team.ID); err != nil {
 		t.Fatal(err)
 	}
-	found := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, in, key, qv, 10))
+	found := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, in, w.rank(key), qv, 10))
 	if len(found) != 1 {
 		t.Fatalf("after the team space was deleted: %+v", found)
 	}
-	if n := w.e.idx.bruteNearest(t, in, key, qv, 10); !slices.Equal(found, n) {
+	if n := w.e.idx.bruteNearest(t, in, w.rank(key), qv, 10); !slices.Equal(found, n) {
 		t.Fatalf("after the team space was deleted: %+v, brute force %+v", found, n)
 	}
 }

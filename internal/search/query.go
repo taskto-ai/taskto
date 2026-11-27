@@ -134,17 +134,82 @@ const (
 // queryTimeout bounds the call that embeds a query.
 const queryTimeout = 15 * time.Second
 
-// Search finds q in spaces, which must be of workspaceID and readable by the caller: the
-// space RequireSpace checked, or the caller's Readable spaces. Each space is synced with
-// git first. It ranks by full text alone without an embeddings model, and fuses full-text
-// and semantic ranks with one.
-func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.Space, q Query) (Results, error) {
+// Search finds q in spaces, which must be of workspaceID and readable by userID: the space
+// RequireSpace checked, or the caller's Readable spaces. It is the one way in for a caller that acts
+// for a person (the HTTP routes, the agent's and MCP's tools): what it found is released only for
+// the spaces c says userID can read at that moment, since access may have ended while it ran (the
+// way SearchCards and SearchRecords check their own). Each space is synced with git first. It
+// ranks by full text alone without an embeddings model, and fuses full-text and semantic ranks
+// with one.
+func (x *Index) Search(ctx context.Context, c *access.Checker, userID, workspaceID int64, spaces []access.Space, q Query) (Results, error) {
+	res, err := x.searchIndex(ctx, workspaceID, spaces, q)
+	if err != nil {
+		return Results{}, err
+	}
+	if x.beforeRelease != nil {
+		x.beforeRelease()
+	}
+	return x.stillReadable(ctx, c, userID, spaces, res)
+}
+
+// stillReadable keeps of res only the results in spaces userID may still read, as the space that
+// was authorized (its workspace and generation): the search ran for access that was checked when
+// it began. When any space it searched is no longer readable, what says more is dropped too: the
+// next page's offset and the count of documents waiting for embeddings, which were of all of them.
+func (x *Index) stillReadable(ctx context.Context, c *access.Checker, userID int64, spaces []access.Space, res Results) (Results, error) {
+	readable := make(map[int64]bool, len(spaces))
+	err := c.Snapshot(ctx, func(snap *access.Checker, _ *sql.Tx) error {
+		for _, was := range spaces {
+			cur, err := snap.Check(ctx, userID, was.ID)
+			switch {
+			case errors.Is(err, access.ErrNotFound):
+				readable[was.ID] = false
+			case err != nil:
+				return err
+			default:
+				readable[was.ID] = cur.WorkspaceID == was.WorkspaceID && (was.Generation == 0 || cur.Generation == was.Generation)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return Results{}, err
+	}
+	lost := false
+	for _, ok := range readable {
+		lost = lost || !ok
+	}
+	if !lost {
+		return res, nil
+	}
+	kept := res.Results[:0:0]
+	for _, r := range res.Results {
+		if readable[r.SpaceID] {
+			kept = append(kept, r)
+		}
+	}
+	res.Results, res.NextOffset = kept, nil
+	// The pending count is of every space searched, the one lost included.
+	var notices []Notice
+	for _, n := range res.Notices {
+		if n.Code == NoticePending {
+			res.Notice = strings.TrimSpace(strings.Replace(res.Notice, fmt.Sprintf(noticePending, n.Count), "", 1))
+			continue
+		}
+		notices = append(notices, n)
+	}
+	res.Notices = notices
+	return res, nil
+}
+
+// searchIndex is Search without the check of the caller's access once it is done.
+func (x *Index) searchIndex(ctx context.Context, workspaceID int64, spaces []access.Space, q Query) (Results, error) {
 	match, err := checkQuery(&q)
 	if err != nil {
 		return Results{}, err
 	}
 	names := map[int64]string{}
-	ids := []int64{}
+	scope := []scopeEntry{}
 	behind := false
 	for _, sp := range spaces {
 		// Never anything else, whatever the caller passes.
@@ -160,13 +225,13 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 		}
 		behind = behind || !synced
 		names[sp.ID] = sp.Name
-		ids = append(ids, sp.ID)
+		scope = append(scope, scopeEntry{ID: sp.ID, Workspace: sp.WorkspaceID, Generation: sp.Generation})
 	}
-	if len(ids) == 0 {
+	if len(scope) == 0 {
 		// No space to search: nothing found, and nothing to say about semantic search.
 		return Results{Results: []Result{}, Mode: ModeFullText}, nil
 	}
-	idsJSON, err := json.Marshal(ids)
+	idsJSON, err := json.Marshal(scope)
 	if err != nil {
 		return Results{}, err
 	}
@@ -177,11 +242,16 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 	e, ep, err := x.embeddings(ctx, workspaceID)
 	var embeddable bool
 	if err == nil {
+		if x.afterQueryEndpoint != nil {
+			x.afterQueryEndpoint()
+		}
 		// Spaces not consented to this endpoint have no vectors from it: a search of only
-		// those doesn't send the query to it either.
+		// those doesn't send the query to it either. The endpoint is the one in hand: its account
+		// and model are the workspace's now, and the consent names its URL itself.
 		err = x.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM spaces sp
 			JOIN search_settings e ON e.workspace_id = sp.workspace_id
-			WHERE sp.id IN (SELECT value FROM json_each(?)) AND `+embeddableSQL+`)`, in).Scan(&embeddable)
+			WHERE sp.id IN (`+scopeSQL+`) AND e.account_id = ? AND e.model = ? AND `+embeddableAtSQL+`)`,
+			in, e.Account, e.Model, ep.BaseURL).Scan(&embeddable)
 	}
 	switch {
 	case errors.Is(err, errNoEmbeddings):
@@ -206,6 +276,9 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 		} else {
 			qv = vs[0]
 			res.Mode = ModeHybrid
+			if x.afterQueryEmbedded != nil {
+				x.afterQueryEmbedded()
+			}
 		}
 	}
 
@@ -225,7 +298,7 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 		if err != nil {
 			return Results{}, err
 		}
-		near, err := x.nearest(ctx, workspaceID, in, e.key(), qv, hybridDepth)
+		near, err := x.nearest(ctx, workspaceID, in, rankEndpoint{key: e.key(), baseURL: ep.BaseURL}, qv, hybridDepth)
 		if err != nil {
 			return Results{}, err
 		}
@@ -237,7 +310,7 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 			return Results{}, err
 		}
 		var pending int
-		if err := x.db.QueryRowContext(ctx, `SELECT count(*) `+pendingSQL+` AND d.space_id IN (SELECT value FROM json_each(?))`,
+		if err := x.db.QueryRowContext(ctx, `SELECT count(*) `+pendingSQL+` AND d.space_id IN (`+scopeSQL+`)`,
 			in).Scan(&pending); err != nil {
 			return Results{}, err
 		}
@@ -268,6 +341,29 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 	}
 	return res, nil
 }
+
+// rankEndpoint is the endpoint a query was embedded by: the model's key (account and model) and
+// the URL itself. Only vectors that were made by that endpoint (the space's consent names both) are
+// compared with the query's.
+type rankEndpoint struct{ key, baseURL string }
+
+// scopeEntry is a space a search was authorized for, as the access check found it: the workspace
+// and the generation it had then (access.Space.Generation; 0 for any).
+type scopeEntry struct {
+	ID         int64 `json:"id"`
+	Workspace  int64 `json:"workspace"`
+	Generation int64 `json:"generation"`
+}
+
+// scopeSQL selects the IDs of the spaces named by a JSON array of scopeEntry (its one parameter)
+// that are still those spaces: their row has the workspace and the generation the access check
+// found. Every statement that reads the index takes its spaces from this, so the index's rows and
+// the identity they are of are read in one snapshot: a space removed and made again with its ID
+// while a search was in flight has another generation, and the search finds nothing of it,
+// whatever the new space's own documents are.
+const scopeSQL = `SELECT sp.id FROM spaces sp, json_each(?) j
+	WHERE sp.id = j.value ->> 'id' AND sp.workspace_id = j.value ->> 'workspace'
+		AND (j.value ->> 'generation' = 0 OR sp.generation = j.value ->> 'generation')`
 
 // checkQuery checks q, sets its default limit, and returns its FTS5 query.
 func checkQuery(q *Query) (string, error) {
@@ -362,7 +458,7 @@ const hybridDepth = MaxOffset + MaxLimit + 1
 const snippetSQL = `snippet(search_fts, CASE WHEN d.markdown THEN 2 ELSE -1 END, char(2), char(3), '…',
 	CASE WHEN instr(search_fts.body, char(31)) THEN 64 ELSE 24 END)`
 
-// fullText returns the documents of the spaces in (a JSON array of IDs) that match the
+// fullText returns the documents of the spaces in (a JSON array of scopeEntry) that match the
 // FTS5 query match, best first, from offset, at most limit; with their snippets if
 // snippets is set.
 func (x *Index) fullText(ctx context.Context, in, match string, limit, offset int, snippets bool) ([]hit, error) {
@@ -375,7 +471,7 @@ func (x *Index) fullText(ctx context.Context, in, match string, limit, offset in
 		FROM search_fts
 		JOIN search_docs d ON d.id = search_fts.rowid
 		JOIN search_spaces s ON s.space_id = d.space_id
-		WHERE search_fts MATCH ? AND d.space_id IN (SELECT value FROM json_each(?))
+		WHERE search_fts MATCH ? AND d.space_id IN (`+scopeSQL+`)
 		ORDER BY `+rankSQL+`, d.path, d.id LIMIT ? OFFSET ?`, match, in, limit, offset)
 	if err != nil {
 		return nil, err
@@ -504,43 +600,56 @@ type near struct {
 	similarity float64
 }
 
-// nearest returns the documents of the spaces in (a JSON array of IDs, of workspaceID)
+// nearest returns the documents of the spaces in (a JSON array of scopeEntry, of workspaceID)
 // whose passages, embedded with the model key, are most like qv, at most limit, best first.
 // It compares the vector cache's vectors, and reads those of the spaces it doesn't have
 // from SQLite.
-func (x *Index) nearest(ctx context.Context, workspaceID int64, in, key string, qv []float32, limit int) ([]near, error) {
-	// Only spaces consented to the endpoint the query went to: another's vectors, of an
-	// endpoint changed since, aren't compared with it. Asked of SQLite on every search,
-	// never cached.
-	rows, err := x.db.QueryContext(ctx, `SELECT sp.id FROM spaces sp
+func (x *Index) nearest(ctx context.Context, workspaceID int64, in string, ep rankEndpoint, qv []float32, limit int) ([]near, error) {
+	key := ep.key
+	// Only spaces consented to the endpoint the query went to (its URL itself, and the workspace's
+	// model as it is now): another's vectors, of an endpoint changed since, aren't compared with
+	// it, even when the account and model are the same and the vectors have the same dimension.
+	// Asked of SQLite on every search, never cached.
+	rows, err := x.db.QueryContext(ctx, `SELECT sp.id, sp.generation FROM spaces sp
 		JOIN search_settings e ON e.workspace_id = sp.workspace_id
-		WHERE sp.id IN (SELECT value FROM json_each(?)) AND sp.workspace_id = ? AND `+embeddableSQL+`
-		ORDER BY sp.id`, in, workspaceID)
+		WHERE sp.id IN (`+scopeSQL+`) AND sp.workspace_id = ? AND `+keySQL+` = ? AND `+embeddableAtSQL+`
+		ORDER BY sp.id`, in, workspaceID, key, ep.baseURL)
 	if err != nil {
 		return nil, err
 	}
-	var spaces []int64
+	var spaces []spaceRef
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var sp spaceRef
+		if err := rows.Scan(&sp.id, &sp.generation); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		spaces = append(spaces, id)
+		spaces = append(spaces, sp)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err
 	}
-	found, rest, err := x.vectors.nearest(ctx, x.db, workspaceID, spaces, key, qv)
+	found, rest, err := x.vectors.nearest(ctx, x.db, workspaceID, spaces, ep, qv)
 	if err != nil {
 		return nil, err
 	}
 	if len(rest) > 0 {
-		raw, err := json.Marshal(rest)
+		// The spaces the cache doesn't have, as the search's authorization named them.
+		var entries []scopeEntry
+		var all []scopeEntry
+		if err := json.Unmarshal([]byte(in), &all); err != nil {
+			return nil, err
+		}
+		for _, e := range all {
+			if slices.Contains(rest, e.ID) {
+				entries = append(entries, e)
+			}
+		}
+		raw, err := json.Marshal(entries)
 		if err != nil {
 			return nil, err
 		}
-		more, err := x.nearestBrute(ctx, string(raw), key, qv)
+		more, err := x.nearestBrute(ctx, string(raw), ep, qv)
 		if err != nil {
 			return nil, err
 		}
@@ -553,13 +662,13 @@ func (x *Index) nearest(ctx context.Context, workspaceID int64, in, key string, 
 // the model key with its passage most like qv, unordered, reading every vector from
 // SQLite: without the vector cache, or for a space that doesn't fit in it, and the
 // reference the cache is tested against.
-func (x *Index) nearestBrute(ctx context.Context, in, key string, qv []float32) ([]near, error) {
+func (x *Index) nearestBrute(ctx context.Context, in string, ep rankEndpoint, qv []float32) ([]near, error) {
 	rows, err := x.db.QueryContext(ctx, `SELECT c.doc_id, c.seq, c.vector FROM search_chunks c
 		JOIN search_docs d ON d.id = c.doc_id
 		JOIN spaces sp ON sp.id = d.space_id
 		JOIN search_settings e ON e.workspace_id = sp.workspace_id
-		WHERE d.space_id IN (SELECT value FROM json_each(?)) AND d.embed_key = ? AND d.embed_version = d.version
-			AND `+embeddableSQL, in, key)
+		WHERE d.space_id IN (`+scopeSQL+`) AND d.embed_key = ? AND d.embed_version = d.version
+			AND `+keySQL+` = ? AND `+embeddableAtSQL, in, ep.key, ep.key, ep.baseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -634,7 +743,7 @@ func (x *Index) fuse(ctx context.Context, in string, text []hit, sem []near) ([]
 		}
 		rows, err := x.db.QueryContext(ctx, `SELECT d.id, d.space_id, d.path, d.title, d.version, s.commit_id
 			FROM search_docs d JOIN search_spaces s ON s.space_id = d.space_id
-			WHERE d.id IN (SELECT value FROM json_each(?)) AND d.space_id IN (SELECT value FROM json_each(?))`, string(docs), in)
+			WHERE d.id IN (SELECT value FROM json_each(?)) AND d.space_id IN (`+scopeSQL+`)`, string(docs), in)
 		if err != nil {
 			return nil, err
 		}

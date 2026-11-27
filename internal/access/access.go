@@ -100,6 +100,10 @@ type Space struct {
 	Name        string  `json:"name"`
 	ArchivedAt  *string `json:"archived_at"`
 	CreatedAt   string  `json:"created_at"`
+	// Generation tells the space from another that had its ID (migration 0061): the number it was
+	// given when it was made, which no space has twice. 0 means "not known" (a caller that has only
+	// the ID), which matches any; it is never sent to people.
+	Generation int64 `json:"-"`
 	// OfflineDownloads is whether the space's apps may be downloaded for offline use. A shared
 	// space's admins turn it off; a private space always allows it.
 	OfflineDownloads bool `json:"offline_downloads"`
@@ -190,7 +194,7 @@ func New(sqlDB *sql.DB, a *auth.Service) *Checker {
 
 // spaceColumns are the columns scanSpace reads, from spaces s, memberships m (the user's
 // membership of the space's workspace) and space_members sm (theirs in the space, if any).
-const spaceColumns = `s.id, s.workspace_id, s.kind, s.name, s.archived_at, s.created_at, s.offline_downloads,
+const spaceColumns = `s.id, s.workspace_id, s.kind, s.name, s.archived_at, s.created_at, s.offline_downloads, s.generation,
 	CASE WHEN s.kind = 'private' AND s.owner_id = m.user_id THEN 'owner' ELSE coalesce(sm.role, '') END`
 
 // fromSpaceFor joins a space to userID's workspace membership and space membership: a
@@ -207,7 +211,7 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scanSpace(row scanner) (Space, error) {
 	var s Space
-	if err := row.Scan(&s.ID, &s.WorkspaceID, &s.Kind, &s.Name, &s.ArchivedAt, &s.CreatedAt, &s.OfflineDownloads, &s.Role); err != nil {
+	if err := row.Scan(&s.ID, &s.WorkspaceID, &s.Kind, &s.Name, &s.ArchivedAt, &s.CreatedAt, &s.OfflineDownloads, &s.Generation, &s.Role); err != nil {
 		return Space{}, err
 	}
 	s.Access = s.access()
@@ -313,7 +317,7 @@ func CanReadIn(ctx context.Context, q Querier, userID, spaceID int64) (bool, err
 // sql.Null* types. ErrNotFound, as for Check, if the space can't be read; dest is then unset.
 func (c *Checker) CheckWith(ctx context.Context, userID, spaceID int64, columns, joins string, args []any, dest ...any) (Space, error) {
 	var s Space
-	all := append([]any{&s.ID, &s.WorkspaceID, &s.Kind, &s.Name, &s.ArchivedAt, &s.CreatedAt, &s.OfflineDownloads, &s.Role}, dest...)
+	all := append([]any{&s.ID, &s.WorkspaceID, &s.Kind, &s.Name, &s.ArchivedAt, &s.CreatedAt, &s.OfflineDownloads, &s.Generation, &s.Role}, dest...)
 	query := `SELECT ` + spaceColumns + `, ` + columns + fromSpaceFor + ` ` + joins + ` WHERE s.id = ?`
 	params := append(append([]any{userID}, args...), spaceID)
 	err := c.reads.QueryRowContext(ctx, query, params...).Scan(all...)

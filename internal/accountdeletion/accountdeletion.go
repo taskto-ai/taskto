@@ -330,11 +330,11 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 
 	// What is to go, read once the purge has begun: nothing new can be made by an account that
 	// is switched off, and what the steps below delete is found again by a retry.
-	private, err := s.spaces(ctx, `SELECT id, workspace_id, created_at FROM spaces WHERE owner_id = ? ORDER BY id`, userID)
+	private, err := s.spaces(ctx, `SELECT id, workspace_id, generation FROM spaces WHERE owner_id = ? ORDER BY id`, userID)
 	if err != nil {
 		return err
 	}
-	shared, err := s.spaces(ctx, `SELECT id, workspace_id, created_at FROM spaces WHERE kind = 'shared' ORDER BY id`)
+	shared, err := s.spaces(ctx, `SELECT id, workspace_id, generation FROM spaces WHERE kind = 'shared' ORDER BY id`)
 	if err != nil {
 		return err
 	}
@@ -466,11 +466,14 @@ func (s *Service) Purge(ctx context.Context, userID int64) error {
 
 // forgetGone tells the knowledge base to forget the removal of each of spaces whose row is gone
 // (knowledge.Store.ForgetSpace): the refusal is kept for a space that is still recorded, since the
-// purge is then still to finish it, and a database that can't be read leaves it all as it is.
+// purge is then still to finish it, and a database that can't be read leaves it all as it is. The
+// row is the space's by its ID and its generation (a number no space has twice): a space made since with the purged one's ID
+// is another space, and the purged one is gone.
 func (s *Service) forgetGone(ctx context.Context, spaces []access.Space) {
 	for _, sp := range spaces {
 		var one int
-		err := s.o.DB.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ?`, sp.ID).Scan(&one)
+		err := s.o.DB.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ? AND (? = 0 OR generation = ?)`,
+			sp.ID, sp.Generation, sp.Generation).Scan(&one)
 		if errors.Is(err, sql.ErrNoRows) {
 			s.o.Knowledge.ForgetSpace(sp)
 		}
@@ -529,7 +532,7 @@ func (s *Service) spaces(ctx context.Context, query string, args ...any) ([]acce
 	var out []access.Space
 	for rows.Next() {
 		sp := access.Space{Access: access.Write}
-		if err := rows.Scan(&sp.ID, &sp.WorkspaceID, &sp.CreatedAt); err != nil {
+		if err := rows.Scan(&sp.ID, &sp.WorkspaceID, &sp.Generation); err != nil {
 			return nil, err
 		}
 		out = append(out, sp)

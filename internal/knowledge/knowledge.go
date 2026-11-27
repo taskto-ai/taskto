@@ -38,6 +38,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -246,10 +247,15 @@ type spaceState struct {
 	// and so does one that arrives later, so nothing makes the space's directory again. It stays
 	// set, in the Store's map, until ForgetSpace.
 	removed bool
-	// removedCreated is the creation time of the space that was removed (access.Space.CreatedAt;
-	// empty when the caller didn't have it). A space made later with the same ID has another, so
-	// the mark never refuses it, whether or not ForgetSpace has run.
-	removedCreated string
+	// removedGen is the generation of the space that was removed (access.Space.Generation; 0 when
+	// the caller didn't have it). A space made later with the same ID has another, so the mark
+	// never refuses it, whether or not ForgetSpace has run.
+	removedGen int64
+	// lastGen is the largest generation of the spaces this state has served (0 until a call that
+	// knows its space's generation has been let in; generations only grow): RemoveSpace leaves the
+	// directory alone when it is called for an older space that once had the ID, since the files
+	// there are a later one's. Atomic, since holders and readers set it under the shared lock.
+	lastGen atomic.Int64
 
 	// cache is the usage the last write published, under cacheMu, which no one holds for
 	// long and a writer may take while holding mu.
@@ -288,10 +294,10 @@ func (s *Store) MaxFileSize() int64 { return s.opts.MaxFileSize }
 func (s *Store) SetSpaceCheck(exists func(sp access.Space) (bool, error)) { s.spaceExists = exists }
 
 // admit is what every call that has st's lock asks first: it refuses sp when it was removed (and is
-// the space that was: a space made later with the same ID, whose creation time differs, is not
+// the space that was: a space made later with the same ID, whose generation differs, is not
 // refused by the mark) or when its row is gone.
 func (s *Store) admit(st *spaceState, sp access.Space) error {
-	if st.removed && (st.removedCreated == "" || sp.CreatedAt == "" || sp.CreatedAt == st.removedCreated) {
+	if st.removed && (st.removedGen == 0 || sp.Generation == 0 || sp.Generation == st.removedGen) {
 		return ErrSpaceRemoved
 	}
 	if s.spaceExists != nil {
@@ -303,7 +309,17 @@ func (s *Store) admit(st *spaceState, sp access.Space) error {
 			return ErrSpaceRemoved
 		}
 	}
+	st.serve(sp.Generation)
 	return nil
+}
+
+// serve notes that the state serves a space of generation g: lastGen is the largest it has.
+func (st *spaceState) serve(g int64) {
+	for last := st.lastGen.Load(); g > last; last = st.lastGen.Load() {
+		if st.lastGen.CompareAndSwap(last, g) {
+			return
+		}
+	}
 }
 
 // refusedIfRemoved is err, or ErrSpaceRemoved when err is a missing file and the space was removed

@@ -58,6 +58,13 @@ type vectorCache struct {
 	used   int64  // bytes of every space's snap
 	clock  uint64 // counts searches, for least recently used
 	now    func() time.Time
+
+	// beforeRefresh is for tests: it runs in snapshot after the space's entry is chosen and before
+	// its refresh lock is taken, the moment another search can interleave.
+	beforeRefresh func(sp spaceRef)
+	// beforeInstall is for tests: it runs in snapshot after the vectors are loaded and before the
+	// cache's lock is taken to record what the load found.
+	beforeInstall func(sp spaceRef)
 }
 
 // tooBigRetry is how long a space that didn't fit is read from SQLite before a load is tried
@@ -68,6 +75,10 @@ const tooBigRetry = 10 * time.Minute
 // cachedSpace is a space's entry in the cache.
 type cachedSpace struct {
 	id, workspace int64
+	// generation is the generation of the space (access.Space.Generation) the vectors are of, under
+	// the cache's mu: a space made with the ID of a removed one has another, and what was loaded
+	// for the first is dropped, not compared with the second's queries.
+	generation int64
 	// refresh is held while the space's vectors are brought up to date: one at a time.
 	refresh sync.Mutex
 	// snap is the space's vectors, nil if not loaded; set with both refresh and the
@@ -87,9 +98,13 @@ type cachedSpace struct {
 // spaceVectors are a space's vectors of one embeddings model, as SQLite had them. They
 // never change once made: a refresh makes new ones, so a search can read them unlocked.
 type spaceVectors struct {
-	key   string
-	docs  []*docVectors
-	bytes int64
+	// generation is the generation of the space they were loaded for.
+	generation int64
+	key        string
+	// baseURL is the endpoint's URL the vectors were made at (the consent names it).
+	baseURL string
+	docs    []*docVectors
+	bytes   int64
 }
 
 // docVectors are a document's passages' vectors, in the order of their seq.
@@ -171,26 +186,33 @@ func (c *vectorCache) dropLocked(s *cachedSpace) {
 	}
 }
 
+// spaceRef is a space as a search found it: its ID and the generation its row had then.
+type spaceRef struct{ id, generation int64 }
+
 // nearest compares qv with the vectors of model key of the cached spaces among spaces (of
 // workspace, and which the caller may read and are consented to the endpoint), and returns
-// each document's passage most like it, unordered, and the spaces that aren't cached.
-func (c *vectorCache) nearest(ctx context.Context, db *sql.DB, workspace int64, spaces []int64, key string,
+// each document's passage most like it, unordered, and the IDs of the spaces that aren't cached.
+func (c *vectorCache) nearest(ctx context.Context, db *sql.DB, workspace int64, spaces []spaceRef, ep rankEndpoint,
 	qv []float32) (found []near, rest []int64, err error) {
 	if c == nil {
-		return nil, spaces, nil
+		ids := make([]int64, len(spaces))
+		for i, sp := range spaces {
+			ids[i] = sp.id
+		}
+		return nil, ids, nil
 	}
 	keep := make(map[int64]bool, len(spaces))
-	for _, id := range spaces {
-		keep[id] = true
+	for _, sp := range spaces {
+		keep[sp.id] = true
 	}
 	var snaps []*spaceVectors
-	for _, id := range spaces {
-		snap, err := c.snapshot(ctx, db, id, workspace, key, keep)
+	for _, sp := range spaces {
+		snap, err := c.snapshot(ctx, db, sp, workspace, ep, keep)
 		if err != nil {
 			return nil, nil, err
 		}
 		if snap == nil {
-			rest = append(rest, id)
+			rest = append(rest, sp.id)
 			continue
 		}
 		snaps = append(snaps, snap)
@@ -200,22 +222,45 @@ func (c *vectorCache) nearest(ctx context.Context, db *sql.DB, workspace int64, 
 
 // snapshot returns space id's vectors of key, brought up to date, or nil if they don't
 // fit in the budget beside those of the spaces to keep (the search's).
-func (c *vectorCache) snapshot(ctx context.Context, db *sql.DB, id, workspace int64, key string, keep map[int64]bool) (*spaceVectors, error) {
+func (c *vectorCache) snapshot(ctx context.Context, db *sql.DB, sp spaceRef, workspace int64, ep rankEndpoint, keep map[int64]bool) (*spaceVectors, error) {
+	id := sp.id
 	c.mu.Lock()
 	s := c.spaces[id]
 	if s == nil {
-		s = &cachedSpace{id: id, workspace: workspace}
+		s = &cachedSpace{id: id, workspace: workspace, generation: sp.generation}
 		c.spaces[id] = s
+	}
+	switch {
+	case sp.generation < s.generation:
+		// A space made after this one has the ID: nothing held is of the space asked about, and
+		// none is made for it. It is read from SQLite, by its generation, where it is gone.
+		c.mu.Unlock()
+		return nil, nil
+	case sp.generation > s.generation:
+		// Another space has the ID (generations only grow): what is held is of one that isn't the
+		// one asked about, and its workspace may not be this one's: invalidations by workspace
+		// (a model change) must find the entry under the space it is of now.
+		c.resetLocked(s)
+		s.generation, s.workspace = sp.generation, workspace
 	}
 	c.clock++
 	s.lastUse = c.clock
 	c.mu.Unlock()
+	if c.beforeRefresh != nil {
+		c.beforeRefresh(sp)
+	}
 
 	s.refresh.Lock()
 	defer s.refresh.Unlock()
 	c.mu.Lock()
+	if s.generation != sp.generation {
+		// A search for another space with the ID took the entry between the two locks: it is
+		// theirs to refresh, and what this one would make is of a space that isn't its.
+		c.mu.Unlock()
+		return nil, nil
+	}
 	cur := s.snap
-	full := s.reset || cur == nil || cur.key != key
+	full := s.reset || cur == nil || cur.key != ep.key || cur.baseURL != ep.baseURL || cur.generation != sp.generation
 	docs := s.stale
 	limit := c.budget
 	for _, o := range c.spaces {
@@ -243,24 +288,31 @@ func (c *vectorCache) snapshot(ctx context.Context, db *sql.DB, id, workspace in
 	var next *spaceVectors
 	var err error
 	if full {
-		next, err = loadVectors(ctx, db, id, key, nil, limit)
+		next, err = loadVectors(ctx, db, id, sp.generation, ep, nil, limit)
 	} else {
 		var changed *spaceVectors
-		if changed, err = loadVectors(ctx, db, id, key, docs, math.MaxInt64); err == nil {
+		if changed, err = loadVectors(ctx, db, id, sp.generation, ep, docs, math.MaxInt64); err == nil {
 			next = cur.with(changed, docs)
 		}
+	}
+	if c.beforeInstall != nil {
+		c.beforeInstall(sp)
 	}
 	var over errOverBudget
 	if errors.As(err, &over) {
 		c.mu.Lock()
-		c.dropLocked(s)
-		s.tooBig, s.tooBigAt = int64(over), c.now()
+		if s.generation == sp.generation { // not the entry of a space that took the ID meanwhile
+			c.dropLocked(s)
+			s.tooBig, s.tooBigAt = int64(over), c.now()
+		}
 		c.mu.Unlock()
 		return nil, nil
 	}
 	if err != nil {
 		c.mu.Lock()
-		s.reset = true // whatever it was asked to reload, it hasn't
+		if s.generation == sp.generation {
+			s.reset = true // whatever it was asked to reload, it hasn't
+		}
 		c.mu.Unlock()
 		return nil, err
 	}
@@ -276,6 +328,9 @@ func (c *vectorCache) snapshot(ctx context.Context, db *sql.DB, id, workspace in
 func (c *vectorCache) install(s *cachedSpace, next *spaceVectors, keep map[int64]bool) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if s.generation != next.generation {
+		return false // the entry was taken by another space with the ID while these were loaded: theirs
+	}
 	c.dropLocked(s)
 	if c.used+next.bytes > c.budget {
 		var victims []*cachedSpace
@@ -308,7 +363,7 @@ func (c *vectorCache) install(s *cachedSpace, next *spaceVectors, keep map[int64
 // with returns sv with the documents in docs replaced by those of changed (a document of
 // docs not in changed has no vectors any more).
 func (sv *spaceVectors) with(changed *spaceVectors, docs map[int64]bool) *spaceVectors {
-	out := &spaceVectors{key: sv.key, docs: make([]*docVectors, 0, len(sv.docs)+len(changed.docs))}
+	out := &spaceVectors{generation: sv.generation, key: sv.key, baseURL: sv.baseURL, docs: make([]*docVectors, 0, len(sv.docs)+len(changed.docs))}
 	for _, d := range sv.docs {
 		if !docs[d.id] {
 			out.docs = append(out.docs, d)
@@ -326,13 +381,17 @@ type errOverBudget int64
 
 func (e errOverBudget) Error() string { return "search: the vectors don't fit in the vector cache" }
 
-// loadVectors reads the vectors of model key of space's documents (or of docs only, if not
-// nil) that nearestBrute would compare, but for consent, which the caller checks. Past
-// limit bytes, it stops and returns errOverBudget.
-func loadVectors(ctx context.Context, db *sql.DB, space int64, key string, docs map[int64]bool, limit int64) (*spaceVectors, error) {
+// loadVectors reads the vectors of the endpoint ep of space's documents (or of docs only, if not
+// nil) that nearestBrute would compare: made by that model, and the space's consent names that very
+// endpoint, its URL too, as the workspace's model is now. Past limit bytes, it stops and returns
+// errOverBudget.
+func loadVectors(ctx context.Context, db *sql.DB, space, generation int64, ep rankEndpoint, docs map[int64]bool, limit int64) (*spaceVectors, error) {
 	query := `SELECT c.doc_id, c.seq, c.vector FROM search_chunks c JOIN search_docs d ON d.id = c.doc_id
-		WHERE d.space_id = ? AND d.embed_key = ? AND d.embed_version = d.version`
-	args := []any{space, key}
+		JOIN spaces sp ON sp.id = d.space_id AND (? = 0 OR sp.generation = ?)
+		JOIN search_settings e ON e.workspace_id = sp.workspace_id
+		WHERE d.space_id = ? AND d.embed_key = ? AND d.embed_version = d.version
+			AND ` + keySQL + ` = ? AND ` + embeddableAtSQL
+	args := []any{generation, generation, space, ep.key, ep.key, ep.baseURL}
 	if docs != nil {
 		ids := make([]int64, 0, len(docs))
 		for id := range docs {
@@ -352,7 +411,7 @@ func loadVectors(ctx context.Context, db *sql.DB, space int64, key string, docs 
 		return nil, err
 	}
 	defer rows.Close()
-	sv := &spaceVectors{key: key}
+	sv := &spaceVectors{generation: generation, key: ep.key, baseURL: ep.baseURL}
 	// A document's vectors are read into one array, then copied into one of their size.
 	type loading struct {
 		*docVectors

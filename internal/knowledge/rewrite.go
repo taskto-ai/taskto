@@ -1028,10 +1028,35 @@ func (r *repo) countAuthored(ctx context.Context, head *object.Commit, set map[s
 // rows are deleted by the caller, after: the directory goes first, so a purge that stops between
 // the two still finds the space to finish, and the caller then calls ForgetSpace. Removing what
 // is gone already succeeds.
+//
+// What is under the lock is checked first: a removal for a space that is no longer the one with
+// the ID (it was removed and forgotten, and another was made with its ID, which has files there
+// now) does nothing, since the directory is not its own, and neither does a removal of a space
+// whose row is gone when the Store has a check of rows (SetSpaceCheck). What the Store kept of the
+// space (the usage it measured, the counters of its files) goes with the directory: a space made
+// with the ID starts from nothing.
 func (s *Store) RemoveSpace(sp access.Space) error {
 	st := s.lockSpace(sp, true, true)
 	defer st.mu.Unlock()
-	st.removed, st.removedCreated = true, sp.CreatedAt
+	if sp.Generation != 0 {
+		if st.lastGen.Load() > sp.Generation {
+			return nil // a space made later has the ID: the files at the path are its
+		}
+		if s.spaceExists != nil {
+			ok, err := s.spaceExists(sp)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil // its row is gone, or another space has the ID: not this one's directory
+			}
+		}
+	}
+	st.serve(sp.Generation) // a delayed removal of an older space is then skipped, and cannot take the mark
+	st.removed, st.removedGen = true, sp.Generation
+	st.size, st.unv = -1, -1
+	st.anc.reset()
+	st.publish(nil)
 	dir := sp.Dir(s.dataDir)
 	leftover := dir + removingSuffix
 	// What an earlier removal renamed and didn't finish deleting, first: the rename below
@@ -1068,11 +1093,12 @@ func (s *Store) HoldSpace(sp access.Space) (release func(), err error) {
 
 // ForgetSpace drops what the Store keeps of a space removed by RemoveSpace, once its rows are
 // deleted: nothing can reach the space then, and a space made later may be given its ID. A space
-// that isn't marked removed is left alone.
+// that isn't marked removed is left alone, and so is one whose mark is of another space that had
+// the ID (a later one's removal, told by its generation as admit tells it).
 func (s *Store) ForgetSpace(sp access.Space) {
 	st := s.lockSpace(sp, true, false)
 	defer st.mu.Unlock()
-	if !st.removed {
+	if !st.removed || (st.removedGen != 0 && sp.Generation != 0 && sp.Generation != st.removedGen) {
 		return
 	}
 	s.mu.Lock()

@@ -31,7 +31,7 @@ func must[T any](t testing.TB) func(T, error) T {
 
 func (w *world) find(sp access.Space, q string) Results {
 	w.e.t.Helper()
-	return must[Results](w.e.t)(w.e.idx.Search(ctx, w.ws, []access.Space{sp}, Query{Text: q}))
+	return must[Results](w.e.t)(w.e.idx.searchIndex(ctx, w.ws, []access.Space{sp}, Query{Text: q}))
 }
 
 func paths(res Results) []string {
@@ -188,11 +188,11 @@ func TestCatchUpAfterCrash(t *testing.T) {
 	stop := w.e.idx.Start(ctx)
 	waitFor(t, "startup to catch up", func() bool { return w.e.indexedCommit(sp) == head })
 	stop()
-	res := must[Results](t)(w.e.idx.Search(ctx, w.ws, []access.Space{sp}, Query{Text: "bulk", Limit: MaxLimit}))
+	res := must[Results](t)(w.e.idx.searchIndex(ctx, w.ws, []access.Space{sp}, Query{Text: "bulk", Limit: MaxLimit}))
 	if len(res.Results) != MaxLimit || res.NextOffset == nil {
 		t.Fatalf("%d results, next %v", len(res.Results), res.NextOffset)
 	}
-	res = must[Results](t)(w.e.idx.Search(ctx, w.ws, []access.Space{sp}, Query{Text: "bulk", Limit: MaxLimit, Offset: *res.NextOffset}))
+	res = must[Results](t)(w.e.idx.searchIndex(ctx, w.ws, []access.Space{sp}, Query{Text: "bulk", Limit: MaxLimit, Offset: *res.NextOffset}))
 	if len(res.Results) != 20 || res.NextOffset != nil {
 		t.Fatalf("%d results on the last page, next %v", len(res.Results), res.NextOffset)
 	}
@@ -277,13 +277,13 @@ func TestHybridPagesDontRepeatOrSkip(t *testing.T) {
 	}
 	must[string](t)(w.e.idx.Sync(ctx, sp))
 	w.e.embedAll()
-	whole := must[Results](t)(w.e.idx.Search(ctx, w.ws, []access.Space{sp}, Query{Text: "kumquat", Limit: MaxLimit}))
+	whole := must[Results](t)(w.e.idx.searchIndex(ctx, w.ws, []access.Space{sp}, Query{Text: "kumquat", Limit: MaxLimit}))
 	if whole.Mode != ModeHybrid || len(whole.Results) != 90 {
 		t.Fatalf("%s, %d results", whole.Mode, len(whole.Results))
 	}
 	var paged []string
 	for offset := 0; ; {
-		res := must[Results](t)(w.e.idx.Search(ctx, w.ws, []access.Space{sp}, Query{Text: "kumquat", Limit: 7, Offset: offset}))
+		res := must[Results](t)(w.e.idx.searchIndex(ctx, w.ws, []access.Space{sp}, Query{Text: "kumquat", Limit: 7, Offset: offset}))
 		paged = append(paged, paths(res)...)
 		for _, r := range res.Results {
 			if _, matched := snippetText(r); matched == "" {
@@ -345,7 +345,7 @@ func TestSearchLeavesLargeCatchUpsToTheWorker(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 	w.e.idx.dirtyMu.Lock()
-	_, handed := w.e.idx.dirty[sp.ID]
+	_, handed := w.e.idx.dirty[dirtyKey{sp.ID, sp.Generation}]
 	w.e.idx.dirtyMu.Unlock()
 	if !handed {
 		t.Fatal("the catch-up wasn't handed to the worker")
@@ -383,7 +383,7 @@ func TestNoNextPagePastTheDeepestOffset(t *testing.T) {
 	}
 	search := func(offset, limit int) Results {
 		t.Helper()
-		return must[Results](t)(w.e.idx.Search(ctx, w.ws, []access.Space{sp}, Query{Text: "bulk", Limit: limit, Offset: offset}))
+		return must[Results](t)(w.e.idx.searchIndex(ctx, w.ws, []access.Space{sp}, Query{Text: "bulk", Limit: limit, Offset: offset}))
 	}
 	if res := search(MaxOffset-1, 1); res.NextOffset == nil || *res.NextOffset != MaxOffset {
 		t.Fatalf("next %v, want %d", res.NextOffset, MaxOffset)
@@ -523,13 +523,13 @@ func TestRanking(t *testing.T) {
 
 	// FTS5's syntax is never interpreted, so nothing is a syntax error.
 	for _, q := range []string{`kumquat AND`, `NEAR(kumquat jam)`, `path:kumquat`, `kumquat*`, `"kumquat`, `-kumquat`, `(kumquat`, `^kumquat`} {
-		if _, err := w.e.idx.Search(ctx, w.ws, []access.Space{sp}, Query{Text: q}); err != nil {
+		if _, err := w.e.idx.searchIndex(ctx, w.ws, []access.Space{sp}, Query{Text: q}); err != nil {
 			t.Fatalf("%q: %v", q, err)
 		}
 	}
 	for _, q := range []Query{{Text: ""}, {Text: "  "}, {Text: "*** ---"}, {Text: strings.Repeat("a", MaxQueryLen+1)},
 		{Text: "x", Limit: MaxLimit + 1}, {Text: "x", Offset: MaxOffset + 1}, {Text: "x", Limit: -1}} {
-		if _, err := w.e.idx.Search(ctx, w.ws, []access.Space{sp}, q); err == nil {
+		if _, err := w.e.idx.searchIndex(ctx, w.ws, []access.Space{sp}, q); err == nil {
 			t.Fatalf("%+v: no error", q)
 		}
 	}
@@ -537,7 +537,7 @@ func TestRanking(t *testing.T) {
 	// Pages.
 	var all []string
 	for offset := 0; ; {
-		res := must[Results](t)(w.e.idx.Search(ctx, w.ws, []access.Space{sp}, Query{Text: "kumquat", Limit: 1, Offset: offset}))
+		res := must[Results](t)(w.e.idx.searchIndex(ctx, w.ws, []access.Space{sp}, Query{Text: "kumquat", Limit: 1, Offset: offset}))
 		all = append(all, paths(res)...)
 		if res.NextOffset == nil {
 			break
@@ -651,7 +651,7 @@ func TestCrossUser(t *testing.T) {
 	foreign.WorkspaceID++
 	closed := w.secret
 	closed.Access = access.None
-	res := must[Results](t)(w.e.idx.Search(ctx, w.ws, []access.Space{foreign, closed}, Query{Text: "kumquat"}))
+	res := must[Results](t)(w.e.idx.searchIndex(ctx, w.ws, []access.Space{foreign, closed}, Query{Text: "kumquat"}))
 	wantPaths(t, res)
 	// Nothing searched: nothing to say about semantic search either.
 	if res.Mode != ModeFullText || res.Notice != "" {

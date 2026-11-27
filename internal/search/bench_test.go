@@ -64,13 +64,13 @@ func (w *world) fillVectors(sp access.Space, key string, n, perDoc, dims int, se
 	return docs
 }
 
-// spacesJSON is the spaces' IDs as nearest takes them.
+// spacesJSON is the spaces as nearest takes them: the identities a search was authorized for.
 func spacesJSON(t testing.TB, spaces ...access.Space) string {
-	ids := make([]int64, len(spaces))
+	entries := make([]scopeEntry, len(spaces))
 	for i, sp := range spaces {
-		ids[i] = sp.ID
+		entries[i] = scopeEntry{ID: sp.ID, Workspace: sp.WorkspaceID, Generation: sp.Generation}
 	}
-	raw, err := json.Marshal(ids)
+	raw, err := json.Marshal(entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func BenchmarkNearest(b *testing.B) {
 		name := fmt.Sprintf("%dk", n/1000)
 		b.Run("brute/"+name, func(b *testing.B) {
 			for b.Loop() {
-				found, err := idx.nearestBrute(ctx, in, key, q)
+				found, err := idx.nearestBrute(ctx, in, w.rank(key), q)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -103,11 +103,11 @@ func BenchmarkNearest(b *testing.B) {
 			}
 		})
 		b.Run("cached/"+name, func(b *testing.B) {
-			if _, err := idx.nearest(ctx, w.ws, in, key, q, hybridDepth); err != nil {
+			if _, err := idx.nearest(ctx, w.ws, in, w.rank(key), q, hybridDepth); err != nil {
 				b.Fatal(err)
 			}
 			for b.Loop() {
-				if _, err := idx.nearest(ctx, w.ws, in, key, q, hybridDepth); err != nil {
+				if _, err := idx.nearest(ctx, w.ws, in, w.rank(key), q, hybridDepth); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -115,7 +115,7 @@ func BenchmarkNearest(b *testing.B) {
 		b.Run("reload/"+name, func(b *testing.B) {
 			for b.Loop() {
 				idx.vectors.changedSpace(w.team.ID)
-				if _, err := idx.nearest(ctx, w.ws, in, key, q, hybridDepth); err != nil {
+				if _, err := idx.nearest(ctx, w.ws, in, w.rank(key), q, hybridDepth); err != nil {
 					b.Fatal(err)
 				}
 			}

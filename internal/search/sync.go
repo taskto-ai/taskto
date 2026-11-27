@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path"
 	"strings"
 	"time"
@@ -71,7 +72,9 @@ func (x *Index) syncForSearch(ctx context.Context, sp access.Space) (bool, error
 // sync is Sync, with the space's sync locked; with limit > 0, it does nothing and returns
 // errLargeSync if more than limit files changed.
 func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, error) {
-	sp = access.Space{ID: sp.ID, WorkspaceID: sp.WorkspaceID, Kind: sp.Kind, Access: access.Read}
+	// The generation stays: it tells the space from a purged one that had its ID, which the
+	// knowledge base refuses by its mark when a call doesn't carry one.
+	sp = access.Space{ID: sp.ID, WorkspaceID: sp.WorkspaceID, Kind: sp.Kind, Generation: sp.Generation, Access: access.Read}
 
 	var since string
 	var partial bool
@@ -164,6 +167,12 @@ func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, e
 			x.onBatch(len(docs), size)
 		}
 		err := x.write(ctx, func(tx *sql.Tx) error {
+			// What was read from the space's files is for the space it was read from: one removed
+			// and made again with its ID while this sync waited has other files, and the index
+			// rows are written by the ID, which the foreign keys take for the new space's.
+			if err := stillSpace(ctx, tx, sp); err != nil {
+				return err
+			}
 			// A sync that takes more than one transaction says so in its first: searches
 			// still see what is indexed, and if it stops half-way, the next one starts
 			// over from main's files rather than trust what this one left.
@@ -206,6 +215,19 @@ func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, e
 		wake(x.embedWake)
 	}
 	return diff.Head, nil
+}
+
+// stillSpace checks, inside tx, that sp's row is there with its workspace and, when sp has one, its
+// generation (a number no space has twice): a space that is not the one the caller read is
+// access.ErrNotFound, and nothing is written for it.
+func stillSpace(ctx context.Context, tx *sql.Tx, sp access.Space) error {
+	var one int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM spaces WHERE id = ? AND workspace_id = ? AND (? = 0 OR generation = ?)`,
+		sp.ID, sp.WorkspaceID, sp.Generation, sp.Generation).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: space %d is gone, or is another space with the ID", access.ErrNotFound, sp.ID)
+	}
+	return err
 }
 
 // doc is a file to index, or to remove from the index if version is empty.
