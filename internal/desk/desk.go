@@ -46,13 +46,13 @@ func New(db *sql.DB) *Service { return &Service{db: db, now: time.Now} }
 func (s *Service) List(ctx context.Context, workspaceID, userID int64) (DeskList, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, updated_at FROM desks
-		WHERE user_id = ? AND workspace_id = ? AND name <> ''
-		ORDER BY position, id`, userID, workspaceID)
+		WHERE user_id = ? AND workspace_id = ?
+		ORDER BY name <> '', position, id`, userID, workspaceID)
 	if err != nil {
 		return DeskList{}, err
 	}
 	defer rows.Close()
-	list := DeskList{Desks: []DeskSummary{{ID: 0, Name: ""}}}
+	list := DeskList{Desks: []DeskSummary{}}
 	for rows.Next() {
 		var item DeskSummary
 		if err := rows.Scan(&item.ID, &item.Name, &item.UpdatedAt); err != nil {
@@ -60,7 +60,13 @@ func (s *Service) List(ctx context.Context, workspaceID, userID int64) (DeskList
 		}
 		list.Desks = append(list.Desks, item)
 	}
-	return list, rows.Err()
+	if err := rows.Err(); err != nil {
+		return DeskList{}, err
+	}
+	if len(list.Desks) == 0 || list.Desks[0].Name != "" {
+		list.Desks = append([]DeskSummary{{ID: 0, Name: ""}}, list.Desks...)
+	}
+	return list, nil
 }
 
 func (s *Service) Get(ctx context.Context, workspaceID, userID, id int64) (Desk, error) {

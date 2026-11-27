@@ -32,6 +32,11 @@ func TestDeskLayoutsArePrivateAndWorkspaceScoped(t *testing.T) {
 		t.Fatalf("save main desk = %d %v", code, saved)
 	}
 	id := int64(saved["id"].(float64))
+	code, after := s.browser(s.alice.cookie, http.MethodGet, listPath, nil)
+	listed := after["desks"].([]any)
+	if code != http.StatusOK || len(listed) != 1 || listed[0].(map[string]any)["id"] != float64(id) {
+		t.Fatalf("list after save = %d %v", code, after)
+	}
 	path := deskPath(s.one, fmt.Sprint(id), "")
 	if code, body := s.browser(s.bob.cookie, http.MethodGet, path, nil); code != http.StatusNotFound || body["code"] != "not_found" {
 		t.Fatalf("another member read desk = %d %v", code, body)

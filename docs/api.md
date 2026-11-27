@@ -194,6 +194,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `home_limit` | 409 | A person has at most `max` widgets (or pins) in a workspace, and a space at most `max` default widgets (or pins). |
 | `home_order_invalid` | 400 | The ids to put in order aren't all the caller's own placements of that kind, or one is listed twice. |
 | `home_defaults_shared` | 409 | Defaults are only for the apps of shared spaces. |
+| `desk_changed` | 409 | The desk's `version` is not the stored one; `current` holds the stored desk. |
+| `desk_invalid` | 400 | The layout breaks a rule of the format; `reason` is a closed word such as `too_many_tabs`. |
 | `audit_time_invalid` | 400 | The audit log's `from` or `to` is outside the years 1000 to 9999. |
 | `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
 | `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
@@ -4343,7 +4345,8 @@ These routes need a browser session and workspace membership. Access tokens are 
 ### `GET /api/workspaces/{workspace}/desks`
 
 Lists the main desk first, then any named desks. Before the main desk has been saved, it is returned
-as `{"id":0,"name":"","updated_at":""}`. A read does not create a row.
+as `{"id":0,"name":"","updated_at":""}`; after its first save it is listed with its own id, which
+stays. A read does not create a row.
 
 ### `GET /api/workspaces/{workspace}/desks/{desk}`
 

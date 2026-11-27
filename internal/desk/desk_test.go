@@ -53,6 +53,10 @@ func TestMainDeskIsVirtualUntilSavedAndSurvivesReload(t *testing.T) {
 	if err != nil || saved.ID == 0 || saved.Version != 1 {
 		t.Fatalf("first save = %+v, err %v", saved, err)
 	}
+	list, err = service.List(ctx, 1, 1)
+	if err != nil || len(list.Desks) != 1 || list.Desks[0].ID != saved.ID || list.Desks[0].Name != "" {
+		t.Fatalf("list after save = %+v, err %v", list, err)
+	}
 	loaded, err := New(sqlDB).Get(ctx, 1, 1, 0)
 	if err != nil || loaded.ID != saved.ID || loaded.Version != 1 || string(loaded.Layout) != string(saved.Layout) {
 		t.Fatalf("reload = %+v, err %v", loaded, err)

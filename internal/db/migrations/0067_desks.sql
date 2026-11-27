@@ -2,6 +2,7 @@ CREATE TABLE desks (
     id           INTEGER PRIMARY KEY,
     user_id      INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     workspace_id INTEGER NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
+    -- '' is the person's main desk in the workspace; named desks come later.
     name         TEXT NOT NULL DEFAULT '',
     layout       TEXT NOT NULL CHECK (json_valid(layout)),
     version      INTEGER NOT NULL DEFAULT 1,
