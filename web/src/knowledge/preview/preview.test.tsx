@@ -402,3 +402,13 @@ test('the frame follows its content with a size observer that ends with it', asy
   unmount()
   expect(disconnect).toHaveBeenCalledOnce()
 })
+
+test('a version in History is previewed from its own commit through Content', async () => {
+  const at = '/api/workspaces/1/spaces/3/docs/contract.docx?at=abc123&raw=true'
+  const calls = fakeFetch({ [`GET ${at}`]: { body: {} } })
+  const doc = { path: 'dir/contract.docx', version: 'a'.repeat(40), size: 12, versioned: true }
+  render(<Content url="/api/workspaces/1/spaces/3/docs/contract.docx?at=abc123" doc={doc} onLink={() => null} />)
+  await waitFor(() => expect(rendered).toHaveBeenCalledOnce())
+  expect(calls.map((c) => c.path)).toEqual([at])
+  expect(screen.getByTitle('Preview of contract.docx')).toBeTruthy()
+})
