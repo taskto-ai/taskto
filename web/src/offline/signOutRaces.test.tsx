@@ -28,7 +28,11 @@ import { activate, deactivate, lastUser, runtimeState } from './runtime'
 import { databaseExists, lockTimes, OfflineStore, type OutboxItem } from './store'
 
 // Something can be made to happen as a start (or Back) takes the account up, before it is claimed.
-const during = vi.hoisted(() => ({ claim: null as (() => void) | null, activate: null as (() => void) | null }))
+const during = vi.hoisted(() => ({
+  claim: null as (() => void) | null,
+  claimed: null as (() => void) | null,
+  activate: null as (() => void) | null,
+}))
 vi.mock('./runtime', async (original) => {
   const real = await original<typeof import('./runtime')>()
   return {
@@ -57,7 +61,12 @@ vi.mock('../signOut', async (original) => {
       const hook = during.claim
       during.claim = null
       hook?.()
-      return real.finishUnfinishedSignOuts(...args)
+      const out = await real.finishUnfinishedSignOuts(...args)
+      // And just after it, before the claim goes on.
+      const after = during.claimed
+      during.claimed = null
+      after?.()
+      return out
     },
   }
 })
@@ -167,6 +176,7 @@ beforeEach(() => {
   window.sessionStorage.clear()
   hold.preferences = null
   during.claim = null
+  during.claimed = null
   during.activate = null
 })
 
@@ -1216,12 +1226,15 @@ test('a start that takes a sign-out up opens nothing when another login started 
       done()
     }
   })
+  const opens = vi.spyOn(OfflineStore, 'open')
   render(<App />)
   await waitFor(() => expect(hold.reached).toBe(true))
   rememberLogin(8, 't1', Date.now() + 1)
   await act(async () => release())
-  await waitFor(() => expect(screen.queryByText('Signing out…')).toBeNull())
+  expect(await screen.findByText('The account changed')).toBeTruthy()
   expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+  // Nothing of the account was opened for a start that turned out stale.
+  expect(opens.mock.calls.some(([user]) => user === 7)).toBe(false)
 })
 
 test('an answer asked in the same moment a login was seen to end is not taken for that login', () => {
@@ -1336,4 +1349,18 @@ test('a sign-in in a tab whose runtime is still open lets it go when another log
   fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
   expect(await screen.findByText('The account changed')).toBeTruthy()
   await waitFor(() => expect(runtimeState().runtime).toBeNull())
+})
+
+test('a start whose login another person overtakes just after its earlier sign-outs claims none of their drafts', async () => {
+  fakeFetch({ ...signedIn, 'GET /api/me': { body: me } })
+  during.claimed = () => {
+    // The second person signs in in another tab, and begins a draft, right then.
+    rememberLogin(8, 't1', Date.now() + 1)
+    localStorage.setItem('taskto:drafts-of', '8')
+    localStorage.setItem('taskto:builder-start:8:1', 'a draft of the second person')
+  }
+  render(<App />)
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  expect(localStorage.getItem('taskto:drafts-of')).toBe('8')
+  expect(localStorage.getItem('taskto:builder-start:8:1')).toBe('a draft of the second person')
 })

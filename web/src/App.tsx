@@ -142,6 +142,8 @@ export function App() {
     // tab meanwhile. Then nothing more is taken, what was is let go (no database left open, no queue,
     // no writer's lock for the newer login to wait on), and the page goes on after a reload.
     const current = () => still() && loginIsCurrent(me.user.id, me.session)
+    // Asked right before the drafts are claimed (which clears another account's).
+    if (!current()) return false
     claimDrafts(me.user.id)
     await activate(me.user.id, me.user.name, current)
     if (current()) return true
@@ -569,6 +571,9 @@ export function App() {
         setFinishedElsewhere(false)
         setSession(invite ? { state: 'invite', me: now } : { state: 'in', me: now })
       } catch (e) {
+        // An older login's sign-out, a newer login of the same person on the browser, holds nothing
+        // of the device, whatever Back's answer was: it is let go here too.
+        if (newerLoginHolds(tail.user, tail.session)) settleSignOut(tail.user, tail.session)
         // A login that is over is a sign-out done, whatever this page did meanwhile; it shields
         // nothing any more.
         if (e instanceof ApiError && e.status === 401) {

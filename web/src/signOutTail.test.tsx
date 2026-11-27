@@ -781,3 +781,20 @@ test('Try again refused because a newer login of the same person holds the brows
   expect(await screen.findByText('The account changed')).toBeTruthy()
   await waitFor(() => expect(pendingOf()).toEqual([]))
 })
+
+test("Back from an older login's sign-out with no answer, a newer login of the same person on the browser, lets that older sign-out go", async () => {
+  let me: { body: Me } | { status: number; body: unknown } = { body: { ...first_, session: 's1' } }
+  fakeFetch({
+    ...pages,
+    'GET /api/me': () => me,
+    'POST /api/logout': { status: 503, body: { error: 'unavailable', code: 'internal' } },
+  })
+  render(<App />)
+  await logOut()
+  await screen.findByRole('heading', { name: "Couldn't sign out" })
+  // A newer login of the same person holds the browser now; Back gets no answer it can use.
+  rememberLogin(1, 's2', Date.now() + 1)
+  me = { status: 502, body: null }
+  fireEvent.click(screen.getByRole('button', { name: /Back to the app/ }))
+  await waitFor(() => expect(pendingOf()).toEqual([]))
+})
