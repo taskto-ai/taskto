@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -456,6 +457,10 @@ func TestRemoteAccountClosing(t *testing.T) {
 // waited for by Forget: the newer one, which never ran, doesn't take its place.
 func TestForgetWaitsForABrowserThatAStartGaveUpOn(t *testing.T) {
 	h := newProfileHost(t)
+	// The fake takes 2 s to exit after it is told to close: far longer than the start waits, so
+	// a busy machine doesn't let the old browser go before the start gives up. Stopping waits
+	// StopGrace/2 (2.5 s) before it signals it, so it still exits on its own.
+	h.exit = 2 * time.Second
 	m := NewManager(Config{Host: h, StartTimeout: 100 * time.Millisecond})
 	t.Cleanup(m.Close)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -464,7 +469,6 @@ func TestForgetWaitsForABrowserThatAStartGaveUpOn(t *testing.T) {
 	if err := m.Start(ctx, 1, Testing); err != nil {
 		t.Fatal(err)
 	}
-	// The fake takes 700 ms to exit after it is told to close.
 	stopped := make(chan struct{})
 	go func() { _ = m.Stop(ctx, 1, Testing); close(stopped) }()
 	for {
@@ -476,7 +480,13 @@ func TestForgetWaitsForABrowserThatAStartGaveUpOn(t *testing.T) {
 	}
 	// The start waits 100 ms for the old browser, then gives up.
 	if err := m.Start(ctx, 1, Testing); err == nil {
-		t.Fatal("a start while the old browser was still stopping succeeded")
+		// It may only have succeeded because this goroutine, or the start's, was held up until
+		// the old browser had exited: then the new one started after it, and there is nothing to
+		// wait for. A new browser started while the old one ran is the failure.
+		if events := browserEvents(t, h.log); strings.Join(events, " ") != "start exit start" {
+			t.Fatalf("a start while the old browser was still stopping succeeded: %v", events)
+		}
+		t.Skip("the old browser was already gone: nothing to wait for")
 	}
 	if h.alive(1) == 0 {
 		t.Skip("the old browser was already gone: nothing to wait for")
