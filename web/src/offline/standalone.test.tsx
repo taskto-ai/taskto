@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import 'fake-indexeddb/auto'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
@@ -144,4 +144,27 @@ test('"Open in taskto" offline leaves the standalone app for the list', async ()
   expect(screen.getByRole('heading', { level: 1, name: 'Offline' })).toBeTruthy()
   expect(screen.queryByRole('region', { name: 'Mileage' })).toBeNull()
   expect(screen.queryByRole('link', { name: 'Open in taskto' })).toBeNull()
+})
+
+test('the app shown follows the address when Back returns to a run address after an app was opened from the list', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))),
+  )
+  window.history.replaceState(null, '', '/w/1/run/2-2')
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Mileage' })
+  fireEvent.click(screen.getByRole('link', { name: 'Open in taskto' }))
+  await screen.findByRole('button', { name: 'Open Expenses' })
+  fireEvent.click(screen.getByRole('button', { name: 'Open Expenses' }))
+  await screen.findByRole('button', { name: 'Back to the downloaded apps' })
+  expect(screen.getByRole('region', { name: 'Expenses' })).toBeTruthy()
+
+  act(() => {
+    window.history.back()
+  })
+  await waitFor(() => expect(window.location.pathname).toBe('/w/1/run/2-2'))
+  await screen.findByRole('heading', { level: 1, name: 'Mileage' })
+  expect(screen.queryByRole('region', { name: 'Expenses' })).toBeNull()
+  expect(screen.getByRole('link', { name: 'Open in taskto' }).getAttribute('href')).toBe('/w/1/apps/2-2')
 })

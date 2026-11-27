@@ -1874,6 +1874,37 @@ test('an open app stays when the check for access fails for a reason that is not
   expect(screen.queryByText('This app wasn’t found')).toBeNull()
 })
 
+test('an open app that was denied is gone even when the check that follows fails, and comes back when a later check confirms access', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  let down = false
+  const calls = fakeFetch({
+    ...runRoutes,
+    'GET /api/workspaces/1/spaces': () =>
+      down
+        ? { status: 500, body: { error: 'broken' } }
+        : { body: { spaces: [{ id: 3, name: 'Mine', kind: 'private', access: 'write', archived_at: null }] } },
+    [`POST ${appBase}/actions`]: () => ({ status: 404, body: { error: 'Space not found', code: 'space_not_found' } }),
+  })
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  const spaceReads = () => calls.filter((c) => c.path === '/api/workspaces/1/spaces').length
+
+  down = true
+  await act(async () => {
+    await api(`${appBase}/actions`, { method: 'POST', body: {} }).catch(() => undefined)
+  })
+  await waitFor(() => expect(spaceReads()).toBe(2))
+  await act(async () => {})
+  expect(screen.queryByRole('heading', { level: 1, name: 'Expenses' })).toBeNull()
+  expect(screen.queryByRole('region', { name: 'Expenses' })).toBeNull()
+
+  down = false
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'))
+  })
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+})
+
 test('losing the whole workspace while an app is open ends in the not found page, and asks once, not again and again', async () => {
   window.history.replaceState(null, '', '/w/1/run/3-7')
   let kept = true

@@ -34,6 +34,11 @@ export function OfflineShell({
   const data = useOfflineData(runtime)
   const [chosen, setChosen] = useState<string | null | undefined>(undefined)
   const requestedKey = requested ? scopeKey(requested) : null
+  const [seenKey, setSeenKey] = useState(requestedKey)
+  if (seenKey !== requestedKey) {
+    setSeenKey(requestedKey)
+    setChosen(undefined)
+  }
   const open = chosen === undefined ? requestedKey : chosen
   const download = data.downloads.find((d) => d.key === open)
   const standalone = chosen === undefined && download !== undefined

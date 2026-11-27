@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { ACCESS_LOST, ApiError, api, type Me, type Space, ws } from '../api'
 import { setPreferences, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -49,14 +49,17 @@ export function StandaloneApp({
   const reloading = useRef(false)
   reloading.current = !!spaces.loading
   const reload = spaces.reload
+  const [denied, setDenied] = useState(false)
   useEffect(() => {
-    if (!spaces.loading && outdated.current) {
+    if (spaces.loading) return
+    if (outdated.current) {
       outdated.current = false
       reload()
-    }
-  }, [spaces.loading, reload])
+    } else if (!spaces.error) setDenied(false)
+  }, [spaces.loading, spaces.error, reload])
   useEffect(() => {
     const lost = () => {
+      setDenied(true)
       if (reloading.current) outdated.current = true
       else reload()
     }
@@ -76,10 +79,10 @@ export function StandaloneApp({
   useEffect(() => {
     void setPreferences({ workspace: locale })
   }, [locale])
-  const found = spaces.data?.find((s) => s.id === space)
+  const found = denied ? undefined : spaces.data?.find((s) => s.id === space)
 
   let body: ReactNode
-  if (!member || (spaces.data && !found)) {
+  if (!member || (spaces.data && !found) || (denied && spaces.error)) {
     body = (
       <Page width="reading">
         <EmptyState
