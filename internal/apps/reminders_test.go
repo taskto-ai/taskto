@@ -309,6 +309,40 @@ func TestAPastDateSchedulesNothing(t *testing.T) {
 	f.wantJob(f.alice, id, "due", utc(2030, time.January, 4, 9, 0))
 }
 
+func TestAWhitespaceAroundAStoredDateOrTimeIsStillScheduled(t *testing.T) {
+	f := newRemindFX(t, Reminder{Name: "due", Date: "due", Time: "starts", Title: "{{title}}"})
+	id := f.insert(f.alice, map[string]any{"title": "rent", "due": "2030-01-05"})
+	f.wantJob(f.alice, id, "due", utc(2030, time.January, 5, 9, 0))
+	res, err := f.e.s.SystemWrite(context.Background(), SystemWrite{
+		Actor:   SystemActor{Kind: SystemKindIntegration, ID: 1},
+		SpaceID: f.shared.ID, AppID: f.app.ID, RecordID: id, Action: "payment.succeeded",
+		Declared: []string{"due", "starts"}, Set: map[string]any{"due": "2030-01-08 ", "starts": "17:30 "},
+	})
+	if err != nil || !res.Changed {
+		t.Fatalf("system write = %+v, %v", res, err)
+	}
+	f.wantJob(f.alice, id, "due", utc(2030, time.January, 8, 17, 30))
+}
+
+func TestAPendingReminderPastItsTimeSurvivesTheAppMoving(t *testing.T) {
+	f := newRemindFX(t, Reminder{Name: "due", Date: "due", Title: "{{title}}"})
+	id := f.insert(f.alice, map[string]any{"title": "rent", "due": "2030-01-05"})
+	other := f.e.createShared(f.owner, f.ws, "Elsewhere")
+	f.e.addMember(f.owner, other, f.alice, access.RoleEditor)
+	f.clock.set(utc(2030, time.January, 5, 9, 1))
+	cur := f.view(f.alice, f.shared, f.app)
+	rec := f.alice.do(http.MethodPost, appPath(f.shared, f.app.ID, "/move"), map[string]any{"version": cur.Version, "space_id": other.ID})
+	expect(t, rec, http.StatusOK)
+	j, ok := f.job(f.alice, id, "due")
+	if !ok || j.SpaceID != other.ID || !j.RunAt.Equal(utc(2030, time.January, 5, 9, 0)) {
+		t.Fatalf("job = %+v (found %v), want the same time in the new space", j, ok)
+	}
+	f.sch.RunDue(context.Background())
+	if n := len(f.notices(f.alice)); n != 1 {
+		t.Fatalf("%d notices, want the pending one", n)
+	}
+}
+
 func TestAReleaseWithoutTheReminderMakesTheJobDoNothing(t *testing.T) {
 	f := newRemindFX(t, dueReminder())
 	id := f.insert(f.alice, map[string]any{"title": "rent", "due": "2030-01-05"})

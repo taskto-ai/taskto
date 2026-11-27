@@ -120,9 +120,8 @@ func (r Reminder) runAt(c Collection, data map[string]any, loc *time.Location) (
 	if !ok {
 		return time.Time{}, false
 	}
-	value, set := data[r.Date]
-	day, isText := value.(string)
-	if !set || !isText || !ofType(date, value) {
+	day, ok := storedText(date, data)
+	if !ok {
 		return time.Time{}, false
 	}
 	parsed, err := time.Parse(time.DateOnly, day)
@@ -135,10 +134,8 @@ func (r Reminder) runAt(c Collection, data map[string]any, loc *time.Location) (
 	}
 	if r.Time != "" {
 		if field, ok := c.field(r.Time); ok {
-			if v, set := data[r.Time]; set && ofType(field, v) {
-				if text, isText := v.(string); isText && timePattern.MatchString(text) {
-					clock = text
-				}
+			if text, ok := storedText(field, data); ok && timePattern.MatchString(text) {
+				clock = text
 			}
 		}
 	}
@@ -146,6 +143,16 @@ func (r Reminder) runAt(c Collection, data map[string]any, loc *time.Location) (
 	minute, _ := strconv.Atoi(clock[3:])
 	y, m, d := parsed.Date()
 	return schedule.LocalHour(y, m, d, hour, loc).Add(time.Duration(minute) * time.Minute).UTC(), true
+}
+
+func storedText(f Field, data map[string]any) (string, bool) {
+	value, set := data[f.Name]
+	if !set {
+		return "", false
+	}
+	v, present, err := f.stored(value)
+	text, isText := v.(string)
+	return text, err == nil && present && isText
 }
 
 type reminderPayload struct {
@@ -386,15 +393,19 @@ func (s *Service) syncRowReminders(ctx context.Context, tx *sql.Tx, sc *reminder
 			Kind: KindRecordReminder, UserID: owner, WorkspaceID: sc.workspaceID, SpaceID: sc.spaceID,
 			DedupeKey: key, Payload: payload, RunAt: at,
 		}
+		keptPending := false
 		if due {
 			switch existing, err := s.sched.Find(ctx, tx, owner, KindRecordReminder, key); {
-			case err == nil && existing.RunAt.Equal(at) && existing.SpaceID == sc.spaceID && string(existing.Payload) == string(payload):
-				continue
+			case err == nil && existing.RunAt.Equal(at) && string(existing.Payload) == string(payload):
+				if existing.SpaceID == sc.spaceID || existing.State != schedule.StatePending {
+					continue
+				}
+				keptPending = true
 			case err != nil && !errors.Is(err, schedule.ErrNotFound):
 				return err
 			}
 		}
-		if !due || !at.After(now) || at.After(schedule.MaxRunAt) || at.Before(schedule.MinRunAt) {
+		if !due || !keptPending && !at.After(now) || at.After(schedule.MaxRunAt) || at.Before(schedule.MinRunAt) {
 			if _, err := s.sched.Cancel(ctx, tx, owner, KindRecordReminder, key); err != nil {
 				return err
 			}
