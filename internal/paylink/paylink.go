@@ -7,6 +7,7 @@ package paylink
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
@@ -18,6 +19,24 @@ type Opener interface {
 	// OpenPaymentLink returns the link to pay what the request asks, making it at the provider only
 	// if the request's entry has not made one already. Its failures are *Error.
 	OpenPaymentLink(ctx context.Context, req Request) (Link, error)
+	// PayableMoney says which records of the app have a payment link that may still take a payment,
+	// or may still come to exist, as far as the server knows: one that is open, still being made or
+	// whose outcome is unknown, read through q (the transaction that changes the records, under its
+	// write lock). Only a link confirmed expired, or paid on that very link, is no longer one. While a
+	// record has one, its money (the amount and currency it asks) can't change. recordID 0 is every
+	// record of the app.
+	// For each such record it says the fields the money of each such link was read from, whatever the
+	// app's live release declares now: MoneyFields{} for a link made before links kept them.
+	PayableMoney(ctx context.Context, q Querier, appID, recordID int64) (map[int64][]MoneyFields, error)
+}
+
+// MoneyFields are the record's fields a payment link's amount and currency were read from (Currency ""
+// for an effect's own currency, and both "" when it isn't known which).
+type MoneyFields struct{ Amount, Currency string }
+
+// Querier is what PayableMoney reads with: a transaction or the database.
+type Querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
 // Request is a payment link as the integration is asked for it. The integration of the
@@ -27,6 +46,13 @@ type Request struct {
 	// EffectID is the outbox entry's number, which the integration's reference is unique by.
 	EffectID int64
 	Slot     string
+	// URLField is the record's field the link is written to. A record has one payable link at a time,
+	// whatever field it is written to: an entry with no reference of its own first reads the record's.
+	URLField string
+	// AmountField and CurrencyField are the record's fields the money was read from ("" for an
+	// effect's own currency): the reference keeps them, so the record's money stays as it is while the
+	// link may be paid whatever the app's live release declares by then.
+	AmountField, CurrencyField string
 	// Amount is the amount as decimal text and Currency its code, as the record held them
 	// (payload): nothing in them was rounded, converted or checked yet.
 	Amount, Currency string
