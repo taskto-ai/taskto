@@ -290,13 +290,18 @@ func TestARetiredAccountIsRefusedUntilACensusSaysItIsLive(t *testing.T) {
 	// 2's account is back; 3 is gone for good; 4's number is a new account's now; 5's account is
 	// live, but deleted once the census was registered: the census is tried again, and the deletion
 	// stays.
+	// The census is the server's after a restore: a later boot than the one that deleted them.
 	h.introduce(t, 5)
-	next := cliowner.Account{User: 4, Identity: strings.Repeat("4", 32), Boot: cliworker.TestBoot, Installation: cliworker.TestInstallation}
+	restored := strings.Repeat("d", 32)
+	next := cliowner.Account{User: 4, Identity: strings.Repeat("4", 32), Boot: restored, Installation: cliworker.TestInstallation}
 	c := census(map[int64]string{4: next.Identity}, 1, 2, 5)
+	c.Boot = restored
 	if err := h.w.Reconcile(ctx, c); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.w.Forget(ctx, acct(5)); err != nil {
+	gone := acct(5)
+	gone.Boot = restored
+	if err := h.w.Forget(ctx, gone); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.w.Reconcile(ctx, c); err != nil {

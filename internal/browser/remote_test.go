@@ -158,11 +158,18 @@ func TestRemoteErrorOrder(t *testing.T) {
 	}
 }
 
-// The CLI worker's refusal of a purge while it lost its history of server boots reaches the server
-// as itself over the worker's socket: the server says so to its operators.
+// The CLI worker's refusals of a purge (it lost its history of server boots, it waits for the
+// server's first census) reach the server as themselves over the worker's socket: the server says
+// so to its operators, or keeps the purge's step and tries again.
 func TestAPurgeRefusedForLostAuthoritySaysSoOverTheSocket(t *testing.T) {
+	for _, refusal := range []error{cliowner.ErrAuthorityLost, cliowner.ErrCensusNeeded} {
+		t.Run(refusal.Error(), func(t *testing.T) { purgeRefusedOverTheSocket(t, refusal) })
+	}
+}
+
+func purgeRefusedOverTheSocket(t *testing.T, refusal error) {
 	m := NewManager(Config{Host: &fakeHost{log: filepath.Join(t.TempDir(), "log")}, Fence: func(context.Context, cliowner.Account, func() error) error {
-		return cliowner.ErrAuthorityLost
+		return refusal
 	}})
 	t.Cleanup(m.Close)
 	dir, err := os.MkdirTemp("/tmp", "br")
@@ -178,7 +185,7 @@ func TestAPurgeRefusedForLostAuthoritySaysSoOverTheSocket(t *testing.T) {
 	srv := &http.Server{Handler: NewHandler(m), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
-	if err := NewRemote(sock).Forget(context.Background(), acct(1)); !errors.Is(err, cliowner.ErrAuthorityLost) {
-		t.Errorf("the purge over the socket: %v, want ErrAuthorityLost", err)
+	if err := NewRemote(sock).Forget(context.Background(), acct(1)); !errors.Is(err, refusal) {
+		t.Errorf("the purge over the socket: %v, want %v", err, refusal)
 	}
 }

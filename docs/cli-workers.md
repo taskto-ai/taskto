@@ -451,6 +451,12 @@ The UI shows what the command prints.
     has it, one a census brings back included). A worker started with another `-uid-base` doesn't
     start (it would give a home's uid to another home), nor does one on a volume with homes whose
     base nothing can rebuild (no pin, no record with a uid); changing the base means a new volume;
+  - with isolation, a directory from before homes (`u<n>`, which stays, its old Unix user's,
+    until the first census removes it) must not belong to a uid the base gives a home: at every
+    start the worker compares the owners of those directories with its homes' uids and doesn't
+    start if one would be a new account's, which would reach the old one's files. Under the same
+    `-uid-base` they never are (old uids are below base + 2^30). Upgrading with another
+    `-uid-base` needs a new, empty worker volume;
   - with isolation, a new home is made whole under a temporary name (`.new-h<home>-…`), owned by
     its Unix user, and renamed into place: a stop or a failed `chown` in between leaves a
     temporary directory the next start removes, never a home of the wrong owner;
@@ -475,7 +481,12 @@ The UI shows what the command prints.
     running now) stays;
   - a deletion (`Forget`, and the agent browsers' purge in the worker, `FenceDeletion`) is taken
     only from the latest registered boot, and retires the account before it stops or removes
-    anything. The server sends its boot with every deletion, the purge's too;
+    anything. The server sends its boot with every deletion, the purge's too. Before the volume's
+    first census a deletion waits for it (`ErrCensusNeeded`, `409`, `census_needed`) and writes
+    nothing: the purge keeps its step and tries again after the server's census, which the server
+    sends at its start and tries again until it is taken. So a deletion never leaves a record on a
+    volume no installation has pinned yet, and a census can't take back a retirement made before
+    any boot was registered;
   - the whole history of boots is kept, never cut (`.worker/boots.json`, the latest last, written
     whole by a rename; a boot is a few dozen bytes), with a copy of the latest
     (`.worker/latest-boot`, written after it). So a boot the worker can't place is a server it
@@ -506,7 +517,9 @@ The UI shows what the command prints.
   (`cli_installation`, migration 0062), which a restore of the same data keeps and another data
   directory doesn't share, sent with every census and every account (`X-Taskto-Installation`).
   The first census, or the first account given a home if one comes before it, pins the volume to
-  it, durably (`.worker/installation`), and each account's record keeps its installation. From
+  it, durably (`.worker/installation`), and each account's record keeps its installation. In the
+  authority-lost state nothing but the operator's handover writes the binding: a new account is
+  refused then (`authority_lost`), and the accounts the worker has go on. From
   then on a census, a deletion, a browser purge or a new account of another installation is
   refused (`other_installation`, `409`) and registers nothing, and no census ever retires another
   installation's account; other work for the accounts the worker has goes on. A volume that has
@@ -528,24 +541,26 @@ The UI shows what the command prints.
   1. Stop every other server that may still talk to this worker (a server a restore replaced, an
      older install during a move): from then on the worker takes censuses and deletions from the
      server it is handed to only, and a boot it can't place is taken for a later server.
-  2. Find the current server's boot (and its installation, to move the volume to it): Settings →
-     About shows them, with the command, to the server's operators while the worker needs handing
-     over, and the server logs them at every start (`this server's boot and installation, for the
-     CLI worker`).
+  2. Find the current server's boot and installation: Settings → About shows them, with the
+     command, to the server's operators while the worker needs handing over, and the server logs
+     them at every start (`this server's boot and installation, for the CLI worker`).
   3. Stop the worker, hand it over on its volume, and start it again:
 
      ```sh
      docker compose stop cli-worker
-     docker compose --profile cli run --rm --no-deps cli-worker trust-server -homes /homes -boot <boot>
+     docker compose --profile cli run --rm --no-deps cli-worker trust-server -homes /homes -boot <boot> -installation <installation>
      docker compose start cli-worker
      ```
 
-     Add `-installation <installation>` to move the volume to another installation (a cutover to a
-     new data directory); without it the volume stays its own installation's.
+     Always name the current server's installation: the handover pins the volume to it, which
+     moves the volume when it was another installation's (a cutover to a new data directory),
+     sets it again when the volume lost its binding (the handover refuses to run without it then),
+     and changes nothing when it is already the volume's. While the authority is lost the worker
+     takes no new account either, so nothing but the handover pins the volume.
 
      The handover makes the counter again from the history and the records, and reports success
      only once it has read back what it wrote as a starting worker would, and that worker would
-     trust it. It needs `-installation` when the volume lost its binding. The worker's deletions
+     trust it. The worker's deletions
      and censuses from that server go through again; the server's next
      census (at its next start, or the one it tries again by itself) tidies what waited. The boot
      is the server's process's: if the server starts again before the handover, use its new one.

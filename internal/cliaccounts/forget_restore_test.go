@@ -88,6 +88,10 @@ func TestARetiredAccountComesBackOnlyWithACensus(t *testing.T) {
 	e := newEnv(t, Container, nil)
 	svcA := New(dbA, Container, LocalWorker(e.worker))
 	t.Cleanup(svcA.Close)
+	// The server's census at its start: deletions are taken after it.
+	if err := svcA.ReconcileForgotten(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	one := newUser(t, dbA, "one@example.com")
 	gone := newUser(t, dbA, "gone@example.com")
@@ -195,6 +199,10 @@ func (f *flakyWorker) Reconcile(ctx context.Context, c cliworker.Census) error {
 func TestStartReconcileRetriesAndForgottenIsAnAPIError(t *testing.T) {
 	e := newEnv(t, Container, nil)
 	ctx := context.Background()
+	// The server's census at its start: deletions are taken after it.
+	if err := e.svc.ReconcileForgotten(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.svc.Forget(ctx, 9); err != nil {
 		t.Fatal(err)
 	}
@@ -229,6 +237,10 @@ func TestReconcileKeepsTheMarkOfAPurgeThatBegan(t *testing.T) {
 	ctx := context.Background()
 	begun := newUser(t, e.db, "begun@example.com")
 	other := newUser(t, e.db, "other@example.com")
+	// The server's census at its start: deletions are taken after it.
+	if err := e.svc.ReconcileForgotten(ctx); err != nil {
+		t.Fatal(err)
+	}
 	for _, user := range []int64{begun, other} {
 		if err := e.svc.Forget(ctx, user); err != nil {
 			t.Fatal(err)
@@ -238,16 +250,19 @@ func TestReconcileKeepsTheMarkOfAPurgeThatBegan(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(20 * time.Millisecond) // the marks are older than the read
-	if err := e.svc.ReconcileForgotten(ctx); err != nil {
+	// The server starts again (a boot of its own) and sends its census.
+	again := New(e.db, Container, LocalWorker(e.worker))
+	t.Cleanup(again.Close)
+	if err := again.ReconcileForgotten(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.worker.StartLogin(e.acct(begun), cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
 		t.Errorf("the account whose purge began was let back: %v", err)
 	}
-	if _, err := e.svc.worker.StartLogin(other, cliworker.Claude, ""); err != nil {
+	if _, err := again.worker.StartLogin(other, cliworker.Claude, ""); err != nil {
 		t.Errorf("an account that is live and not being purged is refused: %v", err)
 	}
-	_ = e.svc.worker.CancelLogin(other, cliworker.Claude, "")
+	_ = again.worker.CancelLogin(other, cliworker.Claude, "")
 }
 
 // A CLI worker started again on its own, having lost its history of server boots, can't tell this

@@ -486,10 +486,10 @@ function CLIWorkerPanel({ workspace }: { workspace: number }) {
   if (!s?.authority_lost && !s?.other_installation) {
     return null
   }
-  // Moving the volume to this installation names it too; a lost authority only needs the boot.
-  const command = s.other_installation
-    ? `taskto cli-worker trust-server -homes /homes -boot ${s.boot ?? ''} -installation ${s.installation ?? ''}`
-    : `taskto cli-worker trust-server -homes /homes -boot ${s.boot ?? ''}`
+  // The handover always names this server's installation: moving the volume to it needs it, a
+  // worker whose volume lost its installation takes no handover without it, and naming the
+  // volume's own again changes nothing.
+  const command = `taskto cli-worker trust-server -homes /homes -boot ${s.boot ?? ''} -installation ${s.installation ?? ''}`
   return (
     <Section title={t('settings.about.cliWorker.title')}>
       <Notice tone="danger">

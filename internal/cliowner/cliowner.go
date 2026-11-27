@@ -10,15 +10,20 @@ import (
 	"errors"
 )
 
-// ErrAuthorityLost is the CLI worker's answer to a census or a deletion while it can't tell the
-// current server from an earlier one (it lost its history of server boots): it refuses them all
-// until an operator hands it over (`taskto cli-worker trust-server`, docs/cli-workers.md).
 // ErrOtherInstallation is the CLI worker's answer to a census, a deletion or a new account from a
 // server of another installation than the one its volume belongs to: an operator hands the volume
 // over (`taskto cli-worker trust-server -installation`, docs/cli-workers.md).
 var ErrOtherInstallation = errors.New("the CLI worker's volume belongs to another taskto installation: see docs/cli-workers.md")
 
+// ErrAuthorityLost is the CLI worker's answer to a census, a deletion or a new account while it
+// can't tell the current server from an earlier one (it lost its history of server boots, or its
+// installation): it refuses them until an operator hands it over (`taskto cli-worker
+// trust-server`, docs/cli-workers.md).
 var ErrAuthorityLost = errors.New("the CLI worker lost its history of server boots and refuses every deletion until an operator hands it over: see docs/cli-workers.md")
+
+// ErrCensusNeeded is the CLI worker's answer to a deletion before its volume's first census: it
+// does nothing, and the server tries again once its census has been taken.
+var ErrCensusNeeded = errors.New("the CLI worker takes deletions only after the server's first census: it is tried again")
 
 type key struct{}
 

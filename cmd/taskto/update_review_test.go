@@ -868,6 +868,20 @@ func TestDocsOfTheRollbackAndTheReleaseSayWhatIsTrue(t *testing.T) {
 			t.Errorf("%s doesn't say the kept volume goes back only with the upgraded server's own backup", name)
 		}
 	}
+	// In local mode the backup from before the upgrade holds <data>/cli as the older version left
+	// it, matched to its database: the rollback keeps it, and the container steps are container
+	// mode's only.
+	flat := strings.Join(strings.Fields(guide), " ")
+	for _, wrong := range []string{"move `<data>/cli` aside"} {
+		if strings.Contains(flat, wrong) {
+			t.Errorf("docs/install.md tells a local-mode rollback to %s, which throws away the restored sign-ins", wrong)
+		}
+	}
+	for _, want := range []string{"In local mode, leave the restored `<data>/cli` as it is", "`HOMES=1` is for container mode only"} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("docs/install.md doesn't say %q", want)
+		}
+	}
 	// A rollback with no record still has a volume: the one the server has.
 	if i, j := strings.Index(rollback, `RECORDED=`), strings.Index(rollback, `[ -z "$VOLUME" ]`); i < 0 || j < i {
 		t.Error("the Rollback doesn't take the recorded volume first, and the server's own when there is none")

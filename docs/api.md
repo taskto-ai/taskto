@@ -4951,8 +4951,8 @@ the other fields are then false or absent. `authority_lost`: the worker lost its
 server boots, and refuses every census and deletion until an operator hands it over.
 `other_installation`: the worker's volume belongs to another taskto installation (another data
 directory). `boot` and `installation` are this server's, present only when the worker needs
-handing over: what `taskto cli-worker trust-server -boot` (and `-installation`, for another
-installation) takes.
+handing over: what `taskto cli-worker trust-server -boot … -installation …` takes (Settings →
+About shows the command with both).
 
 ### `GET /api/workspaces/{workspace}/updates`
 

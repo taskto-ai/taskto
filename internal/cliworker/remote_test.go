@@ -188,3 +188,13 @@ func TestRemoteWorker(t *testing.T) {
 		t.Fatal("user 0 was accepted")
 	}
 }
+
+// A deletion before the volume's first census is refused over the socket as itself, so the
+// server keeps its purge's step and tries again after its census.
+func TestADeletionBeforeTheFirstCensusSaysSoOverTheSocket(t *testing.T) {
+	h := newFreshHarness(t, nil)
+	r := serve(t, h)
+	if err := r.Forget(context.Background(), acct(1)); !errors.Is(err, cliworker.ErrCensusNeeded) {
+		t.Errorf("a deletion before any census over the socket: %v, want ErrCensusNeeded", err)
+	}
+}

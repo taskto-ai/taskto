@@ -146,3 +146,32 @@ func TestAHandoverChecksWhatItWrote(t *testing.T) {
 		t.Errorf("a sound handover: %v", err)
 	}
 }
+
+// A directory from before homes (Root/u<n>) stays on the volume until a census removes it, owned by
+// its old Unix user. A UID base that would give that uid to a new account's home is refused at
+// start, so the new account can't reach the old one's files; one that gives it to none is taken.
+func TestAUIDBaseIsNeverOneALegacyHomesOwnerWouldGetAgain(t *testing.T) {
+	w := &Worker{cfg: Config{Layout: Layout{Root: t.TempDir()}}, accounts: map[string]accountRecord{}}
+	if err := mkdirDurable(w.accountsDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(w.cfg.Layout.legacy(7), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	owner := os.Getuid() // the directory's owner here: the test's own uid
+	// A base under which the owner's uid is a home's (the tenth): refused, and nothing is pinned.
+	if err := w.pinUIDBase(owner - firstHome - 10); err == nil {
+		t.Error("a UID base that gives a legacy home's owner to a new account was accepted")
+	}
+	if _, err := os.Stat(w.uidBaseFile()); err == nil {
+		t.Error("the refused base was pinned")
+	}
+	// The last home's uid is its owner: refused too.
+	if err := w.pinUIDBase(owner - (maxHome - 1)); err == nil {
+		t.Error("a UID base whose last home is a legacy home's owner was accepted")
+	}
+	// A base whose homes all lie above the owner: taken.
+	if err := w.pinUIDBase(owner + 1); err != nil {
+		t.Errorf("a UID base apart from the legacy home's owner: %v", err)
+	}
+}

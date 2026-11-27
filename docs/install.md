@@ -743,8 +743,10 @@ data directory against one worker: to the worker they are one installation.
 The version that keys the CLI worker's files by each account's identity (account homes,
 [cli-workers.md](cli-workers.md#accounts-and-their-homes)) changes the worker's directory once:
 
-- **Container mode** (`-cli-workers container`): the directories the worker made before
-  (`/homes/u<number>`) are removed at the first start, never handed to anyone, since nothing on
+- **Container mode** (`-cli-workers container`): keep the worker's `-uid-base` for this upgrade
+  (changing it needs a new, empty worker volume: the worker doesn't start when a directory from
+  before belongs to a uid the new base would give a new account). The directories the worker made
+  before (`/homes/u<number>`) are removed at the first start, never handed to anyone, since nothing on
   the volume can tell an upgrade from a restore of the server's data that gave numbers again.
   Each person loses, once, their **CLI sign-ins** (they sign in to Claude Code, Codex and Grok
   Build again in Settings), the **working files** the CLIs left in their conversations'
@@ -757,7 +759,9 @@ The version that keys the CLI worker's files by each account's identity (account
   session by its working directory: a conversation's next turn may start a new CLI session with
   the conversation so far instead of resuming the one from before the upgrade.
 
-To go back to an older version afterwards, in container mode, start it with the worker on a
+To go back to an older version afterwards, the steps depend on the mode.
+
+**Container mode:** start the older version with the worker on a
 **new, empty** `cli-homes` volume and keep the upgraded one aside (detached, not mounted by
 anything): an older worker reads directories by user number and must never see the homes. People
 sign in to their CLIs again on the older version. **Upgrading again does not bring the kept
@@ -768,8 +772,15 @@ refuse it. After the second upgrade the worker starts on the empty volume, and p
 their CLIs once more. The kept volume is usable only with the database it goes with: to get those
 homes back, restore the backup the upgraded server made (the one from right before the rollback)
 instead of upgrading the rolled-back data again, and give that server the kept volume. Keep it
-detached until you have decided, and delete it then. In local mode, move `<data>/cli` aside before
-starting the older version, for the same reason; it goes back only with that upgraded backup too.
+detached until you have decided, and delete it then.
+
+**Local mode:** the CLI files are in the data directory, so the backup from before the upgrade
+already holds `<data>/cli` as the older version left it, matched to its database. In local mode,
+leave the restored `<data>/cli` as it is: the older version finds everyone's sign-ins and files
+there, and upgrading again moves them to homes as the first upgrade did. Don't move it aside, and
+there is no worker volume to keep. What the CLIs did after the upgrade is in the upgraded data
+directory, which the rollback replaces; it comes back only by restoring the upgraded server's own
+backup, the one from right before the rollback, instead.
 
 ### Agents never run as root
 
@@ -1489,7 +1500,7 @@ the first one that fails (`bash -euo pipefail`): nothing after a failed step run
 never emptied after its copy failed. If v0.1.0 is from before
 [account homes](#upgrading-to-account-homes) and the CLI workers run in container mode, the older
 worker must start on a new, empty `cli-homes` volume: an older worker reads directories by user
-number and must never see the homes. Set `HOMES=1` for that: the script then keeps the upgraded
+number and must never see the homes. Set `HOMES=1` for that (in container mode only): the script then keeps the upgraded
 volume aside, in a new volume named for the time (`taskto_cli-homes_kept_<time>`, mounted by
 nothing), and empties the one the worker mounts only once the copy has succeeded, before anything
 starts:
@@ -1512,11 +1523,13 @@ docker compose up -d </dev/null
 EOF
 ```
 
-Upgrading the rolled-back data again doesn't bring the kept volume back: that data gets new
-account identities and a new installation, which the kept homes don't have
-([Upgrading to account homes](#upgrading-to-account-homes)). The kept volume goes back only with
-the upgraded server's own backup, the one from right before the rollback. In local mode, move
-`<data>/cli` aside instead, before `docker compose up -d`.
+`HOMES=1` is for container mode only. Upgrading the rolled-back data again doesn't bring the kept
+volume back: that data gets new account identities and a new installation, which the kept homes
+don't have ([Upgrading to account homes](#upgrading-to-account-homes)). The kept volume goes back
+only with the upgraded server's own backup, the one from right before the rollback. In local mode,
+leave the restored `<data>/cli` as it is, with `HOMES=0`: the backup from before the upgrade
+holds it as the older version left it, matched to its database, so people keep their CLI
+sign-ins and files from then.
 
 The base images are pinned by digest in the `Dockerfile`, so rebuilding a version uses the
 same bases; their security updates come with new versions.

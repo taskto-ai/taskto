@@ -246,8 +246,13 @@ func (w *Worker) resolve(a cliowner.Account, make bool) (account, error) {
 		// A new account of another installation than the volume's is never given a home here, and
 		// the first account a volume gets pins it to its installation, as a first census does:
 		// before any home exists, so no census of another installation can take homes it made.
+		// While the worker has lost its authority it takes no new account: the accounts it has go
+		// on, and only the operator's handover names the volume's installation.
 		w.bootsMu.Lock()
-		err := w.sameInstallation(a.Installation, a.Installation != "")
+		err := ErrAuthorityLost
+		if w.authorityLost == "" {
+			err = w.sameInstallation(a.Installation, a.Installation != "")
+		}
 		w.bootsMu.Unlock()
 		if err != nil {
 			return account{}, err

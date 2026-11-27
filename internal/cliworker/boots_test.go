@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -590,7 +591,7 @@ func TestAWorkerVolumeBelongsToOneInstallation(t *testing.T) {
 		// The volume's installation's server is late (its first census failed and is tried again):
 		// the other's, arriving first, pins the volume, and the late one is refused, its boot never
 		// registered, whatever order it arrives in.
-		h := newHarness(t, nil)
+		h := newFreshHarness(t, nil)
 		ctx := context.Background()
 		if err := h.w.Reconcile(ctx, census2(strings.Repeat("c", 32), other, nil)); err != nil {
 			t.Fatal(err)
@@ -720,7 +721,7 @@ func TestADamagedBootCounterIsHandedOverSoundly(t *testing.T) {
 // The first account a volume gets pins it to its server's installation, before any census: a
 // census of another installation that comes first can't take the volume or remove that home.
 func TestTheFirstAccountPinsTheVolume(t *testing.T) {
-	h := newHarness(t, nil)
+	h := newFreshHarness(t, nil)
 	ctx := context.Background()
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true) // the account of the tests' installation
 	c := bootCensus(strings.Repeat("c", 32), time.Now(), nil)
@@ -739,7 +740,7 @@ func TestTheFirstAccountPinsTheVolume(t *testing.T) {
 // A volume that has never seen a census stays new however often the worker starts on it: starting
 // writes nothing of boots, so the next start doesn't take it for one that lost its history.
 func TestANewVolumeStaysNewAcrossStarts(t *testing.T) {
-	h := newHarness(t, nil)
+	h := newFreshHarness(t, nil)
 	ctx := context.Background()
 	h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
 	for range 2 {
@@ -751,5 +752,76 @@ func TestANewVolumeStaysNewAcrossStarts(t *testing.T) {
 	}
 	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
 		t.Errorf("the first census after the starts: %v", err)
+	}
+}
+
+// A deletion before the volume's first census waits for it (ErrCensusNeeded) and writes nothing:
+// the server tries again after its census. So a cleanup for an account the worker never saw, on a
+// new volume, leaves it new across a start of the worker, and a census whose database was read
+// before the deletion can't take back a retirement made before any boot was registered.
+func TestADeletionBeforeTheFirstCensusWaitsForIt(t *testing.T) {
+	h := newFreshHarness(t, nil)
+	ctx := context.Background()
+	never := cliowner.Account{User: 9, Identity: cliworker.IdentityForTest(9), Boot: cliworker.TestBoot, Installation: cliworker.TestInstallation}
+	if err := h.w.Forget(ctx, never); !errors.Is(err, cliworker.ErrCensusNeeded) {
+		t.Errorf("a deletion before any census: %v, want ErrCensusNeeded", err)
+	}
+	purged := false
+	if err := h.w.FenceDeletion(ctx, never, func() error { purged = true; return nil }); !errors.Is(err, cliworker.ErrCensusNeeded) || purged {
+		t.Errorf("a browser purge before any census: %v (purged %v), want ErrCensusNeeded", err, purged)
+	}
+	if err := h.w.Forget(ctx, cliowner.Account{User: 9, Boot: cliworker.TestBoot, Installation: cliworker.TestInstallation}); !errors.Is(err, cliworker.ErrCensusNeeded) {
+		t.Errorf("a cleanup from before identities, before any census: %v, want ErrCensusNeeded", err)
+	}
+	if _, err := os.Stat(h.w.AccountFileForTest(never.Identity)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the refused deletion wrote a record: %v", err)
+	}
+	h.reopen(t)
+	if why := h.w.AuthorityLost(); why != "" {
+		t.Fatalf("the new volume lost its authority after the refused deletions: %s", why)
+	}
+	// The census was read while user 9 was still live, and arrives after the deletion was tried:
+	// the deletion the server tries again after it retires the account for good.
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{9: never.Identity})); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Forget(ctx, never); err != nil {
+		t.Fatalf("the deletion after the census: %v", err)
+	}
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{9: never.Identity})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.w.Status(ctx, never, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrForgotten) {
+		t.Errorf("the deleted account after a census read before its deletion: %v, want ErrForgotten", err)
+	}
+}
+
+// In the authority-lost state nothing but the operator's handover writes the volume's installation:
+// a new account is refused (its first request would otherwise pin the volume to whoever asked),
+// and the accounts the worker has go on.
+func TestAVolumeThatLostItsAuthorityTakesNoNewAccount(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
+		t.Fatal(err)
+	}
+	h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+	h.losePart(t, "installation")
+	if h.w.AuthorityLost() == "" {
+		t.Fatal("fixture: the volume kept its authority")
+	}
+	other := cliowner.Account{User: 2, Identity: cliworker.IdentityForTest(2), Boot: cliworker.TestBoot, Installation: strings.Repeat("e", 32)}
+	if _, err := h.w.StartLogin(other, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrAuthorityLost) {
+		t.Errorf("a new account while authority is lost: %v, want ErrAuthorityLost", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.layout.Root, ".worker", "installation")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a new account's request wrote the volume's installation: %v", err)
+	}
+	if st, err := h.w.Status(ctx, acct(1), cliworker.Claude, ""); err != nil || !st.LoggedIn {
+		t.Errorf("an existing account while authority is lost: %+v %v", st, err)
+	}
+	h.w.Close()
+	if err := cliworker.TrustServer(h.layout, cliworker.TestBoot, ""); err == nil {
+		t.Error("a handover without the installation was taken after a new account's request")
 	}
 }

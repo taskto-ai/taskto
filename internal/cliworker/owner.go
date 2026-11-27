@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -229,6 +230,34 @@ func (w *Worker) removeLegacy(user int64) error {
 		return err
 	}
 	return removeTree(trash, w.cfg.Isolation != nil)
+}
+
+// checkLegacyOwners refuses base when a directory from before homes (Root/u<n>, which stays on the
+// volume, its owner's, until a census removes it) is owned by a uid base gives a home: the new
+// account would reach the old one's files. An upgrade with a changed -uid-base needs a new volume.
+func (w *Worker) checkLegacyOwners(base int) error {
+	users, err := w.legacyDirs()
+	if err != nil {
+		return err
+	}
+	lo, hi := int64(base)+firstHome, int64(base)+maxHome
+	for _, user := range users {
+		fi, err := os.Lstat(w.cfg.Layout.legacy(user))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return errors.New("cliworker: can't tell who owns the directories from before homes")
+		}
+		if uid := int64(st.Uid); uid >= lo && uid < hi {
+			return fmt.Errorf("cliworker: u%d, from before homes, belongs to uid %d, which -uid-base %d would give a new account: start the worker with the UID base it had before, or on a new volume", user, uid, base)
+		}
+	}
+	return nil
 }
 
 // legacyDirs lists the numbers of the directories from before homes (Root/u<n>).

@@ -18,6 +18,10 @@ import (
 func TestALocalBrowserPurgeFindsARetiredAccountsHome(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, LocalUnsafe, nil)
+	// The server's census at its start: deletions are taken after it.
+	if err := e.svc.ReconcileForgotten(ctx); err != nil {
+		t.Fatal(err)
+	}
 	owner, _ := e.setup()
 	a := e.acct(owner.id)
 	dirs := e.dirs(owner.id)

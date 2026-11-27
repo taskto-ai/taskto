@@ -534,18 +534,24 @@ test('with nothing newer it says up to date, and an updater that never looked sa
   expect(screen.queryByText('Last looked for updates')).toBeNull()
 })
 
+// The command names this server's installation too: a worker whose volume lost its installation
+// takes a handover only with it (docs/cli-workers.md), and naming it again is harmless.
 test('operators see when the CLI worker lost its authority, with the command that hands it over to this server', async () => {
   const boot = 'ab'.repeat(16)
+  const installation = 'cd'.repeat(16)
   fakeFetch({
     ...noUpdater,
     ...noBackups,
     'GET /api/workspaces/1/cli-worker': {
-      body: { mode: 'container', reachable: true, authority_lost: true, other_installation: false, boot },
+      body: { mode: 'container', reachable: true, authority_lost: true, other_installation: false, boot, installation },
     },
   })
   render(<SettingsPage me={me} workspace={admin} tab="about" />)
   expect(await screen.findByText(/The CLI worker lost its history of this server's starts/)).toBeTruthy()
-  expect(screen.getByText(`taskto cli-worker trust-server -homes /homes -boot ${boot}`).tagName).toBe('CODE')
+  expect(
+    screen.getByText(`taskto cli-worker trust-server -homes /homes -boot ${boot} -installation ${installation}`)
+      .tagName,
+  ).toBe('CODE')
   cleanup()
 
   fakeFetch({

@@ -33,7 +33,19 @@ type harness struct {
 	cfg    cliworker.Config
 }
 
+// newHarness is a worker on a new volume that has had the tests' server's first census, as a
+// server sends at its start: deletions are taken from then on.
 func newHarness(t *testing.T, tune func(*cliworker.Config)) *harness {
+	t.Helper()
+	h := newFreshHarness(t, tune)
+	if err := h.w.Reconcile(context.Background(), bootCensus(cliworker.TestBoot, time.Now(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// newFreshHarness is a worker on a new volume that has had no census: no boot, no installation.
+func newFreshHarness(t *testing.T, tune func(*cliworker.Config)) *harness {
 	t.Helper()
 	root := t.TempDir()
 	fakes := clitest.Install(t, t.TempDir())

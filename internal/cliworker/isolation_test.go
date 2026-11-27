@@ -87,6 +87,10 @@ func newIsolated(t *testing.T) *isoHarness {
 		t.Fatal(err)
 	}
 	t.Cleanup(w.Close)
+	// The server's census at its start, as newHarness: deletions are taken after it.
+	if err := w.Reconcile(context.Background(), bootCensus(cliworker.TestBoot, time.Now(), nil)); err != nil {
+		t.Fatal(err)
+	}
 	return &isoHarness{w: w, cfg: cfg, layout: cfg.Layout}
 }
 
@@ -604,8 +608,8 @@ func TestIsolationARemovalStoppedPartWayLeavesNoForeignHome(t *testing.T) {
 	ctx := context.Background()
 	h.signIn(t, 1, cliworker.Claude)
 	h.w.SetDetachHookForTest(func() error { return errors.New("the worker stopped here") })
-	if err := h.w.Forget(ctx, acct(1)); err == nil {
-		t.Fatal("fixture: the removal didn't stop")
+	if err := h.w.Forget(ctx, acct(1)); err == nil || !strings.Contains(err.Error(), "the worker stopped here") {
+		t.Fatalf("fixture: the removal didn't stop where the test stops it: %v", err)
 	}
 	// The worker's process starts again: nothing of the first one's memory.
 	h.w.Close()
@@ -617,8 +621,8 @@ func TestIsolationARemovalStoppedPartWayLeavesNoForeignHome(t *testing.T) {
 	}
 	h.w = w
 	t.Cleanup(w.Close)
-	// A restore brings the account back.
-	if err := h.w.Reconcile(ctx, bootCensus(cliworker.TestBoot, time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
+	// A restore brings the account back: the restored server's census, a later boot.
+	if err := h.w.Reconcile(ctx, bootCensus(strings.Repeat("d", 32), time.Now(), map[int64]string{1: cliworker.IdentityForTest(1)})); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.w.Status(ctx, acct(1), cliworker.Claude, ""); err != nil {

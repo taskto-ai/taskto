@@ -63,6 +63,7 @@ var remoteErrors = map[string]error{
 	"stale_boot":         ErrStaleBoot,
 	"authority_lost":     cliowner.ErrAuthorityLost,
 	"other_installation": cliowner.ErrOtherInstallation,
+	"census_needed":      cliowner.ErrCensusNeeded,
 }
 
 // The headers that name a request's account by its identity and the server's boot.
@@ -339,7 +340,7 @@ func refuse(rw http.ResponseWriter, err error) {
 				status = http.StatusNotFound
 			case errors.Is(sentinel, ErrForgotten):
 				status = http.StatusGone
-			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy), errors.Is(sentinel, ErrIncomplete), errors.Is(sentinel, ErrUnknownAccount), errors.Is(sentinel, ErrStaleBoot), errors.Is(sentinel, cliowner.ErrAuthorityLost), errors.Is(sentinel, cliowner.ErrOtherInstallation):
+			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy), errors.Is(sentinel, ErrIncomplete), errors.Is(sentinel, ErrUnknownAccount), errors.Is(sentinel, ErrStaleBoot), errors.Is(sentinel, cliowner.ErrAuthorityLost), errors.Is(sentinel, cliowner.ErrOtherInstallation), errors.Is(sentinel, cliowner.ErrCensusNeeded):
 				status = http.StatusConflict
 			}
 		}

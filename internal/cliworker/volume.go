@@ -142,7 +142,8 @@ func (w *Worker) Installation() string {
 }
 
 // sameInstallation refuses inst unless it is the volume's (or the volume has none yet, and pin
-// is set: then it becomes the volume's). The caller holds w.bootsMu.
+// is set: then it becomes the volume's, unless the worker lost its authority, when only the
+// operator's handover names it). The caller holds w.bootsMu.
 func (w *Worker) sameInstallation(inst string, pin bool) error {
 	switch {
 	case w.installation != "" && inst == w.installation:
@@ -151,6 +152,8 @@ func (w *Worker) sameInstallation(inst string, pin bool) error {
 		return ErrOtherInstallation
 	case !pin:
 		return nil
+	case w.authorityLost != "":
+		return ErrAuthorityLost
 	case !cliowner.IsIdentity(inst):
 		return badRequest{errors.New("a census names its installation")}
 	}
@@ -264,6 +267,9 @@ func (w *Worker) uidBaseFile() string { return filepath.Join(w.stateDir(), "uid-
 // can't be rebuilt (homes given, no pin, and no record that says its uid) is refused too: a base
 // it accepted then might give a home's uid to another home.
 func (w *Worker) pinUIDBase(base int) error {
+	if err := w.checkLegacyOwners(base); err != nil {
+		return err
+	}
 	b, err := os.ReadFile(w.uidBaseFile())
 	switch {
 	case err == nil:
@@ -332,6 +338,9 @@ var trustHookForTest func(Layout)
 // server is the current one (its history of boots was lost): an operator hands it over
 // (docs/cli-workers.md). It is cliowner's, so the agent browsers' API carries it too.
 var ErrAuthorityLost = cliowner.ErrAuthorityLost
+
+// ErrCensusNeeded is the worker's answer to a deletion before its volume's first census.
+var ErrCensusNeeded = cliowner.ErrCensusNeeded
 
 // bootsFile is the history of boots, the latest last.
 func (w *Worker) bootsFile() string { return filepath.Join(w.stateDir(), "boots.json") }
@@ -675,9 +684,11 @@ func (w *Worker) register(boot string, seq int64) error {
 
 // deletionFence admits a deletion (Forget, a browser purge) only from the latest registered boot:
 // one an earlier server sent, delayed past a restore that brought the account back, retires and
-// removes nothing (ErrStaleBoot). On a volume that never had a census there is nothing to fence
-// against. In the authority-lost state every deletion is refused (ErrAuthorityLost). The caller
-// holds w.censusMu.
+// removes nothing (ErrStaleBoot). Before the volume's first census a deletion waits for it
+// (ErrCensusNeeded) and writes nothing: a record it made on a volume not yet pinned to an
+// installation would read, at the worker's next start, as a used volume that lost its binding, and
+// a census read before it could take its retirement back. In the authority-lost state every
+// deletion is refused (ErrAuthorityLost). The caller holds w.censusMu.
 func (w *Worker) deletionFence(a cliowner.Account) error {
 	if w.AuthorityLost() != "" {
 		return ErrAuthorityLost
@@ -689,7 +700,7 @@ func (w *Worker) deletionFence(a cliowner.Account) error {
 		return err
 	}
 	if w.latestSeq() == 0 {
-		return nil
+		return ErrCensusNeeded
 	}
 	if a.Boot == w.latestBoot() {
 		return nil
