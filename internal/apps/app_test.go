@@ -506,11 +506,18 @@ func TestMarkdownComponent(t *testing.T) {
 			Actions:    map[string]Action{"add": {Kind: ActionInsert}},
 		}.Check()
 	}
-	if _, err := check(`{"id":"root","component":"Markdown","text":"**Hi**"}`); err != nil {
-		t.Errorf("a literal: %v", err)
-	}
-	if _, err := check(`{"id":"root","component":"Markdown","text":{"path":"/record/notes"}}`); err != nil {
-		t.Errorf("a binding: %v", err)
+	for name, component := range map[string]string{
+		"a literal": `{"id":"root","component":"Markdown","text":"**Hi**"}`,
+		"a binding": `{"id":"root","component":"Markdown","text":{"path":"/record/notes"}}`,
+	} {
+		def, err := check(component)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if !slices.Contains(def.Requires, ComponentCapability("Markdown")) {
+			t.Errorf("%s requires %v, want %s", name, def.Requires, ComponentCapability("Markdown"))
+		}
 	}
 	if _, err := check(`{"id":"root","component":"Markdown","text":"# Hi","variant":"h1"}`); err == nil || !strings.Contains(err.Error(), "variant") {
 		t.Errorf("a variant: err = %v", err)

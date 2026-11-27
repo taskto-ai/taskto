@@ -53,6 +53,26 @@ test('draws formatted text, from a literal and a record, with links as text and 
   expect(text.textContent).toContain('link (https://example.com/x)')
   expect(text.querySelector('script, img')).toBeNull()
   expect(text.textContent).toContain('<script>alert(1)</script>')
-  // A binding with no value yet renders nothing instead of failing.
   expect(missing.textContent).toBe('')
+})
+
+test('a Markdown component with a prop it does not take is refused, as the server refuses it', async () => {
+  const refused = [
+    { version: 'v0.9', createSurface: { surfaceId: 'notes', catalogId: APPS_CATALOG_ID } },
+    {
+      version: 'v0.9',
+      updateComponents: {
+        surfaceId: 'notes',
+        components: [
+          { id: 'root', component: 'Column', children: ['notes'] },
+          { id: 'notes', component: 'Markdown', text: '# Plan', variant: 'h1' },
+        ],
+      },
+    },
+  ]
+  const { container } = render(
+    <AppView surfaceId="notes" label="Notes" transport={{ load: async () => refused, act: async () => [] }} />,
+  )
+  expect((await screen.findByRole('alert')).textContent).toContain('VALIDATION_FAILED')
+  expect(container.querySelector('.ui-app-markdown')).toBeNull()
 })
