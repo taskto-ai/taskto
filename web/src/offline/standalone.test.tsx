@@ -129,3 +129,19 @@ test('a cold start offline anywhere else shows the list', async () => {
   await screen.findByRole('button', { name: 'Open Mileage' })
   expect(screen.getByRole('heading', { level: 1, name: 'Offline' })).toBeTruthy()
 })
+
+test('"Open in taskto" offline leaves the standalone app for the list', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))),
+  )
+  window.history.replaceState(null, '', '/w/1/run/2-2')
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Mileage' })
+  fireEvent.click(screen.getByRole('link', { name: 'Open in taskto' }))
+  expect(window.location.pathname).toBe('/w/1/apps/2-2')
+  await screen.findByRole('button', { name: 'Open Mileage' })
+  expect(screen.getByRole('heading', { level: 1, name: 'Offline' })).toBeTruthy()
+  expect(screen.queryByRole('region', { name: 'Mileage' })).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Open in taskto' })).toBeNull()
+})

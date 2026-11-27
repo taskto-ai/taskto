@@ -48,6 +48,7 @@ function fakeWindow() {
   const order: string[] = []
   let opener: unknown = { here: true }
   let href = ''
+  let crossOrigin = false
   const popup = {
     closed: false,
     focus: () => order.push('focus'),
@@ -55,11 +56,13 @@ function fakeWindow() {
       return opener
     },
     set opener(value) {
+      if (crossOrigin) throw new DOMException('Blocked a frame from accessing a cross-origin frame.', 'SecurityError')
       opener = value
       order.push(`opener:${String(value)}`)
     },
     location: {
       get href() {
+        if (crossOrigin) throw new DOMException('Blocked a frame from accessing a cross-origin frame.', 'SecurityError')
         return href
       },
       set href(value: string) {
@@ -68,7 +71,14 @@ function fakeWindow() {
       },
     },
   }
-  return { popup: popup as unknown as Window, order, opener: () => opener }
+  return {
+    popup: popup as unknown as Window,
+    order,
+    opener: () => opener,
+    leave: () => {
+      crossOrigin = true
+    },
+  }
 }
 
 test('the window is a blank popup named for the app that lets go of its opener before it goes to the run path', () => {
@@ -89,14 +99,7 @@ test('a second click goes to the same popup, and a closed popup is opened again'
   openRunWindow(1, 3, 18)
   openRunWindow(1, 3, 18, 'home')
   expect(open).toHaveBeenCalledTimes(1)
-  expect(first.order).toEqual([
-    'opener:null',
-    'go:/w/1/run/3-18',
-    'focus',
-    'opener:null',
-    'go:/w/1/run/3-18-home',
-    'focus',
-  ])
+  expect(first.order).toEqual(['opener:null', 'go:/w/1/run/3-18', 'focus', 'go:/w/1/run/3-18-home', 'focus'])
   ;(first.popup as { closed: boolean }).closed = true
   openRunWindow(1, 3, 18)
   expect(open).toHaveBeenCalledTimes(2)
@@ -112,4 +115,21 @@ test('a popup the browser refuses leaves nothing to reuse and breaks nothing', (
   openRunWindow(1, 3, 19)
   expect(open).toHaveBeenCalledTimes(2)
   expect(made.order).toEqual(['opener:null', 'go:/w/1/run/3-19', 'focus'])
+})
+
+test('a popup that has gone to another origin is left alone, and the app opens in a new window with no opener', () => {
+  const gone = fakeWindow()
+  const fresh = fakeWindow()
+  const open = vi.fn().mockReturnValueOnce(gone.popup).mockReturnValueOnce(fresh.popup)
+  vi.stubGlobal('open', open)
+  openRunWindow(1, 3, 20)
+  gone.leave()
+  expect(() => openRunWindow(1, 3, 20, 'home')).not.toThrow()
+  expect(open).toHaveBeenCalledTimes(2)
+  expect(open).toHaveBeenLastCalledWith('/w/1/run/3-20-home', 'taskto-app-3-20', 'popup,width=480,height=800')
+  expect(gone.order).toEqual(['opener:null', 'go:/w/1/run/3-20', 'focus'])
+  expect(fresh.opener()).toBeNull()
+  expect(fresh.order).toEqual(['opener:null', 'focus'])
+  openRunWindow(1, 3, 20)
+  expect(open).toHaveBeenCalledTimes(2)
 })

@@ -29,13 +29,17 @@ export function StandaloneApp({
   const t = useT()
   const main = useRef<HTMLElement>(null)
   const member = me.workspaces.find((w) => w.id === workspace)
+  const outdated = useRef(false)
   const spaces = useLoad(
     () =>
       member
         ? api<{ spaces: Space[] }>(`${ws(workspace)}/spaces`).then(
             (r) => r.spaces,
             (e: unknown) => {
-              if (e instanceof ApiError && e.status === 404) return []
+              if (e instanceof ApiError && e.status === 404) {
+                outdated.current = false
+                return []
+              }
               throw e
             },
           )
@@ -46,17 +50,24 @@ export function StandaloneApp({
   reloading.current = !!spaces.loading
   const reload = spaces.reload
   useEffect(() => {
-    const revalidate = () => {
-      if (!reloading.current) reload()
+    if (!spaces.loading && outdated.current) {
+      outdated.current = false
+      reload()
+    }
+  }, [spaces.loading, reload])
+  useEffect(() => {
+    const lost = () => {
+      if (reloading.current) outdated.current = true
+      else reload()
     }
     const wake = () => {
-      if (document.visibilityState === 'visible') revalidate()
+      if (document.visibilityState === 'visible' && !reloading.current) reload()
     }
-    window.addEventListener(ACCESS_LOST, revalidate)
+    window.addEventListener(ACCESS_LOST, lost)
     window.addEventListener('focus', wake)
     document.addEventListener('visibilitychange', wake)
     return () => {
-      window.removeEventListener(ACCESS_LOST, revalidate)
+      window.removeEventListener(ACCESS_LOST, lost)
       window.removeEventListener('focus', wake)
       document.removeEventListener('visibilitychange', wake)
     }

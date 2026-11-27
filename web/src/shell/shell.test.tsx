@@ -1778,6 +1778,53 @@ test('an open app is gone, with its name, its form and its title, when the serve
   expect(window.location.pathname).toBe('/w/1/run/3-7')
 })
 
+test('a denial that arrives while an earlier check for access is still out wins over that check’s reply', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  document.title = 'before'
+  let kept = true
+  let release: () => void = () => {}
+  let holdNext = false
+  const calls = fakeFetch({
+    ...runRoutes,
+    'GET /api/workspaces/1/spaces': async () => {
+      const authorized = { spaces: [{ id: 3, name: 'Mine', kind: 'private', access: 'write', archived_at: null }] }
+      if (holdNext) {
+        holdNext = false
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return { body: authorized }
+      }
+      return { body: kept ? authorized : { spaces: [] } }
+    },
+    [`POST ${appBase}/actions`]: () => ({ status: 404, body: { error: 'Space not found', code: 'space_not_found' } }),
+  })
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  await waitFor(() => expect(document.title).toBe('Expenses · taskto.ai'))
+  const spaceReads = () => calls.filter((c) => c.path === '/api/workspaces/1/spaces').length
+
+  holdNext = true
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'))
+  })
+  await waitFor(() => expect(spaceReads()).toBe(2))
+
+  kept = false
+  await act(async () => {
+    await api(`${appBase}/actions`, { method: 'POST', body: {} }).catch(() => undefined)
+  })
+  await act(async () => {
+    release()
+  })
+  await screen.findByText('This app wasn’t found')
+  expect(screen.queryByRole('heading', { level: 1, name: 'Expenses' })).toBeNull()
+  expect(document.title).toBe('before')
+  await act(async () => {})
+  await act(async () => {})
+  expect(spaceReads()).toBe(3)
+})
+
 test('an open app that is back in the foreground asks again, and is gone when the space is', async () => {
   window.history.replaceState(null, '', '/w/1/run/3-7')
   let kept = true

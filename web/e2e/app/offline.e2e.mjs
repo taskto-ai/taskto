@@ -59,5 +59,13 @@ scenario('a downloaded app’s own address opens that app when the page is loade
 
   await page.getByRole('button', { name: 'Back to the downloaded apps' }).click()
   await page.getByRole('button', { name: 'Open Expense tracker' }).waitFor()
+
+  await page.goto(run)
+  await page.getByRole('heading', { level: 1, name: 'Expense tracker' }).waitFor()
+  await page.getByRole('link', { name: 'Open in taskto' }).click()
+  await page.getByRole('button', { name: 'Open Expense tracker' }).waitFor()
+  assert.equal(new URL(page.url()).pathname, `/w/1/apps/${spaceId}-${appId}`)
+  assert.equal(await page.getByRole('button', { name: 'New expense' }).count(), 0)
+  assert.equal(await page.getByRole('link', { name: 'Open in taskto' }).count(), 0)
   await context.setOffline(false)
 })

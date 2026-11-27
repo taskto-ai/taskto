@@ -55,7 +55,25 @@ scenario(
     assert.equal(another, false, 'a second click opens no second window')
     assert.equal(context.pages().length, windows)
     assert.equal(await popup.evaluate(() => window.opener), null)
+
+    const elsewhere = new URL(page.url())
+    elsewhere.hostname = 'localhost'
+    elsewhere.pathname = '/healthz'
+    await popup.goto(elsewhere.href)
+    const [reopened] = await Promise.all([
+      page.waitForEvent('popup'),
+      page.getByRole('button', { name: 'Open in a new window' }).click(),
+    ])
+    await reopened.getByRole('button', { name: 'New expense' }).waitFor()
+    assert.equal(new URL(reopened.url()).pathname, run)
+    assert.equal(await reopened.evaluate(() => window.opener), null)
+    assert.equal(new URL(popup.url()).pathname, '/healthz', 'the window that left the app is not touched')
     await popup.close()
+    await page.getByRole('button', { name: 'Open in a new window' }).click()
+    await reopened.waitForURL(`**${run}`)
+    assert.equal(context.pages().length, windows, 'the new window is the one that is reused')
+    assert.equal(await reopened.evaluate(() => window.opener), null)
+    await reopened.close()
 
     await page.goto(run)
     await page.getByRole('heading', { level: 1, name: 'Expense tracker' }).waitFor()

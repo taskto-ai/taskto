@@ -31,17 +31,33 @@ export const RUN_WINDOW_FEATURES = 'popup,width=480,height=800'
 
 const runWindows = new Map<string, Window>()
 
+function stillOurs(popup: Window): boolean {
+  if (popup.closed) return false
+  try {
+    void popup.location.href
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function openRunWindow(workspace: number, space: number, app: number, screen?: string): void {
   const name = runWindowName(space, app)
+  const path = runPath(workspace, space, app, screen)
   const held = runWindows.get(name)
-  const popup = held && !held.closed ? held : window.open('', name, RUN_WINDOW_FEATURES)
+  if (held && stillOurs(held)) {
+    held.location.href = path
+    held.focus()
+    return
+  }
+  const popup = window.open(held && !held.closed ? path : '', name, RUN_WINDOW_FEATURES)
   if (!popup) {
     runWindows.delete(name)
     return
   }
   popup.opener = null
   runWindows.set(name, popup)
-  popup.location.href = runPath(workspace, space, app, screen)
+  if (!held || held.closed) popup.location.href = path
   popup.focus()
 }
 
