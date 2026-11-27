@@ -275,16 +275,38 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 // the provider is asked (g is the grant as of then, all else approved). Whether anything was made is
 // read from the integration's side, never assumed:
 //
+//   - The entry's own link is on the record already: an entry that wrote it and stopped before it was
+//     noted done (a `when` rule may read the link's own field, "no link yet", which the write made
+//     false). It is done, with nothing asked of anyone.
 //   - The entry made a link the record doesn't hold (the record stopped meeting the condition while the
 //     provider made it): it is kept with the entry, and the entry says so.
 //   - Otherwise nothing was made: integration_condition_changed.
-func (s *Service) paymentConditionUnmet(ctx context.Context, e effectRow, _ paymentGrant) (map[string]any, error) {
-	_, ok, err := s.platform.Payments.EntryLink(ctx, s.db, e.id)
+func (s *Service) paymentConditionUnmet(ctx context.Context, e effectRow, g paymentGrant) (map[string]any, error) {
+	link, ok, err := s.platform.Payments.EntryLink(ctx, s.db, e.id)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
 		return nil, refuse(apierr.CodeIntegrationConditionChanged)
+	}
+	var raw string
+	switch err := s.db.QueryRowContext(ctx, `SELECT data FROM app_rows WHERE id = ? AND app_id = ? AND deleted_at IS NULL`, e.recordID, e.appID).Scan(&raw); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, refuse(apierr.CodeAppEffectRecordGone)
+	case err != nil:
+		return nil, err
+	}
+	var data map[string]any
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		return nil, err
+	}
+	if url, _ := data[e.payload.URLField].(string); url == link.URL {
+		if id, _ := data[e.payload.IDField].(string); id == link.ObjectID {
+			return map[string]any{
+				"workspace_id": g.workspaceID, "space_id": g.spaceID,
+				"amount": currency.Format(link.AmountMinor, link.Currency), "currency": link.Currency,
+			}, nil
+		}
 	}
 	return nil, refuse(apierr.CodeIntegrationConditionChangedLinkKept)
 }
