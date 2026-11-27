@@ -29,6 +29,7 @@ type OfflineDefinition struct {
 	Screens           []OfflineScreen          `json:"screens,omitempty"`
 	Actions           map[string]OfflineAction `json:"actions" apitypes:"nonnull"`
 	Summaries         map[string]Summary       `json:"summaries,omitempty"`
+	Series            map[string]Series        `json:"series,omitempty"`
 }
 
 type OfflineApp struct {
@@ -174,6 +175,7 @@ func offlineDefinition(def Definition) OfflineDefinition {
 		Entry:             def.Entry,
 		Actions:           map[string]OfflineAction{},
 		Summaries:         def.Summaries,
+		Series:            def.Series,
 	}
 	if out.Requires == nil {
 		out.Requires = []string{}

@@ -86,7 +86,13 @@ here: M). They are not the server's totals.* The summaries (count, sum, with the
 uses the device's clock for the current month, over the rows with a real date there; a client
 too old to know `month_of` asks to be updated and draws no app that uses it) are
 recomputed from those records with the same rules the server uses
-([`rules.ts`](../web/src/apps/rules.ts)).
+([`rules.ts`](../web/src/apps/rules.ts)). A date is `YYYY-MM-DD` and must exist on the calendar
+(`2026-02-30` and `2026-04-31` are not dates, `2028-02-29` is): the device checks a date it is
+given, and the rows a `month_of` summary counts, with [`dates.ts`](../web/src/offline/dates.ts),
+and the server and the device are tested against the same list of dates
+(`internal/apps/testdata/dates.json`).
+Declared chart series are recomputed from the downloaded rows plus queued changes, with the same
+grouping and bucket rules as the server.
 
 ## The outbox
 
@@ -524,7 +530,13 @@ signing in is dealt with when it signs in:
   not reached the server**, those alone stay, **sealed**: nothing of them is shown or sent, and
   the person signing in is **asked first, with nothing else on screen**: *This browser holds N
   unsent records of another account. Sign in as that account to send them, or discard them.*
-  *Discard them* (asks again) deletes everything of that account on this device; signing out
+  *Discard them* (asks again) deletes the records that were shown, each account under its
+  lock and only while the choice still holds (the account that made it is still the one
+  here; a sign-in of another account heard in another tab ends the prompt, even where this tab has no open database), and it works
+  though the signed-in account's own database can't be opened. It is bound to the records as they were shown, by their versions and keys:
+  anything an account saved since, or changed, is kept and the prompt shows the new count for another decision, and the
+  database goes only once nothing else is left in it; an account whose deletion failed stays in the
+  prompt, which says so, for another try, and only the ones deleted leave it; signing out
   leaves them for their owner to sign in and send. A database that can't be opened, read or cut
   down at that point (written by a newer version, or a storage error that may pass) is **never
   deleted by the sign-in**: it stays as it is, sealed, and is looked at again at the next
@@ -583,7 +595,25 @@ signing in is dealt with when it signs in:
   that has ended shields nothing. It keeps what it learned of last, by when the server was asked or
   the login was seen to end: a start answered late, for this account or another, or for a login that
   has signed out since, is older than that, so it claims nothing (no drafts, no offline data, no
-  marker) and the page says *The account changed*. Only a login learned after a sign-out was
+  marker) and the page says *The account changed*. A start asks again whether its login is still
+  the browser's once the earlier activation is over, before it writes the marker or opens anything
+  (a runtime this tab still holds for the account is taken up only then: a lapsed start writes no
+  marker and resumes nothing), inside the account's lock before it opens or makes the database (a
+  start that waited there behind a sign-out's deletion never makes it again; one it made for a login
+  that ended meanwhile is deleted before the lock goes, and one that was there is left as it is; an open still pending when the lock's time runs out aborts its upgrade, whichever step it is at, instead of committing it, so none is made once the lock is gone; one whose upgrade had already committed by then, which an abort can't undo, reports the delay and leaves that empty database for the account's next open, since another tab may already have taken the lock and saved to it, so nothing is deleted without the lock; an upgrade that is stopped runs none of its later steps; a discard's look at whether a database is retired never makes one: where there is none, it stops the upgrade that would),
+  and after taking the account up, reporting its time zone and setting its language: when it isn't
+  any more, what it took is let go (no database left open, no queue, no writer's lock), and the
+  language and time zone of another account are never set. A Try again in a tab whose sign-out
+  another tab went back from records it again before sending, and a confirmed logout puts its
+  record back before its cleanup, so a cleanup that fails is still finished later. Back from an
+  older login, the browser on a newer login of the same person, lets that older sign-out go, and a
+  tab of such an older login never records (nor records again) a sign-out of it, which would hold
+  the newer login's queue and offline start. A start of the newer login lets such a record go too,
+  whenever it was recorded (a tab of the older login can sign it out while the newer start waits for
+  its answer: its logout carries the newer login's cookie and is refused). A sign-in's sweep of other accounts' data asks after
+  every wait whether it is still the browser's sign-in, aborts its transaction whole once it isn't,
+  and deletes another account's database only under that account's lock and only as the database it
+  retired, so that person signing in again meanwhile keeps everything of theirs. Only a login learned after a sign-out was
   recorded counts as newer than it. A sign-out's record and decision are kept **per login**: a stale
   tab signing out an older login never replaces or removes a newer login's (one gone back from and
   still waiting on a logout that got no answer keeps the person's decision for when it ends). Every step of the cleanup asks again, after each wait, whether a
@@ -595,7 +625,10 @@ signing in is dealt with when it signs in:
   bounded time only: a deletion the browser keeps blocked (another connection that never closes)
   lets it go, and a start that can't have it in time finds the database unavailable, as one in use
   by another tab is, so a sign-in never hangs on it. The deletion removes only the database it retired:
-  one a newer start of the account made again since, with whatever was saved in it, stays. A cleanup
+  one a newer start of the account made again since, with whatever was saved in it, stays. Checking
+  that the device is clear only looks: it never makes the database it asks about, its open aborting the
+  making of one (so there is nothing to delete, and one a cleanup in another tab removed meanwhile
+  stays gone). A cleanup
   that couldn't read the database it kept, or couldn't delete it, is not verified clear: it is said,
   and finished at a later start. A tab whose own sign-out another tab finished goes to the login
   screen, not *The account changed*; Back stops, and lets go of what it had claimed, when another

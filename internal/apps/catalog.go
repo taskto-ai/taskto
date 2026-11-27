@@ -64,7 +64,8 @@ var components = map[string]map[string]prop{
 		"text":    req(kDynString),
 		"variant": enum("h1", "h2", "h3", "h4", "h5", "caption", "body"),
 	}),
-	"Icon": props(map[string]prop{"name": req(kIconName)}),
+	"Markdown": props(map[string]prop{"text": req(kDynString)}),
+	"Icon":     props(map[string]prop{"name": req(kIconName)}),
 	"Row": props(map[string]prop{
 		"children": req(kChildList),
 		"justify":  enum("center", "end", "spaceAround", "spaceBetween", "spaceEvenly", "start", "stretch"),
@@ -175,12 +176,14 @@ func Capabilities() []string {
 		all = append(all, capability)
 	}
 	all = append(all, slotCapabilities...)
-	all = append(all, SummaryMonthCapability, LabelsCapability, IconPathCapability)
+	all = append(all, SummaryMonthCapability, SeriesCapability, LabelsCapability, IconPathCapability)
 	sort.Strings(all)
 	return all
 }
 
 const SummaryMonthCapability = "summary.month_of"
+
+const SeriesCapability = "data.series"
 
 const LabelsCapability = "data.labels"
 

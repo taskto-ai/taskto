@@ -96,10 +96,14 @@ money**.
   its own endpoints and signing secrets: register the address in each one you use.
 - **Make live a second integration**, with its own live key and its own endpoint. To move an app
   from one to the other, revoke its approval, ask again and approve it with the live integration.
-  Don't swap a test key for a live one in the same integration: an invoice whose link was still
-  being made stops with an error, because the link can't be followed into the other mode, and a
-  payment event of the other mode is ignored on purpose (money of one mode never marks a record of
-  the other).
+  Don't swap a test key for a live one in the same integration. The server refuses such a swap
+  (`integration_mode_change_refused`, which says how many) while any payment link made in the current
+  mode may still be paid: that link's events and its polling are of the current mode, and its payment
+  could no longer be checked or recorded, above all on a server without a public address, which learns
+  of payments by polling alone. Once those links are paid or expired (or, for one whose outcome is
+  unknown, an admin has confirmed that none exists), the swap is accepted, and a payment event of the
+  other mode than a link's is ignored on purpose (money of one mode never marks a record of the other).
+  A new key of the same mode (a rotation) is accepted at any time.
 - Never paste a live key anywhere but here, and never use one to try the software out.
 
 ### 4. Install the invoicing app and approve it
@@ -594,8 +598,28 @@ mixes two instants), and again in the transaction that writes the link, with the
 changes while the provider answers stops the write. An entry runs only in the space it was queued in:
 moving an app clears its approvals, and what an admin approves again in the new space is not what the
 entry asked of the old one, so the entry fails with `app_effect_space_changed` and the payment is
-started again. A record edited so that it no longer meets the action's condition (`when`) fails the
-entry with `integration_condition_changed`, which says so (nothing was created; no admin is needed). It makes
+started again. A record edited so that it no longer meets the action's condition (`when`) before the
+link is asked for fails the entry with `integration_condition_changed`, which says so (nothing was
+created; no admin is needed). One edited so while the provider makes the link fails it with
+`integration_condition_changed_link_kept`: the link exists at the provider and is not written to the
+record, and it stays with the entry's reference, so a payment on it is still recorded (and, since the
+app's rule then leaves the record as it is, the admins are told). Retrying the entry once the record
+meets the condition again writes that same link, and so does running the action again (the record's
+earlier link that may still be paid is given again: see one payable link per record below). And
+an entry that wrote its link and stopped before it was noted done, whose condition reads the link's
+own field (for example "no payment id yet"), finds its own link on the record and ends done. The
+link's write also checks, in its transaction, that the integration's key is of the mode the link was
+made in: one replaced by a key of the other mode while the call was out fails the entry with
+`integration_account_changed`, and the record doesn't get the old mode's link. The mode the call
+holds is also checked in the transaction that writes the call ahead, under the same lock as an admin's
+change of the key: a key of the other mode that was saved before it stops the call, which never
+leaves (`integration_account_changed`, nothing recorded as sent), and one saved after it finds the call
+written ahead, a payable attempt, and is refused (`integration_mode_change_refused`). The key and
+settings the call holds are checked there as well: any change of them since they were read (a
+rotation of the same account's key, another account's key of the same mode) stops this try before
+anything is written, and the entry starts again from the integration's current key, reading its
+account again: the same account goes on with the new key, another account (or merchant) fails with
+`integration_account_changed`, nothing sent, and the old account's key never goes out. It makes
 the link at the provider with the integration's key, which is opened only for the call; and it writes
 the link and its id to the two fields the effect names through the system writer, in no way a user's
 write.
@@ -635,7 +659,21 @@ write.
   written) and is raised by a change of code with its tests, never by configuration.
 - **Exact money.** Minor units from a closed currency table, never a rounded number: more decimals
   than the currency has, zero or less, above the integration's ceiling, or a currency the integration
-  doesn't list are each refused, with a code that says which, before anything is made.
+  doesn't list are each refused, with a code that says which, before anything is made. The limits
+  (and that the integration is on and allowed in the space) are read again for every call: in the
+  transaction that writes the call ahead, which holds the write lock, so a change of the limits commits
+  either before it (and refuses the call) or after it; and once more right before the call leaves, so a
+  change committed after the write-ahead still stops a call that hasn't left, which is then noted as
+  one that never ran. A try that moves on from an expired key to a new one is refused by a ceiling
+  lowered meanwhile. A change committed after that last check applies from the next call: the last
+  check and the request leaving can't be one step, since the request goes to an outside service, so
+  a call already past the check goes out as it was checked. The money limits (the ceiling, the currencies) never stop the lookup of a key whose
+  outcome is unknown: its object, if it turns up, is the link, and the key is not asked again past them
+  (the entry waits on the lookup, then fails with `integration_outcome_unknown` for an admin). The
+  integration must still be on and allowed in the app's space: one switched off, taken from the space
+  or deleted fails the entry with `integration_unavailable` before anything is looked for. A record that
+  stops meeting the action's condition while a key's outcome is unknown doesn't stop the lookup either:
+  the entry is never told "nothing was created" while a call may have made something.
 - **One payable link per record.** An outbox entry has one reference, and a record asks for its link
   again with a new entry (an action that runs the effect after an edit, an invoice sent again, an
   expired link replaced). So an entry that has no reference of its own first reads **every** earlier
@@ -648,7 +686,14 @@ write.
     `integration_refs.paid_link_id`): its state is read at Stripe. **Open** (a Payment Link: active),
     the same link is given again and written back, and nothing is made; if it asks other money than the
     new entry, reads the same money from other fields, or the record has a second open one, the entry
-    fails with `integration_link_still_open`. **Expired**, the reference is marked expired. **Settled**
+    fails with `integration_link_still_open`. **Expired**, the reference is marked expired, but only
+    once nothing else of it can be paid: every key of the reference is looked up again by its token (a
+    lost answer may have left a second object under the same token, which was never the saved link), and
+    if any object of any of those tokens may still be paid the entry fails with
+    `integration_link_still_open` and the reference stays as it was; run the action again once that
+    object has expired. The same lookup guards a reference already ended by an event
+    (`checkout.session.expired` for the saved link), which no longer lets a new link be made on its own.
+    A lookup that can't be finished makes nothing (the entry's failure, tried again). **Settled**
     (complete, or an inactive Payment Link), it no longer counts if the reference knows it was paid;
     otherwise `integration_link_already_paid`, for a person. A read that fails makes nothing (the
     entry's failure, tried again). A reference made under another integration, account or mode can't
@@ -698,7 +743,22 @@ write.
   record otherwise than the live release does (a field retyped, a currency no longer offered).
   A verified `checkout.session.expired` of a session that carries the token of a key whose outcome is
   unknown (its create answer was lost) resolves that key as expired, and only that key: the reference
-  is left to its entry, and the money is free once no key of it may have made something. What a field holds is compared as well as the money read from it, so a field
+  is left to its entry, and the money is free once no key of it may have made something. Like every
+  expiry that ends a key or a reference, it is proven first: every key of the reference is looked up
+  by its token at the provider (in the reference's own account and mode), and nothing moves on while
+  another object of any of those tokens may still be paid (a lost answer can leave two sessions under
+  one token). The event is then tried again with its backoff (`integration_link_still_open`, and
+  `failed` for an admin to retry after the attempts), the key stays unresolved and the money stays
+  locked; once every object has ended, the retry moves it on. The same proof stands before the end
+of a kept link is noted on a reference that was paid on another object, and the object the reference
+was paid on counts as settled, not as one that may still be paid, and so does any other object of the
+token that completed (it can't be paid again): while any other object of the token may be paid, that is
+one still open, the end isn't noted, the event is tried again with its backoff (`integration_link_still_open`)
+and the record's money stays locked; once every other object has ended, the retry notes the kept link
+ended and the money is released, with no admin step. A completed object's own payment is not this
+rule's business: when its event comes it is a second payment on a paid reference and the admins are told as
+below (`integration_event_second_payment`); if it never comes, nothing tells them, and the payment shows
+only at Stripe. What a field holds is compared as well as the money read from it, so a field
   whose type a release changed stays locked too. An open link is given again only to an entry that
   reads its money from the fields the link's was read from; another gets `integration_link_still_open`.
   So a link is never paid at an amount the record no longer says, and the payment
@@ -720,7 +780,9 @@ write.
     time the key was first sent), durably, and that record is never taken back. A crash between the
     record and the call, or between the call and its answer being noted, leaves the key as a call
     that may have run.
-  - *Sent once.* The HTTP client never resends the call by itself: Go's transport would resend a
+  - *Sent once.* The HTTP client never resends the call by itself (a later try of the entry may ask
+    the same key again within its window, below, and never a new key without an admin's
+    confirmation): Go's transport would resend a
     request with an `Idempotency-Key` on a new connection when a reused one breaks, and report the
     second copy's failed dial, though the first reached Stripe. The body is made one that can't be
     read again, which stops that, and whether a call may have left is told by whether a connection was
@@ -758,7 +820,9 @@ write.
     window is checked again just before the call leaves, after it is written ahead, and bounds the
     call: one that hasn't left when the window closes never does. A clock that reads earlier than the
     key's first call relies on no window. A provider that documents no window (Square) is never asked
-    again under a key whose outcome is unknown.
+    again under a key whose outcome is unknown. So after an unknown outcome a call is never sent under a
+    **new** key without an admin's confirmation; the **same** key is sent again only within its window,
+    where Stripe gives back whatever the first call made and can't make a second object.
   - *Failures tell nothing and end nothing.* A lookup or a call that fails (a `5xx`, a timeout, a
     listing that isn't a whole list or holds more than a lookup reads: 20 pages of 100, newest first),
     and a failed read of whose account the key is or of an object's state, leave the outcome as it was,
@@ -785,7 +849,11 @@ write.
       [api.md](api.md#confirm-that-no-payment-link-exists)), the only way to a new key for such a
       reference. The key is recorded as abandoned (its record stays), **exactly one** new key is
       allowed, the entry is queued again as it was (the person who acted, with the access they have
-      then), and the confirmation is in the audit log (`integration_new_link_allowed`). It is refused
+      then), and the confirmation is in the audit log (`integration_new_link_allowed`). It names the
+      attempt the admin checked (`attempt_seq` and `attempt_sends`, as the list showed them), and is
+      refused (`integration_link_attempt_changed`) if the reference is on another key by then or another
+      call went out under the key since (the entry was retried): what the admin checked is not all that
+      may be at the provider. It is refused
       (`integration_link_not_confirmable`), in the transaction that would allow the new key, when the
       server saw anything of the reference that contradicts "none exists" (a key with an object on
       record: an answer named one, or a lookup found one carrying its token, whether or not it could check
@@ -808,7 +876,16 @@ write.
   `GET /v1/payment_links/{id}`) and saved only if a payer can use it now: an `open` session, an
   `active` Payment Link. An expired session is never given; its key is accounted for (it made that
   session and nothing else), so the reference moves on to the next key by itself, and the call is made
-  under it. A completed session and an inactive link stop the entry with
+  under it. Only a session in `payment` mode (the one mode the calls make) is one of ours, whether a
+  lookup lists it or its state is read: one of the token in another mode is refused and never adopted.
+  And a key with an object on record moves on only when that very object is seen expired: an expired
+  session of its token with another id says nothing of the one on record, and the entry waits. Before
+  an object's expiry moves a key on at all, the key's token is looked up again: the key moves on only
+  when that lookup is whole and finds no object of the token a payer could still use (one whose answer
+  was lost, beside the one that expired); otherwise the entry waits, and then fails with
+  `integration_outcome_unknown` for an admin. Several expired sessions of one token are no obstacle to
+  that lookup: when every one of them has expired, none a payer could use, the key moves on, whether
+  the sessions were found by the lookup or one of them is on record. A completed session and an inactive link stop the entry with
   `integration_link_already_paid`. If the state can't be read, the object stays on the key and the
   outcome stays unknown (above).
 - **A saved link is read again before it is given again.** An entry done again after its link was
@@ -972,7 +1049,10 @@ provider said and changes what an app holds, so it believes little:
   (`integration_refs`) belongs to one integration, which must be the event's (another's token
   names nothing: `integration_event_ref_unknown`, ignored), and to one mode of the provider's
   account, which must be the mode of the event (`livemode`): money of the other mode is ignored
-  (`integration_event_mode_mismatch`).
+  (`integration_event_mode_mismatch`). The mode compared is the ref's, never the integration's
+  now: the webhook route stores every signed event whatever mode the integration has, so a payment
+  made on a live link before an admin replaced the key with a test one is still recorded against its
+  live ref.
 - **A refund carries no token of ours.** It is mapped through the payment (the payment intent)
   that the ref learned from the verified event that paid it, in the event's own integration.
   Stripe tells events in no set order, so a full refund can arrive before the payment it undoes. A
@@ -1155,8 +1235,10 @@ code and of this section; the real-provider check is manual and never in CI.
   step can map a refund through it; a charge with no payment intent is not stored. Ids are checked against Stripe's shapes (`evt_`, `cs_test_`
   or `cs_live_`, `ch_`, `pi_`), the currency is three lower-case letters and the amount a
   whole number above zero; an event that isn't of the shape is answered `200` and not stored.
-  An event of live money for an integration in test mode, or the other way round, is ignored
-  the same way.
+  An event of live money for an integration in test mode, or the other way round, is stored like
+  any other: the apply step compares it with the mode of the reference it names, so it settles a
+  reference made in its own mode (one made before the key was replaced) and is ignored
+  (`integration_event_mode_mismatch`) against any other.
 
 ### Square
 
