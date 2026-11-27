@@ -13,7 +13,7 @@ func LocalTime(year int, month time.Month, day, hour, minute int, loc *time.Loca
 	start := want.Add(-48 * time.Hour)
 	limit := want.Add(48 * time.Hour)
 	var first time.Time
-	for t := start; t.Before(limit); {
+	for t, steps := start, 0; t.Before(limit) && steps < 16; steps++ {
 		local := t.In(loc)
 		_, offset := local.Zone()
 		at := want.Add(-time.Duration(offset) * time.Second)
