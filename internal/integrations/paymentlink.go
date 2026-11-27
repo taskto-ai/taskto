@@ -509,14 +509,33 @@ func (t try) settle(ctx context.Context, r *ref, a attempt, l Link) (resolution,
 	case LinkSettled:
 		return unresolved, paylink.Link{}, t.s.settleAttempt(ctx, a)
 	}
-	// Expired: the key's outcome, only while this is the object on record (or none is): another object
-	// of the key may be open.
+	// Expired: the key's outcome, only while no other object of the key's token may still be paid (one
+	// whose answer was lost, say, beside the one that expired): the token's objects are listed again,
+	// and the key moves on only when that lookup is whole and finds nothing a payer could use. Otherwise
+	// the entry waits, and then fails for a person.
+	if !t.noOtherPayable(ctx, r, a, l.ObjectID) {
+		slog.Warn("integrations: an object of a key expired beside another that may be paid; the entry waits", "ref", r.id)
+		return unresolved, paylink.Link{}, t.s.stillUnknown(ctx, a)
+	}
+	// And only while this is the object on record (or none is): another object of the key may be open.
 	if ok, err := t.s.markExpiredOf(ctx, a, l.ObjectID); err != nil {
 		return unresolved, paylink.Link{}, err
 	} else if !ok {
 		return unresolved, paylink.Link{}, t.s.stillUnknown(ctx, a)
 	}
 	return resolvedExpired, paylink.Link{}, nil
+}
+
+// noOtherPayable lists the objects of the key's token again after the object expired named expired: it
+// says true only when that lookup is whole and finds none a payer could use (expired ones, or none).
+// Any failure, an object it can't read or check, or one it would adopt says there may be one.
+func (t try) noOtherPayable(ctx context.Context, r *ref, a attempt, expired string) bool {
+	found, ok, _, err := t.provider.FindPaymentLink(ctx, t.creds, t.client, r.newLink(a, t.req.Description), t.since)
+	if err == nil && !ok {
+		return true
+	}
+	slog.Info("integrations: another object of an expired key's token may be paid", "ref", r.id, "expired", expired != "", "seen", found.ObjectID != "")
+	return false
 }
 
 // markExpiredOf gives the key the outcome expired for its object objectID, only while the object on

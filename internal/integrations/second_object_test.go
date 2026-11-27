@@ -120,3 +120,51 @@ func TestAnOlderReadOfTheKeyNeverOverridesTheObjectNotedSince(t *testing.T) {
 		}
 	})
 }
+
+// The first call's answer was lost (no object on record, session A open at Stripe), and the lookup
+// lists another session B of the key's token first, which expires before its state is read. B's expiry
+// doesn't move the ref on while A, another object of the token, may still be paid: the lookup is read
+// again, and the entry waits for a person instead of taking a new key.
+func TestAnExpiryMovesTheRefOnOnlyWhenNoOtherObjectOfTheTokenMayBePaid(t *testing.T) {
+	ctx := context.Background()
+	p := newPay(t, publicURL)
+	req := p.direct(p.invoice(10, "EUR"), "op-survivor-0001")
+	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("the lost answer was no error")
+	}
+	a := p.fake.Sessions()[0]
+	b := url.Values{}
+	b.Set("mode", "payment")
+	b.Set("success_url", publicURL+PaymentDonePath)
+	b.Set("client_reference_id", *a.ClientReferenceID)
+	b.Set("line_items[0][quantity]", "1")
+	b.Set("line_items[0][price_data][currency]", "eur")
+	b.Set("line_items[0][price_data][unit_amount]", "1000")
+	b.Set("line_items[0][price_data][product_data][name]", "Invoice")
+	p.mustPost("/v1/checkout/sessions", b)
+	other := p.fake.Sessions()[len(p.fake.Sessions())-1].ID
+	p.svc.beforeSettle = func(objectID string) {
+		if objectID == other {
+			p.svc.beforeSettle = nil
+			if _, err := p.fake.Expire(other); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	posts := len(p.posts())
+	_, err := p.svc.OpenPaymentLink(ctx, req)
+	var pe *paylink.Error
+	if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationLinkLookupPending {
+		t.Fatalf("err = %v: want the wait", err)
+	}
+	if len(p.posts()) != posts {
+		t.Fatal("a call went out while session A of the key's token may be paid")
+	}
+	if r := p.refs(); r[0].keySeq != 0 {
+		t.Fatalf("refs = %+v: the ref moved on", r)
+	}
+	if s, _ := p.fake.Session(a.ID); s.Status != "open" {
+		t.Fatalf("A = %s", s.Status)
+	}
+}
