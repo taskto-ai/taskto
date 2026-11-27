@@ -28,6 +28,7 @@ const THEMED_BY: Record<string, string[]> = {
 const OWN = [
   'BarcodeInput',
   'LocationInput',
+  'Markdown',
   'PhotoInput',
   'Photos',
   'Screens',

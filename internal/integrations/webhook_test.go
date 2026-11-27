@@ -728,7 +728,7 @@ func TestAFailureToStoreIsRetried(t *testing.T) {
 	}
 }
 
-func TestAnotherModeIsIgnored(t *testing.T) {
+func TestAnotherModesEventIsStored(t *testing.T) {
 	r := newRig(t)
 	ev := testprovider.NewEvent("checkout.session.completed", map[string]any{
 		"id": "cs_live_abc123", "object": "checkout.session", "mode": "payment", "payment_status": "paid",
@@ -739,8 +739,8 @@ func TestAnotherModeIsIgnored(t *testing.T) {
 	if err != nil || d.Status != http.StatusOK {
 		t.Fatalf("= %d, %v", d.Status, err)
 	}
-	if n := r.total(); n != 0 {
-		t.Fatalf("a live-mode event was stored for a test-mode integration")
+	if n := r.total(); n != 1 {
+		t.Fatalf("%d events stored: the live-mode event was dropped", n)
 	}
 }
 

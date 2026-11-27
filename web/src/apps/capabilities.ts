@@ -20,6 +20,7 @@ export const COMPONENTS = [
   'Icon',
   'List',
   'LocationInput',
+  'Markdown',
   'Modal',
   'PhotoInput',
   'Photos',

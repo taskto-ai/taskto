@@ -1,5 +1,5 @@
-import { createContext, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { navigate } from '../router'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { PlaceContext, useNavigate, usePlacePath } from '../router'
 
 export type Why = 'leave' | 'deleted' | 'moved'
 
@@ -30,6 +30,11 @@ const nothing: Guard = {
 export const GuardContext = createContext<Guard>(nothing)
 
 export function useGuard(): Guard {
+  const place = useContext(PlaceContext)?.id ?? null
+  const go = useNavigate()
+  const placePath = usePlacePath()
+  const path = useRef(placePath)
+  path.current = placePath
   const state = useRef({ dirty: false, saving: false })
   const current = useRef<string | null>(null)
   const [pending, setPending] = useState<Wait | null>(null)
@@ -106,14 +111,17 @@ export function useGuard(): Guard {
     const click = (e: MouseEvent) => {
       if (!state.current.dirty || e.defaultPrevented || e.button !== 0) return
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-      const a = e.target instanceof Element ? e.target.closest('a[href]') : null
+      if (!(e.target instanceof Element)) return
+      const owner = e.target.closest<HTMLElement>('[data-place]')
+      if (owner && owner.dataset.place !== place) return
+      const a = e.target.closest('a[href]')
       if (!a || (a.getAttribute('target') ?? '_self') !== '_self') return
       const url = new URL((a as HTMLAnchorElement).href, window.location.href)
       if (url.origin !== window.location.origin || !url.pathname.startsWith('/w/')) return
-      if (url.pathname === window.location.pathname) return
+      if (url.pathname === path.current) return
       e.preventDefault()
       e.stopPropagation()
-      ask(() => navigate(url.pathname))
+      ask(() => go(url.pathname))
     }
     window.addEventListener('beforeunload', unload)
     document.addEventListener('click', click, true)
@@ -121,7 +129,7 @@ export function useGuard(): Guard {
       window.removeEventListener('beforeunload', unload)
       document.removeEventListener('click', click, true)
     }
-  }, [ask])
+  }, [ask, go, place])
 
   return useMemo(
     () => ({ ask, report, saved, dispose, forget, asking: pending?.why ?? null, discard, keep }),

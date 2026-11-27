@@ -149,7 +149,10 @@ function UnresolvedLinks({ base, spaces }: { base: string; spaces: Space[] }) {
     setError(null)
     setNotice(null)
     try {
-      await api(`${base}/payment-links/${link.effect_id}/confirm-no-link`, { method: 'POST', body: {} })
+      await api(`${base}/payment-links/${link.effect_id}/confirm-no-link`, {
+        method: 'POST',
+        body: { attempt_seq: link.attempt_seq, attempt_sends: link.attempt_sends },
+      })
       setNotice(t('settings.events.links.confirmed', { amount }))
     } catch (e) {
       setError(errorText(e))
