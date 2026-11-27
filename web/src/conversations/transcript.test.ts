@@ -69,6 +69,38 @@ test('passes over what it does not know', () => {
   expect(transcript({ entries: [{ id: 1, kind: 'x' }], docs: { 'pi.live': 'odd' } }).messages).toEqual([])
 })
 
+test('uses taskto input metadata and leaves old pi user entries unchanged', () => {
+  const t = transcript({
+    entries: [
+      {
+        id: 1,
+        kind: 'taskto.input',
+        data: { v: 1, author: 7, text: 'what the person typed', attached: [{ conversation: 12, title: 'Earlier' }] },
+        model: [{ role: 'user', content: [{ type: 'text', text: 'what the model saw' }] }],
+      },
+      {
+        id: 2,
+        kind: 'taskto.input',
+        data: { author: 'bad', text: 3, attached: [{ conversation: 0, title: 4 }] },
+        model: [{ role: 'user', content: 'fallback' }],
+      },
+      { id: 3, kind: 'pi.user', data: { text: 'ignored' }, model: [{ role: 'user', content: 'legacy' }] },
+    ],
+  })
+  expect(t.messages).toEqual([
+    {
+      key: '1.0',
+      role: 'user',
+      text: 'what the person typed',
+      tools: [],
+      author: 7,
+      attached: [{ conversation: 12, title: 'Earlier' }],
+    },
+    { key: '2.0', role: 'user', text: 'fallback', tools: [] },
+    { key: '3.0', role: 'user', text: 'legacy', tools: [] },
+  ])
+})
+
 test('a tool use names the app only from a saved result, never from its arguments', () => {
   const call = (id: string, name: string, args: unknown = { space_id: 9, app_id: 9 }) => ({
     type: 'toolCall',

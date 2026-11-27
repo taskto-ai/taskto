@@ -311,7 +311,19 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	if !s.stillWritable(w, r) {
 		return
 	}
-	in := agentrt.Input{Content: req.Content, WhenBusy: busy, RequestID: req.RequestID}
+	user, _ := caller(r)
+	data, err := json.Marshal(struct {
+		V      int   `json:"v"`
+		Author int64 `json:"author"`
+	}{V: 1, Author: user})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, apierr.CodeInternal, "could not prepare conversation message")
+		return
+	}
+	in := agentrt.Input{
+		Content: req.Content, WhenBusy: busy, RequestID: req.RequestID,
+		Entry: &agentrt.InputEntry{Kind: "taskto.input", Data: data},
+	}
 	if s.language != nil {
 		in.Language = s.language(r, req.BrowserLocale)
 	}

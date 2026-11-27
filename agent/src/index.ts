@@ -16,6 +16,7 @@ import {
 } from '@earendil-works/pi-durable'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { cliTools } from './cli.js'
+import { type TasktoInputEntry, validInputEntry } from './input.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
@@ -336,6 +337,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (resource === 'conversations' && parts.length === 3) {
     if (req.method === 'POST' && action === 'submit') {
       const body = await readJson(req)
+      let entry: TasktoInputEntry | undefined
       if (typeof body.content !== 'string') throw new HttpError(400, 'content must be a string')
       const whenBusy = body.whenBusy
       if (whenBusy !== undefined && whenBusy !== 'steer' && whenBusy !== 'followUp' && whenBusy !== 'reject') {
@@ -349,6 +351,10 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       }
       if (body.language !== undefined && !validLanguage(body.language)) {
         throw new HttpError(400, 'language must be a BCP 47 tag such as "pt-BR", or ""')
+      }
+      if (body.entry !== undefined) {
+        if (!validInputEntry(body.entry)) throw new HttpError(400, 'entry must be a bounded taskto.input entry')
+        entry = body.entry
       }
       const conv = await conversation(id)
       const { capability, language } = body as { capability?: string; language?: string }
@@ -368,6 +374,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         {
           type: 'input',
           content: body.content,
+          ...(entry !== undefined ? { entry } : {}),
           ...(whenBusy ? { whenBusy } : {}),
           ...(typeof body.requestId === 'string' ? { requestId: body.requestId } : {}),
         },
