@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/providers"
 )
@@ -33,6 +34,13 @@ type Start struct {
 type Started struct {
 	Conversation Conversation
 	Submission   int64
+}
+
+type Ref struct {
+	Workspace    int64
+	User         int64
+	Conversation int64
+	OriginKey    string
 }
 
 type Outcome struct {
@@ -63,15 +71,8 @@ func (s *Service) Start(ctx context.Context, st Start) (Started, error) {
 	if st.Model.Provider != "" && !providers.Usable(st.Model.Provider, st.User, st.Workspace) {
 		return Started{}, ErrModelUnknown
 	}
-	var active bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (
-		SELECT 1 FROM memberships m JOIN users u ON u.id = m.user_id
-		WHERE m.workspace_id = ? AND m.user_id = ? AND u.disabled_at IS NULL
-	)`, st.Workspace, st.User).Scan(&active); err != nil {
+	if err := s.activeMember(ctx, st.Workspace, st.User); err != nil {
 		return Started{}, err
-	}
-	if !active {
-		return Started{}, ErrNotMember
 	}
 	conversation, err := s.findOrigin(ctx, st)
 	missing := errors.Is(err, sql.ErrNoRows)
@@ -103,11 +104,27 @@ func (s *Service) Start(ctx context.Context, st Start) (Started, error) {
 	if err != nil {
 		return Started{}, runtimeError(ctx, err)
 	}
-	if err := s.touch(context.WithoutCancel(ctx), conversation.ID, conversation.agentID); err != nil {
+	if err := s.recordSubmission(context.WithoutCancel(ctx), conversation.ID, conversation.agentID, submission); err != nil {
 		return Started{}, err
 	}
 	s.markWhenSettled(rt, conversation.ID, conversation.agentID, submission)
 	return Started{Conversation: conversation, Submission: submission}, nil
+}
+
+func (s *Service) activeMember(ctx context.Context, workspace, user int64) error {
+	var disabled bool
+	err := s.db.QueryRowContext(ctx, `SELECT u.disabled_at IS NOT NULL FROM memberships m JOIN users u ON u.id = m.user_id
+		WHERE m.workspace_id = ? AND m.user_id = ?`, workspace, user).Scan(&disabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotMember
+	}
+	if err != nil {
+		return err
+	}
+	if disabled {
+		return access.ErrDisabled
+	}
+	return nil
 }
 
 func validOrigin(origin Origin) error {
@@ -123,25 +140,26 @@ func validOrigin(origin Origin) error {
 }
 
 func (s *Service) findOrigin(ctx context.Context, st Start) (Conversation, error) {
-	c, err := scan(s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM conversations
-		WHERE origin = ? AND workspace_id = ? AND owner_id = ?`, st.Origin.Key, st.Workspace, st.User))
-	if errors.Is(err, sql.ErrNoRows) {
-		var exists bool
-		if lookupErr := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM conversations WHERE origin = ?)`, st.Origin.Key).Scan(&exists); lookupErr != nil {
-			return Conversation{}, lookupErr
-		}
-		if exists {
-			return Conversation{}, ErrOrigin
-		}
-	}
+	var owner int64
+	row := s.db.QueryRowContext(ctx, `SELECT owner_id, `+columns+` FROM conversations WHERE origin = ?`, st.Origin.Key)
+	c, err := scan(ownerFirst{row: row, owner: &owner})
 	if err != nil {
 		return Conversation{}, err
 	}
-	if c.Origin == nil || c.Origin.Kind != st.Origin.Kind || c.Origin.SpaceID != st.Origin.SpaceID ||
-		c.Origin.AppID != st.Origin.AppID || c.Origin.RoutineID != st.Origin.RoutineID {
+	if owner != st.User || c.WorkspaceID != st.Workspace || c.Origin == nil || c.Origin.Kind != st.Origin.Kind ||
+		c.Origin.SpaceID != st.Origin.SpaceID || c.Origin.AppID != st.Origin.AppID || c.Origin.RoutineID != st.Origin.RoutineID {
 		return Conversation{}, ErrOrigin
 	}
 	return c, nil
+}
+
+type ownerFirst struct {
+	row   interface{ Scan(...any) error }
+	owner *int64
+}
+
+func (o ownerFirst) Scan(dest ...any) error {
+	return o.row.Scan(append([]any{o.owner}, dest...)...)
 }
 
 func (s *Service) insertWithOrigin(ctx context.Context, st Start, agentID int64) (Conversation, error) {
@@ -194,11 +212,11 @@ func runtimeError(ctx context.Context, err error) error {
 	return fmt.Errorf("%w: %w", ErrRuntimeDown, err)
 }
 
-func (s *Service) Outcome(ctx context.Context, conversation, submission int64, wait time.Duration) (Outcome, error) {
+func (s *Service) Outcome(ctx context.Context, ref Ref, submission int64, wait time.Duration) (Outcome, error) {
 	if s.agent == nil {
 		return Outcome{}, ErrRuntimeDown
 	}
-	agentConversation, err := s.agentConversation(ctx, conversation)
+	agentConversation, err := s.agentConversation(ctx, ref, sql.NullInt64{Int64: submission, Valid: true})
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -231,11 +249,11 @@ func (s *Service) Outcome(ctx context.Context, conversation, submission int64, w
 	return out, nil
 }
 
-func (s *Service) Stop(ctx context.Context, conversation int64) error {
+func (s *Service) Stop(ctx context.Context, ref Ref) error {
 	if s.agent == nil {
 		return ErrRuntimeDown
 	}
-	agentConversation, err := s.agentConversation(ctx, conversation)
+	agentConversation, err := s.agentConversation(ctx, ref, sql.NullInt64{})
 	if err != nil {
 		return err
 	}
@@ -251,9 +269,17 @@ func (s *Service) Stop(ctx context.Context, conversation int64) error {
 	return nil
 }
 
-func (s *Service) agentConversation(ctx context.Context, conversation int64) (int64, error) {
+func (s *Service) recordSubmission(ctx context.Context, id, agentID, submission int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET origin_submission = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		WHERE id = ? AND agent_id = ?`, submission, id, agentID)
+	return err
+}
+
+func (s *Service) agentConversation(ctx context.Context, ref Ref, submission sql.NullInt64) (int64, error) {
 	var agentConversation int64
-	err := s.db.QueryRowContext(ctx, `SELECT agent_id FROM conversations WHERE id = ?`, conversation).Scan(&agentConversation)
+	err := s.db.QueryRowContext(ctx, `SELECT agent_id FROM conversations
+		WHERE id = ? AND workspace_id = ? AND owner_id = ? AND origin = ? AND (? IS NULL OR origin_submission = ?)`,
+		ref.Conversation, ref.Workspace, ref.User, ref.OriginKey, submission, submission).Scan(&agentConversation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, errNotFound
 	}

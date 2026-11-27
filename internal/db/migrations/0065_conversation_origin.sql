@@ -5,6 +5,7 @@ ALTER TABLE conversations ADD COLUMN origin_kind TEXT
 ALTER TABLE conversations ADD COLUMN origin_space_id INTEGER;
 ALTER TABLE conversations ADD COLUMN origin_app_id INTEGER;
 ALTER TABLE conversations ADD COLUMN origin_routine_id INTEGER;
+ALTER TABLE conversations ADD COLUMN origin_submission INTEGER;
 
 CREATE TRIGGER conversations_origin_consistent
 BEFORE INSERT ON conversations

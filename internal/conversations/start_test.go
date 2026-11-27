@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/agentrt"
 )
 
@@ -88,7 +89,7 @@ func TestStartSubmitsCapabilityOnlyWhenRequested(t *testing.T) {
 	if got := e.rt.inputs[102][0].Capability; got != "taskto-capability" {
 		t.Fatalf("capability with tools = %q", got)
 	}
-	if err := e.svc.Stop(context.Background(), started.Conversation.ID); err != nil {
+	if err := e.svc.Stop(context.Background(), refOf(owner, workspace, base.Origin.Key, started.Conversation)); err != nil {
 		t.Fatal(err)
 	}
 	if e.rt.aborts[102] != 1 {
@@ -115,8 +116,18 @@ func TestStartRequiresActiveMembershipAndUsableModel(t *testing.T) {
 	if _, err := e.db.Exec("UPDATE users SET disabled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?", owner.id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.svc.Start(context.Background(), base); !errors.Is(err, ErrNotMember) {
+	if _, err := e.svc.Start(context.Background(), base); !errors.Is(err, access.ErrDisabled) || errors.Is(err, ErrNotMember) {
 		t.Fatalf("disabled user error = %v", err)
+	}
+	if _, err := e.db.Exec("UPDATE users SET disabled_at = NULL WHERE id = ?", owner.id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec("DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?", workspace, member.id); err != nil {
+		t.Fatal(err)
+	}
+	base.User = member.id
+	if _, err := e.svc.Start(context.Background(), base); !errors.Is(err, ErrNotMember) || errors.Is(err, access.ErrDisabled) {
+		t.Fatalf("removed member error = %v", err)
 	}
 }
 
@@ -144,7 +155,7 @@ func TestOutcomeWaitsAndReturnsLastAssistantReply(t *testing.T) {
 	e.rt.settle = make(chan struct{})
 	e.rt.replies[started.Conversation.agentID] = []agentrt.Message{{Role: "assistant", Text: "first"}, {Role: "assistant", Text: "last"}}
 	e.rt.mu.Unlock()
-	out, err := e.svc.Outcome(context.Background(), started.Conversation.ID, started.Submission, 5*time.Millisecond)
+	out, err := e.svc.Outcome(context.Background(), refOf(owner, workspace, "routine-run:3", started.Conversation), started.Submission, 5*time.Millisecond)
 	if err != nil || out.Settled {
 		t.Fatalf("pending outcome = %+v, %v", out, err)
 	}
@@ -152,7 +163,7 @@ func TestOutcomeWaitsAndReturnsLastAssistantReply(t *testing.T) {
 	close(e.rt.settle)
 	e.rt.settle = nil
 	e.rt.mu.Unlock()
-	out, err = e.svc.Outcome(context.Background(), started.Conversation.ID, started.Submission, time.Second)
+	out, err = e.svc.Outcome(context.Background(), refOf(owner, workspace, "routine-run:3", started.Conversation), started.Submission, time.Second)
 	if err != nil || !out.Settled || out.Status != "done" || out.Reply != "last" {
 		t.Fatalf("settled outcome = %+v, %v", out, err)
 	}

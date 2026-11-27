@@ -177,17 +177,18 @@ func TestALostRaceOnTheOriginKeyReturnsTheWinnerOrRefuses(t *testing.T) {
 func TestOutcomeAndStopRefuseAConversationThatDoesNotExist(t *testing.T) {
 	e := newEnv(t, false)
 	e.setup()
-	if _, err := e.svc.Outcome(context.Background(), 12345, 1, time.Millisecond); !errors.Is(err, errNotFound) {
+	missing := Ref{Workspace: 1, User: 1, Conversation: 12345, OriginKey: "app-effect:1"}
+	if _, err := e.svc.Outcome(context.Background(), missing, 1, time.Millisecond); !errors.Is(err, errNotFound) {
 		t.Fatalf("Outcome = %v", err)
 	}
-	if err := e.svc.Stop(context.Background(), 12345); !errors.Is(err, errNotFound) {
+	if err := e.svc.Stop(context.Background(), missing); !errors.Is(err, errNotFound) {
 		t.Fatalf("Stop = %v", err)
 	}
 	off := newEnv(t, true)
-	if _, err := off.svc.Outcome(context.Background(), 1, 1, time.Millisecond); !errors.Is(err, ErrRuntimeDown) {
+	if _, err := off.svc.Outcome(context.Background(), Ref{}, 1, time.Millisecond); !errors.Is(err, ErrRuntimeDown) {
 		t.Fatalf("Outcome with the runtime off = %v", err)
 	}
-	if err := off.svc.Stop(context.Background(), 1); !errors.Is(err, ErrRuntimeDown) {
+	if err := off.svc.Stop(context.Background(), Ref{}); !errors.Is(err, ErrRuntimeDown) {
 		t.Fatalf("Stop with the runtime off = %v", err)
 	}
 }
@@ -206,20 +207,20 @@ func TestOutcomeReportsARuntimeFailureAndACancelledCaller(t *testing.T) {
 	e.rt.mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if out, err := e.svc.Outcome(ctx, started.Conversation.ID, started.Submission, time.Second); !errors.Is(err, context.Canceled) || out.Settled {
+	if out, err := e.svc.Outcome(ctx, refOf(owner, workspace, "routine-run:70", started.Conversation), started.Submission, time.Second); !errors.Is(err, context.Canceled) || out.Settled {
 		t.Fatalf("a cancelled caller got %+v, %v", out, err)
 	}
 	e.rt.mu.Lock()
 	e.rt.settle = nil
 	e.rt.waitErr = &agentrt.StatusError{Code: http.StatusNotFound}
 	e.rt.mu.Unlock()
-	if _, err := e.svc.Outcome(context.Background(), started.Conversation.ID, started.Submission, time.Second); !errors.Is(err, ErrGone) {
+	if _, err := e.svc.Outcome(context.Background(), refOf(owner, workspace, "routine-run:70", started.Conversation), started.Submission, time.Second); !errors.Is(err, ErrGone) {
 		t.Fatalf("a submission the runtime forgot = %v", err)
 	}
 	e.rt.mu.Lock()
 	e.rt.waitErr = errors.New("the runtime stopped")
 	e.rt.mu.Unlock()
-	if _, err := e.svc.Outcome(context.Background(), started.Conversation.ID, started.Submission, time.Second); !errors.Is(err, ErrRuntimeDown) {
+	if _, err := e.svc.Outcome(context.Background(), refOf(owner, workspace, "routine-run:70", started.Conversation), started.Submission, time.Second); !errors.Is(err, ErrRuntimeDown) {
 		t.Fatalf("a runtime that stopped = %v", err)
 	}
 }
@@ -289,13 +290,13 @@ func TestOutcomeOfACallerWhoseTimeRanOutIsAnErrorNotAPendingTurn(t *testing.T) {
 	e.rt.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()
-	out, err := e.svc.Outcome(ctx, started.Conversation.ID, started.Submission, time.Minute)
+	out, err := e.svc.Outcome(ctx, refOf(owner, workspace, "routine-run:91", started.Conversation), started.Submission, time.Minute)
 	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrRuntimeDown) || out.Settled {
 		t.Fatalf("a caller whose own time ran out got %+v, %v", out, err)
 	}
 	cancelled, stop := context.WithCancel(context.Background())
 	stop()
-	if _, err := e.svc.Outcome(cancelled, started.Conversation.ID, started.Submission, time.Minute); !errors.Is(err, context.Canceled) || errors.Is(err, ErrRuntimeDown) {
+	if _, err := e.svc.Outcome(cancelled, refOf(owner, workspace, "routine-run:91", started.Conversation), started.Submission, time.Minute); !errors.Is(err, context.Canceled) || errors.Is(err, ErrRuntimeDown) {
 		t.Fatalf("a cancelled caller got %v", err)
 	}
 }
@@ -327,5 +328,99 @@ func TestAStartedTurnMovesItsConversationUpAndWatchesForTheEnd(t *testing.T) {
 	}
 	if first() != started.Conversation.ID {
 		t.Fatalf("a retried start did not mark its conversation updated")
+	}
+}
+
+func refOf(owner *client, workspace int64, key string, c Conversation) Ref {
+	return Ref{Workspace: workspace, User: owner.id, Conversation: c.ID, OriginKey: key}
+}
+
+func TestStopAndOutcomeOfAReusedConversationIDTouchNothingOfTheNewConversation(t *testing.T) {
+	e := newEnv(t, false)
+	owner, workspace := e.setup()
+	member := e.invite(owner, workspace, "member@example.com")
+	old, err := e.svc.Start(context.Background(), Start{
+		Workspace: workspace, User: owner.id, Prompt: "Do work", Origin: Origin{Kind: "app", Key: "app-effect:300"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRef := refOf(owner, workspace, "app-effect:300", old.Conversation)
+	if _, err := e.db.Exec(`DELETE FROM conversations WHERE id = ?`, old.Conversation.ID); err != nil {
+		t.Fatal(err)
+	}
+	reused, err := e.svc.Start(context.Background(), Start{
+		Workspace: workspace, User: member.id, Prompt: "Private work", Origin: Origin{Kind: "app", Key: "app-effect:301"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused.Conversation.ID != old.Conversation.ID {
+		t.Fatalf("the id was not reused: %d and %d", old.Conversation.ID, reused.Conversation.ID)
+	}
+	e.rt.mu.Lock()
+	e.rt.replies[reused.Conversation.agentID] = []agentrt.Message{{Role: "assistant", Text: "the other person's answer"}}
+	e.rt.mu.Unlock()
+	if err := e.svc.Stop(context.Background(), oldRef); !errors.Is(err, errNotFound) {
+		t.Fatalf("Stop of the old id = %v", err)
+	}
+	if got := e.rt.aborts[reused.Conversation.agentID]; got != 0 {
+		t.Fatalf("the old id aborted the new conversation: %v", e.rt.aborts)
+	}
+	out, err := e.svc.Outcome(context.Background(), oldRef, old.Submission, time.Second)
+	if !errors.Is(err, errNotFound) || out.Reply != "" {
+		t.Fatalf("Outcome of the old id = %+v, %v", out, err)
+	}
+	byOwner := oldRef
+	byOwner.User = member.id
+	byOwner.OriginKey = "app-effect:301"
+	if err := e.svc.Stop(context.Background(), byOwner); err != nil {
+		t.Fatalf("Stop by the owner of the new conversation = %v", err)
+	}
+	if e.rt.aborts[reused.Conversation.agentID] != 1 {
+		t.Fatalf("aborts = %v", e.rt.aborts)
+	}
+	for name, change := range map[string]func(*Ref){
+		"owner":     func(r *Ref) { r.User = owner.id },
+		"workspace": func(r *Ref) { r.Workspace = e.workspace(owner) },
+		"key":       func(r *Ref) { r.OriginKey = "app-effect:302" },
+	} {
+		wrong := byOwner
+		change(&wrong)
+		if err := e.svc.Stop(context.Background(), wrong); !errors.Is(err, errNotFound) {
+			t.Errorf("Stop with another %s = %v", name, err)
+		}
+		if _, err := e.svc.Outcome(context.Background(), wrong, reused.Submission, time.Second); !errors.Is(err, errNotFound) {
+			t.Errorf("Outcome with another %s = %v", name, err)
+		}
+	}
+	if e.rt.aborts[reused.Conversation.agentID] != 1 {
+		t.Fatalf("a wrong reference aborted the conversation: %v", e.rt.aborts)
+	}
+}
+
+func TestOutcomeRefusesASubmissionThatIsNotTheConversationsOwn(t *testing.T) {
+	e := newEnv(t, false)
+	owner, workspace := e.setup()
+	st := Start{Workspace: workspace, User: owner.id, Prompt: "Do work", Origin: Origin{Kind: "app", Key: "app-effect:310"}}
+	started, err := e.svc.Start(context.Background(), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := st
+	other.Origin.Key = "app-effect:311"
+	foreign, err := e.svc.Start(context.Background(), other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := refOf(owner, workspace, "app-effect:310", started.Conversation)
+	if _, err := e.svc.Outcome(context.Background(), ref, started.Submission+foreign.Submission, time.Second); !errors.Is(err, errNotFound) {
+		t.Fatalf("Outcome with a submission of no conversation = %v", err)
+	}
+	if _, err := e.svc.Outcome(context.Background(), ref, 0, time.Second); !errors.Is(err, errNotFound) {
+		t.Fatalf("Outcome with no submission = %v", err)
+	}
+	if _, err := e.svc.Outcome(context.Background(), ref, started.Submission, time.Second); err != nil {
+		t.Fatalf("Outcome with its own submission = %v", err)
 	}
 }
