@@ -519,6 +519,10 @@ export type Comment = {
   mentions: BoardsMentionedPerson[]
 }
 
+export type ContinueModels = {
+  providers: ProvidersChoice[] | null
+}
+
 export type Conversation = {
   id: number
   workspace_id: number
@@ -736,6 +740,19 @@ export type Pin = {
   screen?: string
 }
 
+export type ProvidersChoice = {
+  provider: string
+  name: string
+  scope: string
+  account?: number
+  models: ProvidersModelChoice[] | null
+}
+
+export type ProvidersModelChoice = {
+  id: string
+  name: string
+}
+
 export type RecordVersion = {
   revision: number
   operation: string
@@ -764,6 +781,10 @@ export type SpaceIntegration = {
   display_name: string
   kind: string
   status: string
+}
+
+export type SubmissionReply = {
+  submission_id: number
 }
 
 export type Token = {

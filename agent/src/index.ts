@@ -100,7 +100,7 @@ class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly reason?: 'unknown_model' | 'no_model' | 'busy',
+    readonly reason?: 'unknown_model' | 'no_model' | 'busy' | 'moved',
   ) {
     super(message)
   }
@@ -315,13 +315,23 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       return send(res, 202, { submissionId })
     }
     if (req.method === 'POST' && action === 'continue') {
+      const body = await readJson(req)
+      const model = modelRef(body.model)
+      const afterEntry = body.afterEntry
+      if (typeof afterEntry !== 'number' || !Number.isSafeInteger(afterEntry) || afterEntry < 1) {
+        throw new HttpError(400, 'afterEntry must be the id of the last entry')
+      }
       const conv = await conversation(id)
       let submissionId: SubmissionId | undefined
       await testHooks.beforeContinueWrite?.()
       try {
         await conv.commit(async (tx) => {
           if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
+          if ((await tx.latestEntryId(conv.id)) !== afterEntry) {
+            throw new HttpError(409, 'the conversation moved on', 'moved')
+          }
           submissionId = await conv.submit(tx, { type: 'continue' })
+          await configure(tx, conv.id, { model })
         }, context)
       } catch (error) {
         if (error instanceof ConversationBusy) throw new HttpError(409, 'the conversation is busy', 'busy')

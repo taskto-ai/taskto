@@ -83,7 +83,7 @@ export function ConversationView({
   }, [status])
   const loadPage = useCallback((before: number) => api<History>(`${base}/entries?before=${before}`), [base])
   const older = useHistory(view, loadPage)
-  const { messages, running, truncated } = transcript(
+  const { messages, lastEntry, running, truncated } = transcript(
     view && older.history ? { ...view, entries: older.history.entries, before: older.history.before } : view,
   )
   const archived = Boolean(meta.data?.archived_at)
@@ -215,12 +215,12 @@ export function ConversationView({
         loadingEarlier={older.loading}
         earlierError={older.error}
         footer={
-          last?.failed && !running && !archived && !unreadable && providers.data && model ? (
+          last?.failed && !running && !archived && !unreadable && model && lastEntry !== undefined ? (
             <ContinueBar
+              key={lastEntry}
               base={base}
-              providers={providers.data}
               current={model}
-              cli={cli.data}
+              afterEntry={lastEntry}
               onChosen={setPicked}
               onContinued={onChanged}
             />

@@ -1,6 +1,8 @@
 import type { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
+import { testHooks } from './test-hooks.js'
+
 export const SCRIPT_MODEL_ID = 'script-1'
 
 export const TOKENS_PER_SECOND_ENV = 'TASKTO_AGENT_SCRIPT_TOKENS_PER_SECOND'
@@ -41,7 +43,7 @@ export function installScriptModel(models: ReturnType<typeof createModels>, prov
       for (const m of context.messages) if (m.role === 'system') Object.assign(sections, m.sections)
       return fauxAssistantMessage(fauxText(`system: ${Object.values(sections).join('\n')}`))
     }
-    if (text.trim() === `fail:${provider}`) {
+    if (testHooks.scriptFailures && text.trim() === `fail:${provider}`) {
       return fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'rate limit reached' })
     }
     const call = /^tool:(?<name>[a-z_]+):(?<ms>\d+)$/.exec(text.trim())?.groups

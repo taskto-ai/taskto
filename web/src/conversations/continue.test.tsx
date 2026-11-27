@@ -32,6 +32,13 @@ const models = {
   ],
 }
 
+const continuable = {
+  providers: [
+    models.providers[0],
+    { provider: 'cli-claude', name: 'Claude Code', scope: 'cli', models: [{ id: 'default', name: 'Default' }] },
+  ],
+}
+
 const asked = { id: 1, kind: 'pi.user', model: [{ role: 'user', content: 'Plan the week' }] }
 const failed = {
   id: 2,
@@ -56,18 +63,22 @@ afterEach(() => {
 
 type Extra = Record<string, Parameters<typeof fakeFetch>[0][string]>
 
+let stream: { send: (m: unknown) => void } | undefined
+
 async function show(entries: unknown[], extra: Extra = {}, options: { archived?: boolean; running?: boolean } = {}) {
   const calls = fakeFetch({
     [`GET ${BASE}`]: { body: conversation(options.archived) },
     'GET /api/workspaces/1/models': { body: models },
     [`GET ${BASE}/model`]: { body: { provider: 'script', model_id: 's' } },
     'GET /api/me/cli-accounts': { body: { enabled: true, accounts: [] } },
+    [`GET ${BASE}/continue-models`]: { body: continuable },
     ...extra,
   })
   const { sources, factory } = fakeStreams()
   render(<ConversationView workspace={1} id={7} backHref="/w/1/conversations" onChanged={() => {}} streams={factory} />)
   await screen.findByRole('heading', { name: 'Talk' })
   await waitFor(() => expect(sources).toHaveLength(1))
+  stream = sources[0]
   act(() => sources[0].open())
   const docs = options.running ? { 'pi.live': { run: { taskId: 9 } } } : {}
   act(() => sources[0].send({ type: 'value', value: { entries, docs } }))
@@ -77,22 +88,26 @@ async function show(entries: unknown[], extra: Extra = {}, options: { archived?:
 
 const note = () => document.querySelector('.ui-chat-continue-note')?.textContent
 const writes = (calls: Call[]) => calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`)
+const continues = (calls: Call[]) => calls.filter((c) => c.method === 'POST').map((c) => c.body)
 const choose = (label: string) => {
   const select = screen.getByLabelText('Continue on…') as HTMLSelectElement
   const option = Array.from(select.options).find((o) => o.textContent === label)
   if (!option) throw new Error(`no option ${label}`)
   fireEvent.change(select, { target: { value: option.value } })
 }
+const accepted = { status: 202, body: { submission_id: 5 } }
 
 test('a failed last reply offers to try again and to continue on another model', async () => {
   await show([asked, failed])
   expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
   const select = screen.getByLabelText('Continue on…') as HTMLSelectElement
-  expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
-    'Continue on…',
-    'Scripted: T',
-    'Claude Code: Default (not connected)',
-  ])
+  await waitFor(() =>
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+      'Continue on…',
+      'Scripted: T',
+      'Claude Code: Default',
+    ]),
+  )
 })
 
 test.each([
@@ -106,40 +121,54 @@ test.each([
   expect(screen.queryByLabelText('Continue on…')).toBeNull()
 })
 
-test('Try again continues on the same model without switching it', async () => {
-  const calls = await show([asked, failed], { [`POST ${BASE}/continue`]: { status: 202, body: { submission_id: 5 } } })
+test('Try again continues on the same model, tied to the failure it answers', async () => {
+  const calls = await show([asked, failed], { [`POST ${BASE}/continue`]: accepted })
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   await waitFor(() => expect(writes(calls)).toEqual([`POST ${BASE}/continue`]))
+  expect(continues(calls)).toEqual([{ model: { provider: 'script', model_id: 's' }, after_entry: 2 }])
 })
 
-test('choosing another model switches to it, then continues', async () => {
-  const calls = await show([asked, failed], {
-    [`PUT ${BASE}/model`]: (call) => ({ body: call.body }),
-    [`POST ${BASE}/continue`]: { status: 202, body: { submission_id: 5 } },
-  })
+test('choosing another model sends it with the continue, in one request', async () => {
+  const calls = await show([asked, failed], { [`POST ${BASE}/continue`]: accepted })
   choose('Scripted: T')
-  await waitFor(() => expect(writes(calls)).toEqual([`PUT ${BASE}/model`, `POST ${BASE}/continue`]))
-  expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({ provider: 'script', model_id: 't' })
+  await waitFor(() => expect(writes(calls)).toEqual([`POST ${BASE}/continue`]))
+  expect(continues(calls)).toEqual([{ model: { provider: 'script', model_id: 't' }, after_entry: 2 }])
   expect(((await screen.findByLabelText('Model')) as HTMLSelectElement).value).toBe(JSON.stringify(['script', 't']))
 })
 
-test('a model that is refused is not continued on', async () => {
+test('a model the server refuses is not shown as chosen, and the list is read again', async () => {
   const calls = await show([asked, failed], {
-    [`PUT ${BASE}/model`]: { status: 400, body: { error: 'unknown model', code: 'model_unknown' } },
-    [`POST ${BASE}/continue`]: { status: 202, body: { submission_id: 5 } },
+    [`POST ${BASE}/continue`]: { status: 409, body: { error: 'no', code: 'model_unavailable' } },
   })
-  choose('Scripted: T')
-  await waitFor(() => expect(note()).toBe("That model isn't available to you."))
-  expect(writes(calls)).toEqual([`PUT ${BASE}/model`])
+  const listings = () => calls.filter((c) => c.path === `${BASE}/continue-models`).length
+  expect(listings()).toBe(1)
+  choose('Claude Code: Default')
+  await waitFor(() => expect(note()).toBe("That model can't be used right now: connect its account or choose another."))
+  expect(((await screen.findByLabelText('Model')) as HTMLSelectElement).value).toBe(JSON.stringify(['script', 's']))
+  await waitFor(() => expect(listings()).toBe(2))
+})
+
+test('a continue from a failure the conversation has moved past says so and can be tried again', async () => {
+  let moved = true
+  const calls = await show([asked, failed], {
+    [`POST ${BASE}/continue`]: () =>
+      moved ? { status: 409, body: { error: 'moved', code: 'conversation_moved' } } : accepted,
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await waitFor(() =>
+    expect(note()).toBe('This conversation changed while you were choosing: check its latest reply and try again.'),
+  )
+  moved = false
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await waitFor(() => expect(note()).toBeUndefined())
+  expect(writes(calls)).toEqual([`POST ${BASE}/continue`, `POST ${BASE}/continue`])
 })
 
 test('a conversation that is busy says so and can be tried again', async () => {
   let busy = true
   const calls = await show([asked, failed], {
     [`POST ${BASE}/continue`]: () =>
-      busy
-        ? { status: 409, body: { error: 'busy', code: 'conversation_busy' } }
-        : { status: 202, body: { submission_id: 5 } },
+      busy ? { status: 409, body: { error: 'busy', code: 'conversation_busy' } } : accepted,
   })
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   await waitFor(() => expect(note()).toBe('This conversation is working: try again when it has finished.'))
@@ -154,7 +183,7 @@ test('a second click while the first continue is in flight sends nothing more', 
   const calls = await show([asked, failed], {
     [`POST ${BASE}/continue`]: () =>
       new Promise((done) => {
-        release = () => done({ status: 202, body: { submission_id: 5 } })
+        release = () => done(accepted)
       }),
   })
   const button = screen.getByRole('button', { name: 'Try again' })
@@ -166,20 +195,43 @@ test('a second click while the first continue is in flight sends nothing more', 
   expect(writes(calls)).toEqual([`POST ${BASE}/continue`])
 })
 
-test('a sign-out while the model is being switched sends no continue', async () => {
+test('after the server accepts a continue the buttons stay disabled until the stream shows the new run', async () => {
+  const calls = await show([asked, failed], { [`POST ${BASE}/continue`]: accepted })
+  const button = screen.getByRole('button', { name: 'Try again' }) as HTMLButtonElement
+  fireEvent.click(button)
+  await waitFor(() => expect(writes(calls)).toEqual([`POST ${BASE}/continue`]))
+  await act(async () => {})
+  expect(button.disabled).toBe(true)
+  expect((screen.getByLabelText('Continue on…') as HTMLSelectElement).disabled).toBe(true)
+  fireEvent.click(button)
+  expect(writes(calls)).toEqual([`POST ${BASE}/continue`])
+})
+
+test('a new failure after the continue offers the buttons again, tied to the new failure', async () => {
+  const calls = await show([asked, failed], { [`POST ${BASE}/continue`]: accepted })
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await waitFor(() => expect(writes(calls)).toEqual([`POST ${BASE}/continue`]))
+  const again = { ...failed, id: 5 }
+  act(() => stream?.send({ type: 'value', value: { entries: [asked, failed, again], docs: {} } }))
+  const button = await screen.findByRole('button', { name: 'Try again' })
+  await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(button)
+  await waitFor(() => expect(continues(calls).at(-1)).toMatchObject({ after_entry: 5 }))
+})
+
+test('a sign-out while the continue is in flight does not mark the model as chosen', async () => {
   beginSession(1)
   let release: () => void = () => {}
   const calls = await show([asked, failed], {
-    [`PUT ${BASE}/model`]: (call) =>
+    [`POST ${BASE}/continue`]: () =>
       new Promise((done) => {
-        release = () => done({ body: call.body })
+        release = () => done(accepted)
       }),
-    [`POST ${BASE}/continue`]: { status: 202, body: { submission_id: 5 } },
   })
   choose('Scripted: T')
-  await waitFor(() => expect(writes(calls)).toEqual([`PUT ${BASE}/model`]))
+  await waitFor(() => expect(writes(calls)).toEqual([`POST ${BASE}/continue`]))
   endSession()
   beginSession(2)
   await act(async () => release())
-  expect(writes(calls)).toEqual([`PUT ${BASE}/model`])
+  expect(((await screen.findByLabelText('Model')) as HTMLSelectElement).value).toBe(JSON.stringify(['script', 's']))
 })

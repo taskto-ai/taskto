@@ -233,6 +233,8 @@ const (
 	CodeConversationLost         Code = "conversation_lost"
 	CodeConversationNoModel      Code = "conversation_no_model"
 	CodeConversationBusy         Code = "conversation_busy"
+	CodeConversationMoved        Code = "conversation_moved"
+	CodeModelUnavailable         Code = "model_unavailable"
 	CodeAgentOff                 Code = "agent_off"
 	CodeAgentNotReady            Code = "agent_not_ready"
 	CodeModelUnknown             Code = "model_unknown"

@@ -1,26 +1,25 @@
 import { useId, useState } from 'react'
-import { api, type CliAccounts, cliAccountFor, cliOfProvider, errorText } from '../api'
+import { ApiError, continueConversation, continueModels, errorText } from '../api'
 import { useT } from '../i18n'
+import { useLoad } from '../load'
 import { sameSession } from '../session'
 import { Button } from '../ui/Button'
 import { Select } from '../ui/Select'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
-import type { ModelProvider, ModelRef } from './ModelPicker'
+import type { ModelRef } from './ModelPicker'
 
 const modelKey = (m: ModelRef) => JSON.stringify([m.provider, m.model_id])
 
 export function ContinueBar({
   base,
-  providers,
   current,
-  cli,
+  afterEntry,
   onChosen,
   onContinued,
 }: {
   base: string
-  providers: ModelProvider[]
   current: ModelRef
-  cli: CliAccounts | null | undefined
+  afterEntry: number
   onChosen: (m: ModelRef) => void
   onContinued: () => void
 }) {
@@ -28,40 +27,31 @@ export function ContinueBar({
   const id = useId()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const models = useLoad(() => continueModels(base), [base, afterEntry])
 
-  const run = async (model?: ModelRef) => {
+  const run = async (model: ModelRef) => {
     setBusy(true)
     setError(null)
     const same = sameSession()
     try {
-      if (model) {
-        await api(`${base}/model`, { method: 'PUT', body: model })
-        if (!same()) return
-        onChosen(model)
-      }
-      await api(`${base}/continue`, { method: 'POST', body: {} })
+      await continueConversation(base, { model, after_entry: afterEntry })
       if (!same()) return
+      onChosen(model)
       onContinued()
     } catch (e) {
-      if (same()) setError(errorText(e))
-    } finally {
+      if (!same()) return
       setBusy(false)
+      setError(errorText(e))
+      if (e instanceof ApiError && e.status === 409) {
+        models.reload()
+        onContinued()
+      }
     }
-  }
-
-  const label = (p: ModelProvider, m: { id: string; name: string }) => {
-    const name = cliOfProvider(p.provider)
-    if (!name) return t('conversations.continueOption', { provider: p.name, model: m.name })
-    const connected = !cli || cliAccountFor(cli.accounts, name)?.state === 'connected'
-    return t(connected ? 'conversations.model.cliOption' : 'conversations.model.cliOptionNotConnected', {
-      provider: p.name,
-      model: m.name,
-    })
   }
 
   return (
     <div className="ui-chat-continue">
-      <Button size="sm" onClick={() => run()} disabled={busy}>
+      <Button size="sm" onClick={() => run(current)} disabled={busy}>
         {t('conversations.tryAgain')}
       </Button>
       <VisuallyHidden>
@@ -81,12 +71,12 @@ export function ContinueBar({
         <option value="" disabled>
           {t('conversations.continueOn')}
         </option>
-        {providers.flatMap((p) =>
-          p.models
+        {(models.data?.providers ?? []).flatMap((p) =>
+          (p.models ?? [])
             .filter((m) => modelKey({ provider: p.provider, model_id: m.id }) !== modelKey(current))
             .map((m) => (
               <option key={`${p.provider} ${m.id}`} value={modelKey({ provider: p.provider, model_id: m.id })}>
-                {label(p, m)}
+                {t('conversations.continueOption', { provider: p.name, model: m.name })}
               </option>
             )),
         )}

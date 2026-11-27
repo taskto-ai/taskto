@@ -38,6 +38,7 @@ export type ChatMessage = {
 
 export type Transcript = {
   messages: ChatMessage[]
+  lastEntry?: number
   running: boolean
   truncated: boolean
 }
@@ -196,7 +197,13 @@ export function transcript(view: ConversationView | null | undefined): Transcrip
     if (m) messages.push(m)
   }
   liveOutput(messages, live?.tools)
-  return { messages, running: Boolean(live?.run), truncated: view?.before !== undefined }
+  const lastEntry = view?.entries?.at(-1)?.id
+  return {
+    messages,
+    ...(lastEntry === undefined ? {} : { lastEntry }),
+    running: Boolean(live?.run),
+    truncated: view?.before !== undefined,
+  }
 }
 
 export function pendingHelp(messages: ChatMessage[]): ToolUse['help'] | null {

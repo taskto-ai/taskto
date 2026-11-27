@@ -34,6 +34,7 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	mux.Handle("GET "+base+"/{conversation}/messages", member(s.handleMessages))
 	mux.Handle("GET "+base+"/{conversation}/model", member(s.handleModel))
 	mux.Handle("PUT "+base+"/{conversation}/model", member(s.handleSetModel))
+	mux.Handle("GET "+base+"/{conversation}/continue-models", member(s.handleContinueModels))
 	mux.Handle("POST "+base+"/{conversation}/continue", member(s.handleContinue))
 	mux.Handle("POST "+base+"/{conversation}/stop", member(s.handleStop))
 	mux.Handle("GET "+base+"/{conversation}/entries", member(s.handleEntries))
@@ -148,6 +149,7 @@ var agentRefusals = map[string]apierr.Code{
 	"unknown_model": apierr.CodeModelUnknown,
 	"no_model":      apierr.CodeConversationNoModel,
 	"busy":          apierr.CodeConversationBusy,
+	"moved":         apierr.CodeConversationMoved,
 }
 
 func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
@@ -336,8 +338,72 @@ type SubmissionReply struct {
 	SubmissionID int64 `json:"submission_id"`
 }
 
+type ContinueModels struct {
+	Providers []providers.Choice `json:"providers"`
+}
+
+type Models func(ctx context.Context, workspace, user int64) ([]providers.Choice, error)
+
+func (s *Service) SetContinueModels(m Models) { s.models = m }
+
+func (s *Service) runnableModels(ctx context.Context, user, workspace int64) ([]providers.Choice, error) {
+	if s.models == nil {
+		return []providers.Choice{}, nil
+	}
+	return s.models(ctx, workspace, user)
+}
+
+func (s *Service) handleContinueModels(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.writable(w, r); !ok {
+		return
+	}
+	user, workspace := caller(r)
+	choices, err := s.runnableModels(r.Context(), user, workspace)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ContinueModels{Providers: choices})
+}
+
+func (s *Service) runnable(w http.ResponseWriter, r *http.Request, m agentrt.ModelRef) bool {
+	user, workspace := caller(r)
+	choices, err := s.runnableModels(r.Context(), user, workspace)
+	if err != nil {
+		serverError(w, r, err)
+		return false
+	}
+	for _, c := range choices {
+		if c.Provider != m.Provider {
+			continue
+		}
+		for _, mc := range c.Models {
+			if mc.ID == m.ModelID {
+				return true
+			}
+		}
+	}
+	writeError(w, http.StatusConflict, apierr.CodeModelUnavailable, "that model can't be used now: connect its account or choose another")
+	return false
+}
+
 func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	c, ok := s.writable(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Model      modelRef `json:"model"`
+		AfterEntry int64    `json:"after_entry"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.AfterEntry < 1 {
+		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "after_entry must be the id of the conversation's last entry")
+		return
+	}
+	model, ok := usable(w, r, req.Model)
 	if !ok {
 		return
 	}
@@ -345,10 +411,10 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.stillWritable(w, r) {
+	if !s.stillWritable(w, r) || !s.runnable(w, r, model) {
 		return
 	}
-	sub, err := rt.Continue(r.Context(), c.agentID)
+	sub, err := rt.Continue(r.Context(), c.agentID, model, req.AfterEntry)
 	if err != nil {
 		conversationError(w, r, c, err)
 		return
@@ -358,7 +424,7 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	}
 	s.markWhenSettled(rt, c.ID, c.agentID, sub)
 	user, _ := caller(r)
-	slog.InfoContext(r.Context(), "conversation continued", "conversation", c.ID, "by", user)
+	slog.InfoContext(r.Context(), "conversation continued", "conversation", c.ID, "provider", model.Provider, "by", user)
 	writeJSON(w, http.StatusAccepted, SubmissionReply{SubmissionID: sub})
 }
 

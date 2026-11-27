@@ -1058,6 +1058,8 @@
     "conversation_lost": "O agente não tem mais o conteúdo desta conversa. Um operador pode ver o motivo no log do servidor.",
     "conversation_no_model": "Esta conversa não tem modelo: escolha um.",
     "conversation_busy": "Esta conversa está trabalhando: tente de novo quando ela terminar.",
+    "conversation_moved": "Esta conversa mudou enquanto você escolhia: confira a resposta mais recente e tente de novo.",
+    "model_unavailable": "Esse modelo não pode ser usado agora: conecte a conta dele ou escolha outro.",
     "agent_off": "O agente está desligado neste servidor.",
     "agent_not_ready": "O agente está iniciando: tente de novo daqui a pouco.",
     "model_unknown": "Esse modelo não está disponível para você.",

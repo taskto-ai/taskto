@@ -1051,6 +1051,8 @@
     "conversation_lost": "The agent no longer has this conversation's content. An operator can find out why in the server's log.",
     "conversation_no_model": "This conversation has no model: choose one.",
     "conversation_busy": "This conversation is working: try again when it has finished.",
+    "conversation_moved": "This conversation changed while you were choosing: check its latest reply and try again.",
+    "model_unavailable": "That model can't be used right now: connect its account or choose another.",
     "agent_off": "The agent is off on this server.",
     "agent_not_ready": "The agent is starting: try again in a moment.",
     "model_unknown": "That model isn't available to you.",

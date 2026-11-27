@@ -4,6 +4,7 @@ import { testHooks } from './test-hooks.js'
 const noArguments = { type: 'object', properties: {}, additionalProperties: false } as ToolSpec['input_schema']
 
 testHooks.spikeTools = true
+testHooks.scriptFailures = true
 testHooks.walBusyMs = 300
 testHooks.extraToolSpecs = [
   {

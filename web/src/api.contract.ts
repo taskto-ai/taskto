@@ -24,6 +24,8 @@ export type Contract = [
   Is<Check<Gen.CardThread, Api.CardWithThread, 'assignee.id'>>,
   Is<Check<Gen.BoardsAuthor, NonNullable<Api.Author>>>,
   Is<Check<Gen.Conversation, Api.Conversation>>,
+  Is<Check<Gen.SubmissionReply, Api.SubmissionReply>>,
+  Is<Check<Gen.ContinueModels, Api.ContinueModels>>,
   Is<Check<Gen.NotificationItem, Notifications.NotificationItem>>,
   Is<Check<Gen.NotificationList, Notifications.NotificationList>>,
   Is<Check<Gen.App, Api.App>>,

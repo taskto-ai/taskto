@@ -22,6 +22,7 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/db"
+	"taskto.ai/taskto/internal/providers"
 )
 
 const password = "a-long-enough-password"
@@ -35,6 +36,7 @@ type fakeRuntime struct {
 	watches []*fakeWatch
 	aborts  map[int64]int
 	resumes map[int64]int
+	resumed []continueCall
 	err     error
 	onAbort func(ctx context.Context)
 	replies map[int64][]agentrt.Message
@@ -76,12 +78,18 @@ func (f *fakeRuntime) Submit(_ context.Context, conv int64, in agentrt.Input) (i
 	return int64(1000 + len(f.inputs[conv])), nil
 }
 
-func (f *fakeRuntime) Continue(_ context.Context, conv int64) (int64, error) {
+type continueCall struct {
+	model agentrt.ModelRef
+	after int64
+}
+
+func (f *fakeRuntime) Continue(_ context.Context, conv int64, model agentrt.ModelRef, after int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return 0, f.err
 	}
+	f.resumed = append(f.resumed, continueCall{model, after})
 	f.resumes[conv]++
 	return int64(2000 + f.resumes[conv]), nil
 }
@@ -268,6 +276,8 @@ type env struct {
 	rt  *fakeRuntime
 	svc *Service
 	h   http.Handler
+
+	runnable []providers.Choice
 }
 
 func newEnv(t *testing.T, off bool) *env {
@@ -287,6 +297,11 @@ func newEnv(t *testing.T, off bool) *env {
 		agent = func(context.Context) (Runtime, error) { return e.rt, nil }
 	}
 	e.svc = New(sqlDB, agent)
+	e.runnable = []providers.Choice{
+		{Provider: "script", Name: "Scripted", Scope: providers.ScopeInstance, Models: []providers.ModelChoice{{ID: "script-1", Name: "Scripted"}}},
+		{Provider: "backup", Name: "Backup", Scope: providers.ScopeInstance, Models: []providers.ModelChoice{{ID: "b-1", Name: "B one"}}},
+	}
+	e.svc.SetContinueModels(func(context.Context, int64, int64) ([]providers.Choice, error) { return e.runnable, nil })
 	t.Cleanup(e.svc.EndStreams)
 	mux := http.NewServeMux()
 	a := auth.New(sqlDB, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})

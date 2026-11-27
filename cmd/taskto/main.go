@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/config"
 	"taskto.ai/taskto/internal/conversations"
@@ -307,6 +309,8 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		index.SetConversations(convs)
 	}
 	convs.SetCLIQuestions(cliAccounts)
+	providerSvc := providerAPI(store, agent.feed, egressOf(cfg))
+	convs.SetContinueModels(runnableModels(providerSvc, cliAccounts))
 
 	if cfg.InsecureCookies {
 		slog.Warn("the session cookie is sent over plain http (insecure_cookies): use this only on localhost")
@@ -359,7 +363,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		Auth:             authOpts,
 		DataDir:          cfg.DataDir,
 		AgentState:       agent.state,
-		Providers:        providerAPI(store, agent.feed, egressOf(cfg)),
+		Providers:        providerSvc,
 		Search:           index,
 		Conversations:    convs,
 		Tools:            tools,
@@ -459,6 +463,29 @@ var (
 func egressOf(cfg config.Config) providers.Egress {
 	ws, personal := cfg.Egress()
 	return providers.Egress{Workspace: ws, Personal: personal}
+}
+
+func runnableModels(p *providers.Service, cli *cliaccounts.Service) conversations.Models {
+	return func(ctx context.Context, workspace, user int64) ([]providers.Choice, error) {
+		all, err := p.Choices(ctx, workspace, user)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]providers.Choice, 0, len(all))
+		for _, c := range all {
+			if c.Scope == providers.ScopeCLI {
+				ok, err := cli.Runnable(ctx, workspace, user, cliworker.CLI(strings.TrimPrefix(c.Provider, providers.CLIProviderPrefix)))
+				if err != nil {
+					return nil, err
+				}
+				if !ok {
+					continue
+				}
+			}
+			out = append(out, c)
+		}
+		return out, nil
+	}
 }
 
 func providerAPI(store *providers.Store, feed *providers.Feed, e providers.Egress) *providers.Service {
