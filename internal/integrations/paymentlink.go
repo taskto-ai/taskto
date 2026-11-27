@@ -43,7 +43,7 @@ import (
 // read, a crash between the write-ahead and the answer being noted) leaves the key's outcome unknown:
 // sends exceed clean_sends. A ref whose key's outcome is unknown never gets a new key by itself. Each
 // try of its entry looks for the key's object by its token and, while the provider still keeps the key
-// (keyTrusted from its first call), asks again under the same key with the same parameters, which the
+// (PaymentProvider.KeyKept from its first call), asks again under the same key with the same parameters, which the
 // provider answers with what the first call made, or runs if it never ran. A failed read or call
 // changes nothing: whatever the failure (the provider unreachable, the key refused, an answer that
 // can't be read, a list that can't be read whole), the read of whose account the key is, the lookup and
@@ -264,7 +264,7 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 			}
 			// Nothing of the key was seen. Only the same key is asked again, and only while the provider
 			// still keeps it: it answers with what the first call made, or runs a call that never ran.
-			if !s.keyKept(a) {
+			if !s.keyKept(a, provider) {
 				return paylink.Link{}, s.stillUnknown(ctx, a)
 			}
 		}
@@ -287,7 +287,28 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 				return paylink.Link{}, err
 			}
 		}
-		made, err := provider.CreatePaymentLink(ctx, creds, client, ref.newLink(a, req.Description))
+		// The key's time is checked again just before the call leaves, and bounds the call: a write-ahead
+		// (or anything between) that ran past the time the provider keeps the key must not send under a
+		// key it may have forgotten, and a call that hasn't left by then never does. The send written
+		// ahead stays on record, so the outcome stays unknown.
+		// The deadline is absolute, from a time taken before the window is read, so no pause after
+		// the check lengthens it.
+		callCtx, cancel := ctx, context.CancelFunc(func() {})
+		if a.unknown() {
+			start := time.Now()
+			left := s.keyLeft(a, provider)
+			if left <= 0 {
+				return paylink.Link{}, s.stillUnknown(ctx, a)
+			}
+			if s.beforeCall != nil {
+				s.beforeCall()
+			}
+			callCtx, cancel = context.WithDeadline(ctx, start.Add(left))
+		} else if s.beforeCall != nil {
+			s.beforeCall()
+		}
+		made, err := provider.CreatePaymentLink(callCtx, creds, client, ref.newLink(a, req.Description))
+		cancel()
 		if err != nil {
 			ce, ok := IsCall(err)
 			if !ok {
@@ -526,9 +547,21 @@ func (s *Service) stillUnknown(ctx context.Context, a attempt) error {
 
 // keyKept says whether the provider still keeps the key's first call, so that a call under the same
 // key is answered with what that call made (or runs, if it never did) and can't make a second object.
-func (s *Service) keyKept(a attempt) bool {
+func (s *Service) keyKept(a attempt, p PaymentProvider) bool { return s.keyLeft(a, p) > 0 }
+
+// keyLeft is how much longer the provider is known to keep the key, from its first call: 0 when it
+// isn't (a provider that documents no window, a first call not on record, or a clock that reads
+// earlier than the first call, which says nothing of how long ago it was).
+func (s *Service) keyLeft(a attempt, p PaymentProvider) time.Duration {
 	first, err := time.Parse(timeFormat, a.firstSentAt)
-	return err == nil && s.store.now().Sub(first) < keyTrusted
+	if err != nil || p.KeyKept() <= 0 {
+		return 0
+	}
+	elapsed := s.store.now().Sub(first)
+	if elapsed < 0 || elapsed >= p.KeyKept() {
+		return 0
+	}
+	return p.KeyKept() - elapsed
 }
 
 // madeLink is the link a ref already has. It belongs to the integration that made it: another one,
@@ -637,10 +670,10 @@ const (
 	maxKeysPerTry = 3
 )
 
-// keyTrusted is how long from its first call a key is known to be kept by the provider (Stripe keeps
-// one for at least 24 hours, and may remove it after; a margin is left). Past it, a call under the
-// key could run again and make a second object, so it is not made.
-const keyTrusted = 23 * time.Hour
+// stripeKeyKept is how long from its first call a key is known to be kept by Stripe (it keeps one for
+// at least 24 hours, and may remove it after; a margin is left). Past it, a call under the key could
+// run again and make a second object, so it is not made.
+const stripeKeyKept = 23 * time.Hour
 
 // providerDoes says whether the registry's provider id implements the kind.
 func providerDoes(id, kind string) bool {

@@ -283,14 +283,18 @@ type hookTarget struct {
 	provider  string
 	mode      string
 	disabled  bool
+	// registeredURL is the webhook address its signing secret was saved for, and
+	// previousRegisteredURL the one its previous secret was saved for, "" for none.
+	registeredURL, previousRegisteredURL string
 }
 
 // byPublicID finds the integration with the public id, disabled or not: the route does the same
 // work for a disabled one as for an enabled one, and refuses it afterwards.
 func (s *Store) byPublicID(ctx context.Context, publicID string) (hookTarget, error) {
 	var t hookTarget
-	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, provider, mode, disabled_at IS NOT NULL FROM integrations
-		WHERE public_id = ?`, publicID).Scan(&t.id, &t.workspace, &t.provider, &t.mode, &t.disabled)
+	err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id, provider, mode, disabled_at IS NOT NULL, coalesce(webhook_registered_url, ''),
+		coalesce(webhook_previous_registered_url, '') FROM integrations WHERE public_id = ?`, publicID).Scan(&t.id, &t.workspace, &t.provider,
+		&t.mode, &t.disabled, &t.registeredURL, &t.previousRegisteredURL)
 	if errors.Is(err, sql.ErrNoRows) {
 		return hookTarget{}, errNotFound
 	}

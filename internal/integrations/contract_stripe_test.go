@@ -27,14 +27,14 @@ func stripeFixture(t *testing.T) *paymentsFixture {
 	// A clock the fixture moves: what the provider says of a moment is checked against it.
 	clock := testprovider.NewManualClock(time.Now().UTC())
 	fake := testprovider.NewStripe(t, testprovider.WithClock(clock))
-	sign := func(body []byte, secret string, at time.Time) http.Header {
-		return http.Header{testprovider.SignatureHeader: {testprovider.Sign(secret, at, body)}}
+	// Stripe signs its time in the header: the body stays as it is.
+	sign := func(body []byte, secret string, at time.Time) signedDelivery {
+		return signedDelivery{Header: http.Header{testprovider.SignatureHeader: {testprovider.Sign(secret, at, body)}}, Body: body}
 	}
 	deliver := func(evs []testprovider.Event) []signedDelivery {
 		out := make([]signedDelivery, len(evs))
 		for i, e := range evs {
-			body := e.Body()
-			out[i] = signedDelivery{Header: sign(body, testprovider.TestWebhookSecret, fake.Clock().Now()), Body: body}
+			out[i] = sign(e.Body(), testprovider.TestWebhookSecret, fake.Clock().Now())
 		}
 		return out
 	}

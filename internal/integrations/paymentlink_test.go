@@ -58,7 +58,9 @@ const invoiceApp = `{
 // (the fake) for payment links, with a worker that can be started and a clock that can be moved.
 type pay struct {
 	*env
-	fake  *testprovider.Stripe
+	fake *testprovider.Stripe
+	// sq is the fake Square of a rig made with newSquarePay (fake is then unused).
+	sq    *testprovider.Square
 	svc   *Service
 	apps  *apps.Service
 	owner *client
@@ -84,15 +86,24 @@ func newPay(t *testing.T, public string) *pay { return newPayWith(t, public, inv
 
 // newPayWith is newPay with the invoicing app's definition, for a test that needs another.
 func newPayWith(t *testing.T, public, definition string) *pay {
+	return newPayFor(t, public, definition, "stripe")
+}
+
+// newSquarePay is newPay with a sandbox Square integration (the fake Square) instead of Stripe's.
+func newSquarePay(t *testing.T, public string) *pay {
+	return newPayFor(t, public, invoiceApp, "square")
+}
+
+func newPayFor(t *testing.T, public, definition, provider string) *pay {
 	t.Helper()
-	return newPayClocked(t, public, definition, false)
+	return newPayClocked(t, public, definition, provider, false)
 }
 
 // newPayOnOneClock is newPay with the fake Stripe on the server's clock too, for a test of the times
 // the provider says: p.later moves the provider's time as well.
 func newPayOnOneClock(t *testing.T, public string) *pay {
 	t.Helper()
-	return newPayClocked(t, public, invoiceApp, true)
+	return newPayClocked(t, public, invoiceApp, "stripe", true)
 }
 
 // clockFunc is a testprovider.Clock of a function.
@@ -100,7 +111,7 @@ type clockFunc func() time.Time
 
 func (f clockFunc) Now() time.Time { return f() }
 
-func newPayClocked(t *testing.T, public, definition string, providerToo bool) *pay {
+func newPayClocked(t *testing.T, public, definition, provider string, providerToo bool) *pay {
 	t.Helper()
 	ctx := context.Background()
 	e := newEnv(t, public) // the database, the key and the logs: the env's own routes are left unused
@@ -111,9 +122,15 @@ func newPayClocked(t *testing.T, public, definition string, providerToo bool) *p
 		fakeOpts = append(fakeOpts, testprovider.WithClock(clockFunc(func() time.Time { return time.Now().Add(time.Duration(offset.Load())) })))
 	}
 	fake := testprovider.NewStripe(t, fakeOpts...)
+	var sq *testprovider.Square
+	endpoint := fake.Host()
+	if provider == "square" {
+		sq = testprovider.NewSquare(t)
+		endpoint = sq.Host()
+	}
 	svc := New(e.store, Options{PublicURL: public, Egress: ptr(egress.MustParse("127.0.0.1")),
 		Now:           func() time.Time { return time.Now().Add(time.Duration(offset.Load())) },
-		ClientOptions: []ClientOption{WithTestEndpoint(fake.Host()), WithoutConnectionReuse()}})
+		ClientOptions: []ClientOption{WithTestEndpoint(endpoint), WithoutConnectionReuse()}})
 
 	mux := http.NewServeMux()
 	a := auth.New(e.db, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
@@ -122,7 +139,7 @@ func newPayClocked(t *testing.T, public, definition string, providerToo bool) *p
 	spaces.Routes(mux)
 	svc.Routes(mux, a, spaces)
 	svc.HookRoutes(mux)
-	p := &pay{env: e, fake: fake, svc: svc, offset: offset}
+	p := &pay{env: e, fake: fake, sq: sq, svc: svc, offset: offset}
 	p.apps = apps.New(e.db, spaces).WithPlatform(apps.Platform{ProviderKinds: providerKinds, Payments: svc}).
 		WithClock(func() time.Time { return time.Now().Add(time.Duration(p.offset.Load())) }).
 		// The worker sees a moved clock on its next poll: a short one, so a test's wait for it is short.
@@ -145,6 +162,11 @@ func newPayClocked(t *testing.T, public, definition string, providerToo bool) *p
 	body := stripeBody("main")
 	body["secrets"] = map[string]string{"api_key": fake.APIKey(), "webhook_secret": stripeHook}
 	body["currencies"] = []string{"EUR", "JPY"}
+	if provider == "square" {
+		body = squareBody("main")
+		body["settings"] = squareSettings()
+		body["secrets"] = map[string]string{"api_key": testprovider.SquareTestToken, "webhook_secret": testprovider.SquareSignatureKey}
+	}
 	p.in = e.create(p.owner, p.ws, body)
 	if _, err := e.db.ExecContext(ctx, `INSERT INTO integration_spaces (integration_id, space_id) VALUES (?, ?)`, p.in.ID, p.space.ID); err != nil {
 		t.Fatal(err)
@@ -2819,6 +2841,56 @@ func TestRepeatedFailedReadsNeverEndTheReconciliationEarly(t *testing.T) {
 				t.Fatalf("%d objects", p.objects(shape.path))
 			}
 		})
+	}
+}
+
+// The key's window is checked again after the write-ahead: a try that passed the check just before the
+// window closed and reached the call after it never sends under a key the provider may have forgotten.
+func TestAKeyPastItsWindowAfterTheWriteAheadIsNotSent(t *testing.T) {
+	for name, shape := range linkShapes {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			p := newPay(t, shape.public)
+			record := p.invoice(10, "EUR")
+			req := p.direct(record, "op-window-0001")
+			p.fake.Fail(testprovider.ServerError().KeptUnderKey().On(http.MethodPost, shape.path))
+			if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+				t.Fatal("the 5xx was no error")
+			}
+			p.later(stripeKeyKept - time.Minute)
+			p.svc.afterWriteAhead = func() error { p.later(2 * time.Minute); return nil }
+			// Still unknown (the wait for it is shorter than Stripe's window, so it has ended): not sent.
+			if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationOutcomeUnknown) {
+				t.Fatalf("err = %v", err)
+			}
+			p.svc.afterWriteAhead = nil
+			if n := len(p.fake.RequestsTo(http.MethodPost, shape.path)); n != 1 {
+				t.Fatalf("%d calls, want the first only", n)
+			}
+		})
+	}
+}
+
+// The key's window bounds the call itself, from when it was read: a call that is about to leave as the
+// window closes and is delayed past it (even before its deadline is made) never reaches the provider.
+func TestAKeyWhoseWindowClosesAsTheCallLeavesIsNotSent(t *testing.T) {
+	ctx := context.Background()
+	shape := linkShapes["a checkout session"]
+	p := newPay(t, shape.public)
+	record := p.invoice(10, "EUR")
+	req := p.direct(record, "op-window-0002")
+	p.fake.Fail(testprovider.ServerError().KeptUnderKey().On(http.MethodPost, shape.path))
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("the 5xx was no error")
+	}
+	p.later(stripeKeyKept - 300*time.Millisecond)
+	p.svc.beforeCall = func() { time.Sleep(600 * time.Millisecond) }
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("a call past the key's window answered")
+	}
+	p.svc.beforeCall = nil
+	if n := len(p.fake.RequestsTo(http.MethodPost, shape.path)); n != 1 {
+		t.Fatalf("%d calls, want the first only", n)
 	}
 }
 
