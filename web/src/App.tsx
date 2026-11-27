@@ -161,13 +161,16 @@ export function App() {
     async (me: Me, asked?: number, language = false) => {
       const now = await enter(me, asked)
       if (!now) return staleStart.current()
-      if (language) await setPreferences({ user: now.user.locale ?? null })
-      // Asked again after those waits (the time zone's report, the language): the page goes on only
-      // for the browser's login, and lets go of what it took for one that isn't any more.
-      if (!loginIsCurrent(me.user.id, me.session)) {
+      // Asked after each wait (the time zone's report, then the language): the page goes on only
+      // for the browser's login, never sets the language for one that isn't, and lets go of what it
+      // took for it.
+      const lost = async () => {
         await deactivate({ purge: false, user: me.user.id }).catch(() => {})
-        return staleStart.current()
+        staleStart.current()
       }
+      if (!loginIsCurrent(me.user.id, me.session)) return lost()
+      if (language) await setPreferences({ user: now.user.locale ?? null })
+      if (!loginIsCurrent(me.user.id, me.session)) return lost()
       // The session begins before the shell is drawn, so what the shell starts is in it.
       beginSession(now.user.id)
       setFinishedElsewhere(false)
@@ -520,8 +523,10 @@ export function App() {
         if (invite) now = (await claim(me, asked, wanted)) ? me : null
         else now = await enter(me, asked, wanted)
         // The account's language, only once its claim held; asked again after that wait.
-        if (now) await setPreferences({ user: now.user.locale ?? null })
-        if (!now || !mine() || heard !== undefined || !loginIsCurrent(me.user.id, me.session)) {
+        // The account's language only for the browser's login, asked before it is set and after.
+        const holds = () => !!now && mine() && heard === undefined && loginIsCurrent(me.user.id, me.session)
+        if (now && holds()) await setPreferences({ user: now.user.locale ?? null })
+        if (!now || !holds()) {
           // Nothing of the account was made the browser's for a login another tab moved on from:
           // `activate` asks before it writes the marker. What it had opened is let go.
           await deactivate({ purge: false, user: me.user.id }).catch(() => {})

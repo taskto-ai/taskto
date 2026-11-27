@@ -211,6 +211,9 @@ export async function activate(user: number, name?: string, still: () => boolean
     // The browser is this account's from here on, whatever becomes of opening its database: an
     // error never leaves the last account's name for the next start to open. When the marker can't
     // be moved it is cleared, and when it can't be, offline starts are refused (account.ts).
+    // Asked again right before the marker is written, with nothing between the two: another tab's
+    // change of the browser's login is seen in its storage at once, whenever it lands.
+    if (!still()) return state
     const marker = name ? rememberUser({ id: user, name }) : 'ok'
     // The account epoch: who the browser's marker names. Every step of this that waits re-checks
     // it before it deletes, opens or shows anything, so an account that signed in meanwhile (in

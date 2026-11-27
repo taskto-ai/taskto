@@ -164,7 +164,10 @@ export function ensureSignOut(
   d: SignOutDecision,
   phase: SignOutPhase = 'requested',
 ): void {
-  if (read().some((p) => p.user === user && p.session === session)) return
+  // A record kept is left as it is, unless it was gone back from: this page signing out again makes
+  // it pending again (the queue waits while the logout is on its way), with what it knew kept.
+  const held = read().find((p) => p.user === user && p.session === session)
+  if (held && held.phase !== 'backed') return
   put(user, session, {
     user,
     session,
@@ -172,7 +175,10 @@ export function ensureSignOut(
     keep: d.keep,
     approved: [...d.approved],
     ...(d.discardUnreadable ? { discardUnreadable: true } : {}),
-    at: d.at ?? Date.now(),
+    ...(held?.unanswered ? { unanswered: true } : {}),
+    // The time the sign-out became certain, as the page knew it; none when it knew none (a record
+    // of an earlier version), which no newer login is measured against wrongly.
+    ...(held?.at !== undefined ? { at: held.at } : d.at !== undefined ? { at: d.at } : {}),
   })
 }
 

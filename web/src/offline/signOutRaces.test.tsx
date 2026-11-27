@@ -1033,3 +1033,24 @@ test("a sign-out's deletion whose hold on the account's lock ran out deletes not
   await new Promise((r) => setTimeout(r, 0))
   expect(await databases()).toContain('taskto-offline-7')
 })
+
+test("a start that another person's sign-in overtakes while its time zone is reported never sets its language", async () => {
+  let report: (() => void) | undefined
+  const fresh = { ...me, user: { ...me.user, time_zone: '', locale: 'pt-BR' } } as Me
+  fakeFetch({
+    ...signedIn,
+    'GET /api/me': { body: fresh },
+    'PATCH /api/me': () =>
+      new Promise((done) => {
+        report = () => done({ body: { ...fresh, user: { ...fresh.user, time_zone: 'UTC' } } })
+      }),
+  })
+  render(<App />)
+  await waitFor(() => expect(report).toBeDefined())
+  // The second person signs in in another tab meanwhile, with a language of their own.
+  rememberLogin(8, 't1', Date.now() + 1)
+  localStorage.setItem('taskto.locale', 'en')
+  await act(async () => report?.())
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  expect(localStorage.getItem('taskto.locale')).toBe('en')
+})
