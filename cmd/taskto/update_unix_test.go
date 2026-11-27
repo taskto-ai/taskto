@@ -37,6 +37,7 @@ func startGroup(t *testing.T, cmd *exec.Cmd) <-chan struct{} {
 
 // The group of a test that fails before it kills it is gone when that test is over.
 func TestStartGroupReapsTheGroupOfATestThatStopsEarly(t *testing.T) {
+	t.Parallel()
 	var pid int
 	t.Run("stops at once", func(t *testing.T) {
 		cmd := exec.Command("sleep", "60")
@@ -51,6 +52,7 @@ func TestStartGroupReapsTheGroupOfATestThatStopsEarly(t *testing.T) {
 
 // A child left in the group by a leader that has exited is gone when the test is over too.
 func TestStartGroupReapsAChildTheLeaderLeftBehind(t *testing.T) {
+	t.Parallel()
 	var child int
 	t.Run("leader exits first", func(t *testing.T) {
 		var out bytes.Buffer
@@ -80,6 +82,7 @@ func TestStartGroupReapsAChildTheLeaderLeftBehind(t *testing.T) {
 // next run, not mistaken for an install that is up to date: nothing runs again until a
 // person has looked, whatever it is asked, and the record says what was happening.
 func TestUpdateKilledHalfWayIsFoundAndBlocks(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.write("fake/block-up", "") // `compose start` of the new version waits, for ever
@@ -143,6 +146,7 @@ func TestUpdateKilledHalfWayIsFoundAndBlocks(t *testing.T) {
 // what was done, is found by the next run and blocked; once a person has cleared it, the release
 // isn't tried again.
 func TestUpdateKilledAfterTheRevertIsBlockedAndNotRetried(t *testing.T) {
+	t.Parallel()
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.failCalls(`^compose start .* @` + updNew + `$`)

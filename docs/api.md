@@ -701,8 +701,10 @@ cookie:
 
 ### `POST /api/logout`
 
-Revokes the session the request carries. `204`, also without a session. It never expires the
-browser's session cookie: by the time the answer arrives, another tab may have signed in and
+Revokes the session the request carries. `204`, also without a session, unless the request names
+its account (`X-Taskto-Expected-User`, as the web app's does): that header's rules, the same on
+every `/api` route, come first, so without a session it is `401`, and with another account's
+session `409 session_account_changed`. It never expires the browser's session cookie: by the time the answer arrives, another tab may have signed in and
 replaced it, and an expiring cookie can't be limited to the session it was for. The revoked token
 is refused like any unknown one (`401`, which doesn't touch the cookie either), and the next login
 replaces it.
@@ -717,8 +719,9 @@ The session is then revoked only if it is the one the request carries. If the re
 another login that is still going on, nothing is revoked and the answer is
 `409 session_account_changed`: a sign-out tried again after its first answer was
 lost, from a page whose browser has signed in again since (the same account in another tab), never
-ends that newer login. A request whose login is over already (revoked, expired) has nothing to end,
-and is answered `204` whatever it names. The web app always names it.
+ends that newer login. A request whose login is over already (revoked, expired) has nothing to end:
+without the header it is answered `204` whatever it names; with it, `401`. The web app always names
+both the login and the account, and takes either answer as a sign-out done.
 
 ### `GET /api/me`
 
@@ -3868,8 +3871,8 @@ the payment; the link is a Stripe Checkout Session (the entry's `id_field` gets 
 expires within 24 hours. Without one the link is made all the same, and the payer stays on a
 confirmation page Stripe hosts after paying: the link is a Stripe Payment Link (`plink_…` id) that
 takes one payment and doesn't expire by itself, and the server's own pages are not used. Webhooks
-can't reach a server with no public URL, so there the paid status is to come from the server asking
-Stripe (reconciliation polling, not built yet); until then the record is not marked paid by itself.
+can't reach a server with no public URL, so there the paid status comes from the server asking
+Stripe ([reconciliation polling](integrations.md#reconciliation-polling), always on).
 
 **Other failures**: `integration_credentials_refused` (the provider didn't accept the key),
 `integration_provider_refused` (it refused the request, for good) and

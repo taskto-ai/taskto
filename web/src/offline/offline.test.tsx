@@ -26,6 +26,7 @@ import { LogoutGuard } from './LogoutGuard'
 import { itemsOf } from './local'
 import { OfflinePanel } from './OfflinePanel'
 import { OfflineApp as OfflineAppView } from './OfflineShell'
+import { recordSignOut, settleSignOut } from './pendingSignOut'
 import { revalidate } from './revalidate'
 import {
   activate,
@@ -1338,7 +1339,7 @@ test('a tab told that another account is signed in lets go of the offline view a
   await queue(runtime.store, { description: 'Pat’s secret', amount: '1' }, download(7))
   // Another tab signs in as someone else.
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
-  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY }))
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
   expect(runtimeState()).toMatchObject({ runtime: null, problem: 'account' })
   // Its connection to the database is closed, and the engine stopped.
   await waitFor(() => expect(runtime.store.listItems()).rejects.toThrow())
@@ -1346,11 +1347,11 @@ test('a tab told that another account is signed in lets go of the offline view a
   await activate(7, 'Pat')
   expect(runtimeState().runtime?.user).toBe(7)
   window.localStorage.removeItem(LAST_KEY)
-  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY }))
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
   expect(runtimeState()).toMatchObject({ runtime: null, problem: 'account' })
   // The same account signing in again (the marker is this tab's) changes nothing here.
   await activate(7, 'Pat')
-  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY }))
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
   expect(runtimeState().runtime?.user).toBe(7)
 })
 
@@ -1562,7 +1563,7 @@ test('an account that signs in while another one’s database is still opening i
   await waitFor(() => expect(opening).toHaveBeenCalledWith(7))
   // Another tab signs in as Bob meanwhile: this tab has no runtime yet to hear it with.
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
-  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY }))
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
   held.open()
   expect(await attempt).toMatchObject({ runtime: null, problem: 'account' })
   expect(runtimeState().runtime).toBeNull()
@@ -1658,7 +1659,7 @@ test('a database found empty is marked as it is deleted: a stale tab can no long
   const runtime = runtimeState().runtime
   if (!runtime) throw new Error('no runtime')
   const stale = await OfflineStore.open(7)
-  expect(await settle(7)).toEqual([])
+  expect(await settle(7)).toEqual({ left: [], unreadable: false })
   // The record is refused, so the person is told it was not saved, never that it was.
   const item: Omit<OutboxItem, 'seq' | 'version'> = {
     kind: 'insert',
@@ -1805,4 +1806,39 @@ test('a tab that finds another sending waits the retry delay, even when an item�
   } finally {
     Reflect.deleteProperty(navigator, 'locks')
   }
+})
+
+test('a sign-out that becomes certain between two photos stops the send before the next photo goes up', async () => {
+  const store = await openStore()
+  const photoDefinition: OfflineApp['definition'] = {
+    ...definition,
+    collection: {
+      fields: [{ name: 'description', type: 'string' }, { name: 'photos', type: 'attachment', max_files: 2 } as never],
+    },
+  }
+  const d = download(7, { definition: photoDefinition })
+  await store.putDownload(d)
+  const transport = offlineTransport(idle(store), d)
+  const photos = [transport.photos.stage(blob('one', 'image/png')), transport.photos.stage(blob('two', 'image/png'))]
+  await transport.act(press('add_expense', { description: 'Receipts', photos }))
+  const calls = fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  let uploads = 0
+  const upload = vi.fn(async (_base: string, _field: string, file: Blob) => {
+    uploads++
+    // The person signs out (in this tab or another) while the first photo goes up.
+    recordSignOut(7, 's1', false, new Map())
+    return {
+      id: String(uploads).padStart(32, '0'),
+      field: 'photos',
+      status: 'ready' as const,
+      size: file.size,
+      received: file.size,
+      attached: false,
+    }
+  })
+  await engineOf(store, clock(), { upload }).run()
+  // The second photo is not sent as the person who is leaving, and neither is the record.
+  expect(uploads).toBe(1)
+  expect(calls.filter((c) => c.path === `${base}/actions`)).toHaveLength(0)
+  settleSignOut(7)
 })

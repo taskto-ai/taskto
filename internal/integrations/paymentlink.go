@@ -683,6 +683,8 @@ type ref struct {
 	// paidObjectID and paymentID are what the verified event that paid the ref said: the provider's
 	// object the payment arrived on and the payment itself (apply.go), empty until then.
 	paidObjectID, paymentID string
+	// polls counts the reads the reconciliation polling made of the ref's object (poll.go).
+	polls int
 }
 
 // newLink is what the provider is asked for under key a: the key's token, the ref's money and the
@@ -702,13 +704,13 @@ func (r ref) link() paylink.Link {
 // refColumns are integration_refs' own, so a query of that table alone reads a ref.
 const refColumns = `id, token, integration_id, app_id, record_id, slot, coalesce(provider_object_id, ''), coalesce(url, ''),
 	amount_minor, currency, key_seq, state, created_at, account_id, account_mode, success_url, cancel_url,
-	coalesce(paid_object_id, ''), coalesce(payment_id, '')`
+	coalesce(paid_object_id, ''), coalesce(payment_id, ''), polls`
 
 func scanRef(row interface{ Scan(...any) error }) (ref, error) {
 	var r ref
 	err := row.Scan(&r.id, &r.token, &r.integrationID, &r.appID, &r.recordID, &r.slot, &r.objectID, &r.url,
 		&r.amountMinor, &r.currency, &r.keySeq, &r.state, &r.createdAt, &r.accountID, &r.accountMode, &r.successURL, &r.cancelURL,
-		&r.paidObjectID, &r.paymentID)
+		&r.paidObjectID, &r.paymentID, &r.polls)
 	return r, err
 }
 

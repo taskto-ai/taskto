@@ -9,7 +9,10 @@
 // One browser has at most one subscription. This module keeps a small flag in localStorage that
 // says which person turned it on, so a browser doesn't hand its push endpoint to whoever signs in
 // next: the subscription is removed when the person signs out (the server removes it with the
-// session as well), and re-registered at the next start only for the same person.
+// session as well), and re-registered at the next start only for the same person. While that person
+// turns it off, the flag says so (`off:<id>`) from before the server is asked: a tab closed in the
+// middle then leaves push shown off, and never registered again, once the server has forgotten
+// the device.
 //
 // Every step here waits (the worker, the browser's prompt, the push service, the server), and the
 // person can sign out, or someone else sign in, meanwhile. So each request names the account it is
@@ -34,6 +37,17 @@ export type PushState =
 const FLAG = 'taskto.push'
 const KEY_PATH = '/api/me/push/key'
 const SUBSCRIPTION_PATH = '/api/me/push/subscription'
+
+const TURNING_OFF = 'off:'
+
+// Whose the flag is: the person who turned push on, or who is turning it off. A turn-off's marker is
+// its own (`off:<id>:<turn>:<base>`) and carries the flag as it was before any turn-off began
+// (`base`): one that fails puts that back, and only while the marker is still its own, so it never
+// undoes another tab's turn-off, nor brings back the marker of one that is over.
+const ownerOf = (flag: string | null) =>
+  flag?.startsWith(TURNING_OFF) ? flag.slice(TURNING_OFF.length).split(':')[0] : flag
+const baseOf = (flag: string | null): string | null =>
+  flag?.startsWith(TURNING_OFF) ? flag.slice(TURNING_OFF.length).split(':')[2] || null : flag
 
 function read(): string | null {
   try {
@@ -106,51 +120,58 @@ function withPushLock<T>(work: () => Promise<T>): Promise<T> {
 }
 
 // The unsubscribes of this browser's subscription that are going on, in any tab: each one's own
-// entry, written before it starts and removed when the browser has answered. An entry is taken to be
-// over after a while (UNSUBSCRIBE_UNRESOLVED_MS), so a tab closed in the middle doesn't hold push off
-// for good.
-const UNSUBSCRIBING = 'taskto.push-unsubscribing'
+// key (`UNSUBSCRIBING:<id>`, holding when it began), written before it starts and removed when the
+// browser has answered. A key of its own, so no tab ever writes back another's mark from what it
+// read before (two tabs at once, without Web Locks to order them). A mark is taken to be over after a
+// while (UNSUBSCRIBE_UNRESOLVED_MS), so a tab closed in the middle doesn't hold push off for good.
+const UNSUBSCRIBING = 'taskto.push-unsubscribing:'
 const UNSUBSCRIBE_UNRESOLVED_MS = 60_000
 
-function unsubscribing(): { id: string; at: number }[] {
-  try {
-    const list = JSON.parse(localStorage.getItem(UNSUBSCRIBING) ?? '[]') as unknown
-    return Array.isArray(list)
-      ? list.filter(
-          (e): e is { id: string; at: number } =>
-            !!e &&
-            typeof e.id === 'string' &&
-            typeof e.at === 'number' &&
-            Date.now() - e.at < UNSUBSCRIBE_UNRESOLVED_MS,
-        )
-      : []
-  } catch {
-    return []
-  }
-}
-
-function setUnsubscribing(list: { id: string; at: number }[]) {
-  try {
-    if (list.length === 0) localStorage.removeItem(UNSUBSCRIBING)
-    else localStorage.setItem(UNSUBSCRIBING, JSON.stringify(list))
-  } catch {
-    // Not kept: where storage is refused, Web Locks (or this tab's chain) still order the changes.
-  }
-}
+// The turn-offs going on, in any tab: each one's own mark, the same way (a turn-off that fails puts
+// push back only when no other is still on its way).
+const TURNING_OFF_MARK = 'taskto.push-turning-off:'
 
 // Whether an unsubscribe of the browser's subscription isn't resolved yet, in this tab or another.
-function unsubscribeUnresolved(): boolean {
-  return unsubscribing().length > 0
+const unsubscribeUnresolved = () => freshMarks(UNSUBSCRIBING)
+
+// Whether a mark under `prefix` is still fresh. Marks that are over (a tab closed in the middle) or
+// that hold no time are removed as they are found.
+function freshMarks(prefix: string): boolean {
+  let unresolved = false
+  try {
+    const over: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key?.startsWith(prefix)) continue
+      const raw = localStorage.getItem(key)
+      const at = raw === null || raw.trim() === '' ? Number.NaN : Number(raw)
+      if (Number.isFinite(at) && Math.abs(Date.now() - at) < UNSUBSCRIBE_UNRESOLVED_MS) unresolved = true
+      else over.push(key)
+    }
+    for (const key of over) localStorage.removeItem(key)
+  } catch {
+    // Nothing kept: where storage is refused, Web Locks (or this tab's chain) still order the changes.
+  }
+  return unresolved
+}
+
+function mark(key: string, on: boolean) {
+  try {
+    if (on) localStorage.setItem(key, String(Date.now()))
+    else localStorage.removeItem(key)
+  } catch {
+    // Not kept: as above.
+  }
 }
 
 // Ends the subscription, marked as going on until the browser answers. True when it ended.
 async function unsubscribe(sub: PushSubscription): Promise<boolean> {
-  const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-  setUnsubscribing([...unsubscribing(), { id, at: Date.now() }])
+  const key = `${UNSUBSCRIBING}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  mark(key, true)
   try {
     return await sub.unsubscribe()
   } finally {
-    setUnsubscribing(unsubscribing().filter((e) => e.id !== id))
+    mark(key, false)
   }
 }
 
@@ -182,7 +203,8 @@ export async function pushState(install: Pick<InstallInfo, 'platform' | 'install
   const reg = await registration()
   if (!reg) return 'unsupported' // no worker (a development server, a failed registration): nothing shows a push
   const sub = await reg.pushManager.getSubscription()
-  return sub && Notification.permission === 'granted' && read() !== null ? 'on' : 'off'
+  const flag = read()
+  return sub && Notification.permission === 'granted' && flag !== null && !flag.startsWith(TURNING_OFF) ? 'on' : 'off'
 }
 
 /** Thrown by enablePush when the person said no. */
@@ -275,7 +297,7 @@ async function registerFor(userId: number, reg: ServiceWorkerRegistration, s: Re
 // begun here, or the flag names another account. Asked at the moment a subscription would be ended.
 function someoneElses(userId: number): boolean {
   const signedIn = sessionUser()
-  const flag = read()
+  const flag = ownerOf(read())
   return (signedIn !== null && signedIn !== userId) || (flag !== null && flag !== String(userId))
 }
 
@@ -305,17 +327,48 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
   const before = read()
   const sub = s.check(await (await registration())?.pushManager.getSubscription())
   if (sub) {
-    await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint }, headers: forAccount(who) })
-    s.check(undefined)
-    // Asked at the moment it would be ended: another account (another tab, where the order of
-    // changes isn't kept) may have claimed the browser's subscription while the server answered.
-    // It is theirs then, with their flag; this account's turning off is done with the server's answer.
-    const now = read()
-    if (now !== null && now !== String(who) && now !== before) return
-    if (!(await unsubscribe(sub).catch(() => false))) throw new PushUnsubscribeFailed()
-    s.check(undefined)
+    // Turning off from here on, for every tab and the next start, until it is done or given up.
+    const turn = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+    // Scoped to the account: another account's turn-off, left by a tab that closed, decides nothing here.
+    const pending = `${TURNING_OFF_MARK}${who}:${turn}`
+    mark(pending, true)
+    write(`${TURNING_OFF}${who}:${turn}:${baseOf(before) ?? ''}`)
+    // This turn-off didn't happen: push is as it was before any turn-off began, unless another one is
+    // still on its way (it decides), or someone has the flag now (turned on, or off, since).
+    const giveUp = () => {
+      mark(pending, false)
+      const now = read()
+      if (now?.startsWith(TURNING_OFF) && ownerOf(now) === String(who) && !freshMarks(`${TURNING_OFF_MARK}${who}:`))
+        write(baseOf(before))
+    }
+    try {
+      try {
+        await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint }, headers: forAccount(who) })
+      } catch (e) {
+        // The server still knows the device.
+        giveUp()
+        throw e
+      }
+      s.check(undefined)
+      // Asked at the moment it would be ended: another account (another tab, where the order of
+      // changes isn't kept) may have claimed the browser's subscription while the server answered.
+      // It is theirs then, with their flag; this account's turning off is done with the server's answer.
+      const now = read()
+      if (now !== null && ownerOf(now) !== String(who)) return
+      if (!(await unsubscribe(sub).catch(() => false))) {
+        // The browser kept it: shown as it was, for the person to try again.
+        giveUp()
+        throw new PushUnsubscribeFailed()
+      }
+      s.check(undefined)
+    } finally {
+      mark(pending, false)
+    }
   }
-  write(null)
+  // Asked again after the waits: a flag another account wrote meanwhile (where nothing orders the
+  // changes) is theirs, and stays.
+  const now = read()
+  if (now === null || ownerOf(now) === String(who) || now === before) write(null)
 }
 
 /**
@@ -326,25 +379,29 @@ async function disableNow(who: number, s: ReturnType<typeof steps>): Promise<voi
  */
 //
 // It is part of the sign-out of `userId`, whose session is already over here (session.ts): the
-// request names them, so it can't remove the device of someone who signed in since.
-export async function leavePush(userId: number): Promise<void> {
+// request names them, so it can't remove the device of someone who signed in since. `still` says
+// whether the sign-out is still the one of the browser's login: a newer login of the same account,
+// started in another tab while this waits, has the subscription from then on.
+export async function leavePush(userId: number, still: () => boolean = () => true): Promise<void> {
   if (!pushSupported()) return
   // The sign-out this is part of: once another session has begun here, or someone else turned push
-  // on (the flag names them), this browser's subscription is theirs, and is left alone. That is
-  // checked again at the moment it would be ended, since the browser is shared by its tabs.
+  // on (the flag names them), or a newer login of the account started, this browser's subscription
+  // is theirs, and is left alone. That is checked again at the moment it would be ended, since the
+  // browser is shared by its tabs.
   const mine = sameSession()
+  const ours = () => mine() && still()
   const theirs = () => {
-    const flag = read()
+    const flag = ownerOf(read())
     return flag !== null && flag !== String(userId)
   }
-  if (!theirs()) write(null)
+  if (!theirs() && still()) write(null)
   const leave = () =>
     withPushLock(async () => {
       // Its turn may come after another account's claim failed and gave the flag back to this one:
       // the sign-out has the last word on it, unless a session began here since.
-      if (!theirs() && mine()) write(null)
+      if (!theirs() && ours()) write(null)
       const sub = await (await registration())?.pushManager.getSubscription()
-      if (!sub || !mine() || theirs()) return
+      if (!sub || !ours() || theirs()) return
       await unsubscribe(sub).catch(() => {})
     })
   // Bounded: signing out never waits long on a browser that is slow to answer. What is still on
@@ -375,9 +432,13 @@ async function syncNow(userId: number): Promise<boolean> {
   // The session ended while the browser answered: this device is the next person's to decide.
   if (!s.ok()) return false
   if (!sub || Notification.permission !== 'granted') {
-    write(null)
+    // Only while the flag is still this person's (another tab may have changed it meanwhile).
+    if (read() === String(userId)) write(null)
     return false
   }
+  // Asked again after the browser answered: another tab (where nothing orders the changes) may have
+  // begun turning push off meanwhile. Then it is not registered again here.
+  if (read() !== String(userId) || unsubscribeUnresolved()) return false
   await api(SUBSCRIPTION_PATH, { method: 'PUT', body: subscriptionBody(sub), headers: forAccount(userId) }).catch(
     () => {},
   )

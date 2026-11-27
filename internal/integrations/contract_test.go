@@ -68,8 +68,11 @@ type paymentsFixture struct {
 	// Creds are the integration's: its API key, and the webhook secret the fake signs with.
 	Creds  Credentials
 	Shapes []linkShape
-	// Now is the clock the fake signs and stamps with, and the one verification is told.
-	Now func() time.Time
+	// Now is the clock the fake signs and stamps with, and the one verification is told. Later moves it
+	// forward; it is required of an adapter that polls (PaymentPoller), whose answers must be dated by
+	// the provider's clock and not the reader's.
+	Now   func() time.Time
+	Later func(d time.Duration)
 	// Tolerance is how far a signature's time may be from now, in either direction.
 	Tolerance time.Duration
 	// OtherSecret is a second webhook secret of the provider's format that isn't the integration's.
@@ -183,6 +186,7 @@ var paymentsContractCases = []contractCase{
 	{"an expiry is one expired event with the ref's token", contractNormalizeExpired},
 	{"a refund is one refunded event of what has been refunded so far, found through the payment", contractNormalizeRefund},
 	{"what the adapter doesn't act on, and what isn't ours, is not an event", contractNormalizeIgnored},
+	{"a payment read back is dated when it was made, as its webhook event is, not when it was read", contractReadPaidAt},
 	{"a body that isn't an event is not an event", contractNormalizeGarbage},
 }
 
@@ -844,6 +848,70 @@ func contractNormalizeGarbage(_ context.Context, fx *paymentsFixture) error {
 	} {
 		if ev, ok := fx.Provider.Normalize(body); ok {
 			return failf("%s is an event: %+v", name, ev)
+		}
+	}
+	return nil
+}
+
+// poller is the fixture's adapter as a PaymentPoller, or false for an adapter that doesn't poll (its
+// cases then have nothing to check). One that polls needs a fixture that can move the provider's clock.
+func (fx *paymentsFixture) poller() (PaymentPoller, bool, error) {
+	p, ok := fx.Provider.(PaymentPoller)
+	if ok && fx.Later == nil {
+		return nil, false, failf("the adapter polls, and the fixture can't move the provider's clock (Later)")
+	}
+	return p, ok, nil
+}
+
+// readGap is how long after a payment a poll reads it in contractReadPaidAt: across midnight, as the
+// failure it guards against was (a payment at 23:59:30 found at 00:00:10).
+const readGap = 40 * time.Second
+
+func contractReadPaidAt(ctx context.Context, fx *paymentsFixture) error {
+	poller, ok, err := fx.poller()
+	if !ok {
+		return err
+	}
+	for _, sh := range fx.Shapes {
+		l, _, err := fx.made(ctx, sh)
+		if err != nil {
+			return err
+		}
+		fx.Later(time.Minute)
+		paidAt := fx.Now().Truncate(time.Second) // providers say whole seconds
+		ds, err := fx.Pay(l, sh)
+		if err != nil {
+			return err
+		}
+		fx.Later(readGap)
+		obs, err := poller.ReadPayment(ctx, fx.Creds, fx.Client, !sh.Pages, l.ObjectID)
+		if err != nil {
+			return failf("%s: reading a paid link: %w", sh.Name, err)
+		}
+		if len(obs.Payments) != 1 {
+			return failf("%s: a read of a link paid once found %d payments", sh.Name, len(obs.Payments))
+		}
+		got := obs.Payments[0].PaidAt
+		if got.IsZero() {
+			return failf("%s: the read says no time of the payment, though the provider says one", sh.Name)
+		}
+		if !got.Equal(paidAt) {
+			return failf("%s: the payment made at %v and read at %v is dated %v", sh.Name, paidAt, fx.Now(), got)
+		}
+		if !sh.PaymentCarriesToken {
+			continue
+		}
+		// The very time its webhook event carries: a payment told both ways is dated once.
+		evs, err := fx.normalized(ds)
+		if err != nil {
+			return err
+		}
+		paid, err := oneOf(evs, EventPaymentSucceeded)
+		if err != nil {
+			return failf("%s: %w", sh.Name, err)
+		}
+		if !paid.OccurredAt.Equal(got) {
+			return failf("%s: the webhook's event is dated %v, the read %v", sh.Name, paid.OccurredAt, got)
 		}
 	}
 	return nil

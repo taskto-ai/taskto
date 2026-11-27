@@ -826,6 +826,11 @@ func TestAPaymentOfAnotherAmountIsNotAppliedAndTheAdminIsTold(t *testing.T) {
 		t.Fatalf("a payment of the wrong amount changed the record: %+v", after)
 	}
 	// Money that arrives is never silently dropped: the admins are told, and bob, who is no admin, isn't.
+	// The notices are an outbox of the event's end, written by the event worker after it settles the
+	// event: they are waited for, and none may be left owed.
+	s.eventually("the admin has a notice of each failed event", func() bool {
+		return s.scalar(`SELECT count(*) FROM integration_event_notices`) == 0
+	})
 	if n := s.scalar(`SELECT count(*) FROM notifications WHERE kind = 'integration_event' AND user_id = ?`, s.alice.id); n != 2 {
 		t.Fatalf("the admin has %d notices", n)
 	}

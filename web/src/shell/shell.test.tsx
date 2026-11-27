@@ -1420,7 +1420,12 @@ for (const ending of ['logs out', 'loses the session', 'is replaced from another
       // Another tab signs the second person in: this one's session is over, without a database too.
       act(() => {
         localStorage.setItem('taskto:offline-last', JSON.stringify({ id: 2, name: 'Second' }))
-        window.dispatchEvent(new StorageEvent('storage', { key: 'taskto:offline-last' }))
+        window.dispatchEvent(
+          new StorageEvent('storage', {
+            key: 'taskto:offline-last',
+            newValue: localStorage.getItem('taskto:offline-last'),
+          }),
+        )
       })
       expect(await screen.findByText('The account changed')).toBeTruthy()
     }

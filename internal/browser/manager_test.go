@@ -28,11 +28,20 @@ func TestMain(m *testing.M) {
 	case "xvfb":
 		// The display number on -displayfd, then run until stopped.
 		_, _ = os.NewFile(3, "displayfd").WriteString("7\n")
-		select {}
+		runUntilStopped()
 	case "x11vnc":
-		select {}
+		runUntilStopped()
 	}
 	os.Exit(m.Run())
+}
+
+// runUntilStopped blocks until the process is signalled. Not with select {}: in a process with
+// no other goroutine the runtime takes that for a deadlock and exits at once, so the fake would
+// sometimes end before the Manager stops it. A sleeping goroutine is never a deadlock.
+func runUntilStopped() {
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 
 func fakeChromium(logPath string) {
