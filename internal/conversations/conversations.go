@@ -15,7 +15,7 @@ import (
 type Runtime interface {
 	CreateConversationOn(ctx context.Context, model agentrt.ModelRef) (int64, error)
 	Submit(ctx context.Context, conversation int64, in agentrt.Input) (int64, error)
-	Continue(ctx context.Context, conversation int64, model agentrt.ModelRef, afterEntry int64) (int64, error)
+	Continue(ctx context.Context, conversation int64, model agentrt.ModelRef, afterEntry int64) (int64, agentrt.ModelRef, error)
 	Note(ctx context.Context, conversation int64, n agentrt.NoteInput) (int64, error)
 	Wait(ctx context.Context, submission int64) (agentrt.Settled, error)
 	Messages(ctx context.Context, conversation int64) ([]agentrt.Message, error)
@@ -59,6 +59,7 @@ type Service struct {
 
 	mu      sync.Mutex
 	streams map[int64]int
+	guards  map[int64]*guard
 
 	readyWait     time.Duration
 	exportTimeout time.Duration
@@ -72,7 +73,7 @@ type Service struct {
 func New(sqlDB *sql.DB, agent Agent) *Service {
 	closing, end := context.WithCancel(context.Background())
 	return &Service{
-		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{},
+		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{}, guards: map[int64]*guard{},
 		readyWait: 5 * time.Second, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
 		maxStreams: 16,
 	}
@@ -92,6 +93,31 @@ func (s *Service) openStream(user int64) (func(), bool) {
 			delete(s.streams, user)
 		}
 	}, true
+}
+
+type guard struct {
+	sync.Mutex
+	users int
+}
+
+func (s *Service) lock(id int64) func() {
+	s.mu.Lock()
+	g := s.guards[id]
+	if g == nil {
+		g = &guard{}
+		s.guards[id] = g
+	}
+	g.users++
+	s.mu.Unlock()
+	g.Lock()
+	return func() {
+		g.Unlock()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if g.users--; g.users == 0 {
+			delete(s.guards, id)
+		}
+	}
 }
 
 func (s *Service) EndStreams() { s.endStreams() }

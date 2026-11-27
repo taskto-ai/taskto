@@ -466,15 +466,15 @@ func egressOf(cfg config.Config) providers.Egress {
 }
 
 func runnableModels(p *providers.Service, cli *cliaccounts.Service) conversations.Models {
-	return func(ctx context.Context, workspace, user int64) ([]providers.Choice, error) {
-		all, err := p.Choices(ctx, workspace, user)
+	return func(ctx context.Context, pr conversations.Principal) ([]providers.Choice, error) {
+		all, err := p.Choices(ctx, pr.Workspace, pr.User)
 		if err != nil {
 			return nil, err
 		}
 		out := make([]providers.Choice, 0, len(all))
 		for _, c := range all {
 			if c.Scope == providers.ScopeCLI {
-				models, err := cli.RunnableModels(ctx, workspace, user, cliworker.CLI(strings.TrimPrefix(c.Provider, providers.CLIProviderPrefix)), c.Models)
+				models, err := cli.RunnableModels(ctx, pr, cliworker.CLI(strings.TrimPrefix(c.Provider, providers.CLIProviderPrefix)), c.Models)
 				if err != nil {
 					return nil, err
 				}

@@ -263,6 +263,9 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Title = &title
 	}
+	if req.Archived != nil && *req.Archived {
+		defer s.lock(c.ID)()
+	}
 	user, workspace := caller(r)
 	c, err := s.update(r.Context(), workspace, user, c.ID, req.Title, req.Archived, req.CLIPermissions)
 	if errors.Is(err, errNotFound) {
@@ -342,30 +345,36 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 }
 
 type SubmissionReply struct {
-	SubmissionID int64 `json:"submission_id"`
+	SubmissionID int64    `json:"submission_id"`
+	Model        modelRef `json:"model"`
 }
 
 type ContinueModels struct {
 	Providers []providers.Choice `json:"providers"`
 }
 
-type Models func(ctx context.Context, workspace, user int64) ([]providers.Choice, error)
+type Models func(ctx context.Context, p Principal) ([]providers.Choice, error)
 
 func (s *Service) SetContinueModels(m Models) { s.models = m }
 
-func (s *Service) runnableModels(ctx context.Context, user, workspace int64) ([]providers.Choice, error) {
+func (s *Service) runnableModels(ctx context.Context, p Principal) ([]providers.Choice, error) {
 	if s.models == nil {
 		return []providers.Choice{}, nil
 	}
-	return s.models(ctx, workspace, user)
+	return s.models(ctx, p)
+}
+
+func principalOf(r *http.Request, c Conversation) Principal {
+	user, _ := caller(r)
+	return Principal{Conversation: c.ID, AgentConversation: c.agentID, Workspace: c.WorkspaceID, User: user}
 }
 
 func (s *Service) handleContinueModels(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.writable(w, r); !ok {
+	c, ok := s.writable(w, r)
+	if !ok {
 		return
 	}
-	user, workspace := caller(r)
-	choices, err := s.runnableModels(r.Context(), user, workspace)
+	choices, err := s.runnableModels(r.Context(), principalOf(r, c))
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -373,9 +382,8 @@ func (s *Service) handleContinueModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ContinueModels{Providers: choices})
 }
 
-func (s *Service) runnable(w http.ResponseWriter, r *http.Request, m agentrt.ModelRef) bool {
-	user, workspace := caller(r)
-	choices, err := s.runnableModels(r.Context(), user, workspace)
+func (s *Service) runnable(w http.ResponseWriter, r *http.Request, p Principal, m agentrt.ModelRef) bool {
+	choices, err := s.runnableModels(r.Context(), p)
 	if err != nil {
 		serverError(w, r, err)
 		return false
@@ -418,14 +426,19 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.runnable(w, r, model) || !s.stillWritable(w, r) {
-		return
-	}
 	if err := s.ensureUsageMark(r.Context(), rt, c.ID, c.agentID); err != nil {
 		conversationError(w, r, c, err)
 		return
 	}
-	sub, err := rt.Continue(r.Context(), c.agentID, model, req.AfterEntry)
+	p := principalOf(r, c)
+	if !s.runnable(w, r, p, model) {
+		return
+	}
+	defer s.lock(c.ID)()
+	if !s.stillWritable(w, r) {
+		return
+	}
+	sub, admitted, err := rt.Continue(r.Context(), c.agentID, model, req.AfterEntry)
 	if err != nil {
 		conversationError(w, r, c, err)
 		return
@@ -433,10 +446,9 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	if err := s.touch(context.WithoutCancel(r.Context()), c.ID, c.agentID); err != nil {
 		slog.WarnContext(r.Context(), "conversations: marking a conversation updated", "conversation", c.ID, "err", err)
 	}
-	user, _ := caller(r)
-	s.markWhenSettled(rt, Principal{Conversation: c.ID, AgentConversation: c.agentID, Workspace: c.WorkspaceID, User: user}, model.Provider, sub)
-	slog.InfoContext(r.Context(), "conversation continued", "conversation", c.ID, "provider", model.Provider, "by", user)
-	writeJSON(w, http.StatusAccepted, SubmissionReply{SubmissionID: sub})
+	s.markWhenSettled(rt, p, admitted.Provider, sub)
+	slog.InfoContext(r.Context(), "conversation continued", "conversation", c.ID, "provider", admitted.Provider, "by", p.User)
+	writeJSON(w, http.StatusAccepted, SubmissionReply{SubmissionID: sub, Model: modelRef{Provider: admitted.Provider, ModelID: admitted.ModelID}})
 }
 
 func (s *Service) handleMessages(w http.ResponseWriter, r *http.Request) {

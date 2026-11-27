@@ -545,6 +545,11 @@ export type Conversation = {
   cli_permissions: string
 }
 
+export type ConversationsModelRef = {
+  provider: string
+  model_id: string
+}
+
 export type DeletionReply = {
   purge_at: string
 }
@@ -911,6 +916,7 @@ export type SpaceIntegration = {
 
 export type SubmissionReply = {
   submission_id: number
+  model: ConversationsModelRef
 }
 
 export type Token = {

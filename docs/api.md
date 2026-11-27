@@ -5729,8 +5729,7 @@ archived conversation.
 The models a continue may name, for the owner of the conversation, now: `{"providers": [...]}`
 in the shape of `GET …/models`, with the CLI models only where the caller has an account that can
 run them (a connected account of their own, or one of the workspace's shared accounts, as the
-member's account mode allows; a shared account an admin pinned to one model offers only that model, the one its turns run on). The list is the one `continue` checks, so a model that is not in
-it is refused there. `404` for a conversation the caller doesn't own, `409
+member's account mode allows). It is worked out for this conversation with the account choice its next turn will make, the same code: a conversation that keeps its last account (account switching on) is offered what that account runs, and a shared account an admin pinned to one model offers only that model. The list is the one `continue` checks, so a model that is not in it is refused there. `404` for a conversation the caller doesn't own, `409
 conversation_archived` for an archived one.
 
 ### `POST /api/workspaces/{workspace}/conversations/{conversation}/continue`
@@ -5740,16 +5739,14 @@ model's provider refused it, for a limit or an overload), on the model the body 
 be the one it already has. The body names a model from `continue-models` and the last entry, for example `{"model": {"provider": "cli-claude", "model_id": "default"}, "after_entry": 42}`:
 the model is the one the run answers on, written together with the run's admission, so no other
 model write can come between them, and `after_entry` is the id of the conversation's last entry
-as the caller saw it, the failed reply the caller is continuing. `202 {"submission_id": 12}`; the
-answer arrives through the events stream. Only the conversation's owner, and only while the
+as the caller saw it, the failed reply the caller is continuing. `202 {"submission_id": 12, "model": {"provider": "script", "model_id": "script-1"}}`, where `model` is the one the run was admitted on, which the web app shows; the
+answer arrives through the events stream. The run keeps that model until it ends: a `PUT …/model` meanwhile is refused with `409 conversation_busy`, a CLI turn of the run is refused when its account choice no longer runs that model, and it is not moved to another account by a usage limit. Only the conversation's owner, and only while the
 conversation is idle: `409 conversation_busy` while it works (a continue never queues, and a
 refused one leaves the running work's model alone), `409 conversation_moved` when the conversation
-has entries after `after_entry` (a continue that was already accepted, or a reply that arrived
-meanwhile: nothing is started), `409 model_unavailable` for a model that `continue-models` doesn't
+has entries after `after_entry`, or an earlier continue already took that entry, even one that added nothing, such as one that was stopped (nothing is started), `409 model_unavailable` for a model that `continue-models` doesn't
 offer now, `400` for a missing or malformed body or a model the caller may not use, `409
 conversation_archived` for an archived one, `404` for one the caller doesn't own or that doesn't
-exist. Like a message, it checks access and the archive again just before passing the request to
-the agent runtime. The web app offers it, with the models of `continue-models`, on a failed last
+exist. The archive is checked again, under a lock an archiving request takes too, immediately before the request goes to the agent runtime, so no archive finishes between the check and the run's start. The web app offers it, with the models of `continue-models`, on a failed last
 reply, and keeps its buttons disabled once the request is accepted, until the stream shows the
 new run.
 

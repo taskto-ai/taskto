@@ -95,7 +95,10 @@ const choose = (label: string) => {
   if (!option) throw new Error(`no option ${label}`)
   fireEvent.change(select, { target: { value: option.value } })
 }
-const accepted = { status: 202, body: { submission_id: 5 } }
+const accepted = (call: Call) => ({
+  status: 202,
+  body: { submission_id: 5, model: (call.body as { model: unknown }).model },
+})
 
 test('a failed last reply offers to try again and to continue on another model', async () => {
   await show([asked, failed])
@@ -151,8 +154,8 @@ test('a model the server refuses is not shown as chosen, and the list is read ag
 test('a continue from a failure the conversation has moved past says so and can be tried again', async () => {
   let moved = true
   const calls = await show([asked, failed], {
-    [`POST ${BASE}/continue`]: () =>
-      moved ? { status: 409, body: { error: 'moved', code: 'conversation_moved' } } : accepted,
+    [`POST ${BASE}/continue`]: (call) =>
+      moved ? { status: 409, body: { error: 'moved', code: 'conversation_moved' } } : accepted(call),
   })
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   await waitFor(() =>
@@ -167,8 +170,8 @@ test('a continue from a failure the conversation has moved past says so and can 
 test('a conversation that is busy says so and can be tried again', async () => {
   let busy = true
   const calls = await show([asked, failed], {
-    [`POST ${BASE}/continue`]: () =>
-      busy ? { status: 409, body: { error: 'busy', code: 'conversation_busy' } } : accepted,
+    [`POST ${BASE}/continue`]: (call) =>
+      busy ? { status: 409, body: { error: 'busy', code: 'conversation_busy' } } : accepted(call),
   })
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   await waitFor(() => expect(note()).toBe('This conversation is working: try again when it has finished.'))
@@ -181,9 +184,9 @@ test('a conversation that is busy says so and can be tried again', async () => {
 test('a second click while the first continue is in flight sends nothing more', async () => {
   let release: () => void = () => {}
   const calls = await show([asked, failed], {
-    [`POST ${BASE}/continue`]: () =>
+    [`POST ${BASE}/continue`]: (call) =>
       new Promise((done) => {
-        release = () => done(accepted)
+        release = () => done(accepted(call))
       }),
   })
   const button = screen.getByRole('button', { name: 'Try again' })
@@ -223,9 +226,9 @@ test('a sign-out while the continue is in flight does not mark the model as chos
   beginSession(1)
   let release: () => void = () => {}
   const calls = await show([asked, failed], {
-    [`POST ${BASE}/continue`]: () =>
+    [`POST ${BASE}/continue`]: (call) =>
       new Promise((done) => {
-        release = () => done(accepted)
+        release = () => done(accepted(call))
       }),
   })
   choose('Scripted: T')
@@ -239,9 +242,9 @@ test('a sign-out while the continue is in flight does not mark the model as chos
 test('the model picker is disabled while a continue is in flight, so its model is the one shown', async () => {
   let release: () => void = () => {}
   const calls = await show([asked, failed], {
-    [`POST ${BASE}/continue`]: () =>
+    [`POST ${BASE}/continue`]: (call) =>
       new Promise((done) => {
-        release = () => done(accepted)
+        release = () => done(accepted(call))
       }),
   })
   const picker = (await screen.findByLabelText('Model')) as HTMLSelectElement
@@ -252,4 +255,34 @@ test('the model picker is disabled while a continue is in flight, so its model i
   await act(async () => release())
   await waitFor(() => expect(picker.disabled).toBe(false))
   expect(picker.value).toBe(JSON.stringify(['script', 't']))
+})
+
+test('after a model chosen in the picker, a continue on another model is what the picker shows', async () => {
+  const calls = await show([asked, failed], {
+    [`PUT ${BASE}/model`]: (call) => ({ body: call.body }),
+    [`POST ${BASE}/continue`]: accepted,
+  })
+  const picker = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  fireEvent.change(picker, { target: { value: JSON.stringify(['script', 't']) } })
+  await waitFor(() => expect(writes(calls)).toEqual([`PUT ${BASE}/model`]))
+  await waitFor(() => expect(picker.disabled).toBe(false))
+  expect(picker.value).toBe(JSON.stringify(['script', 't']))
+  choose('Scripted: S')
+  await waitFor(() =>
+    expect(continues(calls)).toEqual([{ model: { provider: 'script', model_id: 's' }, after_entry: 2 }]),
+  )
+  await waitFor(() => expect(picker.value).toBe(JSON.stringify(['script', 's'])))
+})
+
+test('the picker shows the model the server says the run was admitted on, not the one that was sent', async () => {
+  await show([asked, failed], {
+    [`POST ${BASE}/continue`]: {
+      status: 202,
+      body: { submission_id: 5, model: { provider: 'script', model_id: 's' } },
+    },
+  })
+  choose('Scripted: T')
+  const picker = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(picker.disabled).toBe(false))
+  expect(picker.value).toBe(JSON.stringify(['script', 's']))
 })

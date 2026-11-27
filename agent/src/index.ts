@@ -12,9 +12,11 @@ import {
   createRegistry,
   type EntryId,
   Harness,
+  LiveDoc,
   type SubmissionId,
 } from '@earendil-works/pi-durable'
 import { cliTools } from './cli.js'
+import { ContinuePin, pinHolds } from './continue.js'
 import { InputError, type NoteInput, noteEntry, parseNote } from './input.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
 import { Lifecycle } from './lifecycle.js'
@@ -328,17 +330,20 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       try {
         await conv.commit(async (tx) => {
           if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
-          if ((await tx.latestEntryId(conv.id)) !== afterEntry) {
+          const pin = await tx.doc(ContinuePin, conv.id)
+          if (afterEntry <= pin.consumed || (await tx.latestEntryId(conv.id)) !== afterEntry) {
             throw new HttpError(409, 'the conversation moved on', 'moved')
           }
           submissionId = await conv.submit(tx, { type: 'continue' })
+          pin.consumed = afterEntry
+          pin.submission = submissionId
           await configure(tx, conv.id, { model })
         }, context)
       } catch (error) {
         if (error instanceof ConversationBusy) throw new HttpError(409, 'the conversation is busy', 'busy')
         throw error
       }
-      return send(res, 202, { submissionId })
+      return send(res, 202, { submissionId, model })
     }
     if (req.method === 'POST' && action === 'note') {
       let note: NoteInput
@@ -405,6 +410,9 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       await testHooks.beforeModelWrite?.()
       await conv.commit(async (tx) => {
         if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
+        if (pinHolds(await tx.doc(ContinuePin, conv.id), await tx.doc(LiveDoc, conv.id))) {
+          throw new HttpError(409, 'a continued reply keeps its model until it ends', 'busy')
+        }
         await configure(tx, conv.id, { model })
       }, context)
       return send(res, 200, model)

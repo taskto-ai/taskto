@@ -99,6 +99,7 @@ type turnRequest struct {
 	Prompt  string         `json:"prompt"`
 	History []historyEntry `json:"history"`
 	Replay  bool           `json:"replay"`
+	Pinned  bool           `json:"pinned"`
 }
 
 type historyEntry struct {
@@ -146,32 +147,24 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 		return
 	}
 
-	c, refusal, err := s.pick(r.Context(), p, req.CLI)
+	d, err := s.decide(r.Context(), p, req.CLI)
 	if err != nil {
 		serverError(w, r, err)
 		return
 	}
 	switch {
-	case refusal != "":
-		fail(cliworker.StatusFailed, refusal)
+	case d.refusal != "":
+		fail(cliworker.StatusFailed, d.refusal)
 		return
-	case c.shared == nil && c.row.state == Reconnect:
+	case d.login:
 		out.write(cliworker.Event{Type: cliworker.EventLoginRequired, Text: req.CLI.Name() + " needs you to sign in again"})
 		fail(cliworker.StatusLoginRequired, req.CLI.Name()+" needs you to sign in again")
 		return
-	}
-	on, err := s.switchingOn(r.Context(), p.User)
-	if err != nil {
-		serverError(w, r, err)
+	case req.Pinned && !d.allows(req.CLI, req.Model):
+		fail(cliworker.StatusFailed, "the model this reply was continued on can't run now: choose another model and try again")
 		return
 	}
-	notice := ""
-	if on {
-		if c, notice, err = s.startChoice(r.Context(), p, req.CLI, c); err != nil {
-			serverError(w, r, err)
-			return
-		}
-	}
+	c, notice := d.c, d.notice
 	if req.Replay {
 		out.write(cliworker.Event{Type: cliworker.EventInterrupted, Text: "the previous run of this turn was interrupted by a restart; resuming"})
 	}
@@ -308,7 +301,7 @@ func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.P
 		nextID := chainID(id, n+1)
 		next, found := s.worker.FindTurn(nextID)
 		notice := s.switchNotice(nextID)
-		if !found && n < maxSwitches {
+		if !found && n < maxSwitches && !req.Pinned {
 			next, notice = s.switchAfter(ctx, out, p, req, t, res, id, nextID, tried)
 		}
 		if next == nil {
@@ -544,59 +537,52 @@ func (s *Service) pick(ctx context.Context, p conversations.Principal, cli cliwo
 	return choice{}, fmt.Sprintf("%s isn't connected: connect it in Settings → CLI accounts, then send the message again", cli.Name()), nil
 }
 
-func (s *Service) Runnable(ctx context.Context, workspace, user int64, cli cliworker.CLI) (bool, string, error) {
-	switch err := s.Usable(ctx); {
-	case errors.Is(err, ErrOff), errors.Is(err, ErrNoBoundary):
-		return false, "", nil
-	case err != nil:
-		return false, "", err
-	}
-	if s.worker == nil || !s.worker.Available(cli) {
-		return false, "", nil
-	}
-	mode, err := s.modeOf(ctx, workspace, user)
-	if err != nil {
-		return false, "", err
-	}
-	if mode.usesOwn() {
-		own, err := s.own(ctx, user, cli)
-		if err != nil {
-			return false, "", err
-		}
-		for _, r := range own {
-			if r.state == Connected {
-				return true, "", nil
-			}
-		}
-	}
-	if !mode.usesShared() {
-		return false, "", nil
-	}
-	shared, err := s.sharedAccounts(ctx, workspace, cli)
-	if err != nil || len(shared) == 0 {
-		return false, "", err
-	}
-	unusable, _, err := s.sharedUnusable(ctx)
-	if err != nil || unusable != "" {
-		return false, "", err
-	}
-	if err := s.byQueue(ctx, user, nil, shared); err != nil {
-		return false, "", err
-	}
-	return true, shared[0].Model, nil
+type decision struct {
+	c       choice
+	notice  string
+	refusal string
+	login   bool
 }
 
-func (s *Service) RunnableModels(ctx context.Context, workspace, user int64, cli cliworker.CLI, models []providers.ModelChoice) ([]providers.ModelChoice, error) {
-	ok, only, err := s.Runnable(ctx, workspace, user, cli)
-	if err != nil || !ok {
+func (s *Service) decide(ctx context.Context, p conversations.Principal, cli cliworker.CLI) (decision, error) {
+	c, refusal, err := s.pick(ctx, p, cli)
+	switch {
+	case err != nil:
+		return decision{}, err
+	case refusal != "":
+		return decision{refusal: refusal}, nil
+	case c.shared == nil && c.row.state == Reconnect:
+		return decision{c: c, login: true}, nil
+	}
+	on, err := s.switchingOn(ctx, p.User)
+	if err != nil || !on {
+		return decision{c: c}, err
+	}
+	c, notice, err := s.startChoice(ctx, p, cli, c)
+	return decision{c: c, notice: notice}, err
+}
+
+func (d decision) allows(cli cliworker.CLI, model string) bool {
+	return d.c.cli() == cli && (d.c.shared == nil || d.c.shared.Model == "" || d.c.shared.Model == model)
+}
+
+func (s *Service) RunnableModels(ctx context.Context, p conversations.Principal, cli cliworker.CLI, models []providers.ModelChoice) ([]providers.ModelChoice, error) {
+	switch err := s.Usable(ctx); {
+	case errors.Is(err, ErrOff), errors.Is(err, ErrNoBoundary):
+		return nil, nil
+	case err != nil:
 		return nil, err
 	}
-	if only == "" {
-		return models, nil
+	if s.worker == nil || !s.worker.Available(cli) {
+		return nil, nil
+	}
+	d, err := s.decide(ctx, p, cli)
+	if err != nil || d.refusal != "" || d.login {
+		return nil, err
 	}
 	var kept []providers.ModelChoice
 	for _, m := range models {
-		if m.ID == only {
+		if d.allows(cli, m.ID) {
 			kept = append(kept, m)
 		}
 	}

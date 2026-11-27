@@ -46,6 +46,8 @@ type fakeRuntime struct {
 	settle     chan struct{}
 	waited     atomic.Int64
 	waitErr    error
+	onEntries  func()
+	onContinue func()
 }
 
 var setupToken = auth.NewSetupToken()
@@ -86,15 +88,18 @@ type continueCall struct {
 	after int64
 }
 
-func (f *fakeRuntime) Continue(_ context.Context, conv int64, model agentrt.ModelRef, after int64) (int64, error) {
+func (f *fakeRuntime) Continue(_ context.Context, conv int64, model agentrt.ModelRef, after int64) (int64, agentrt.ModelRef, error) {
+	if f.onContinue != nil {
+		f.onContinue()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return 0, f.err
+		return 0, agentrt.ModelRef{}, f.err
 	}
 	f.resumed = append(f.resumed, continueCall{model, after})
 	f.resumes[conv]++
-	return int64(3000 + f.resumes[conv]), nil
+	return int64(3000 + f.resumes[conv]), model, nil
 }
 
 func (f *fakeRuntime) Note(_ context.Context, conv int64, n agentrt.NoteInput) (int64, error) {
@@ -169,6 +174,9 @@ func (f *fakeRuntime) Abort(ctx context.Context, conv int64) error {
 }
 
 func (f *fakeRuntime) Entries(_ context.Context, conv, before int64, limit int) (json.RawMessage, error) {
+	if f.onEntries != nil {
+		f.onEntries()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -340,7 +348,7 @@ func newEnv(t *testing.T, off bool) *env {
 		{Provider: "script", Name: "Scripted", Scope: providers.ScopeInstance, Models: []providers.ModelChoice{{ID: "script-1", Name: "Scripted"}}},
 		{Provider: "backup", Name: "Backup", Scope: providers.ScopeInstance, Models: []providers.ModelChoice{{ID: "b-1", Name: "B one"}}},
 	}
-	e.svc.SetContinueModels(func(context.Context, int64, int64) ([]providers.Choice, error) { return e.runnable, nil })
+	e.svc.SetContinueModels(func(context.Context, Principal) ([]providers.Choice, error) { return e.runnable, nil })
 	t.Cleanup(e.svc.EndStreams)
 	mux := http.NewServeMux()
 	a := auth.New(sqlDB, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})

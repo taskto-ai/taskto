@@ -122,7 +122,7 @@ export type Me = {
   session?: string
 }
 
-export type SubmissionReply = { submission_id: number }
+export type SubmissionReply = { submission_id: number; model: { provider: string; model_id: string } }
 
 export type ContinueChoice = {
   provider: string

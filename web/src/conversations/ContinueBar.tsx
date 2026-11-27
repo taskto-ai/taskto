@@ -37,9 +37,9 @@ export function ContinueBar({
     onPending(true)
     const same = sameSession()
     try {
-      await continueConversation(base, { model, after_entry: afterEntry })
+      const reply = await continueConversation(base, { model, after_entry: afterEntry })
       if (!same()) return
-      onChosen(model)
+      onChosen(reply.model)
       onContinued()
     } catch (e) {
       if (!same()) return

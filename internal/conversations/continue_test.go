@@ -2,9 +2,12 @@ package conversations
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/apierr"
@@ -215,7 +218,7 @@ func TestContinueRechecksTheArchiveAfterLookingUpTheModels(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()
 	c := owner.create(ws, nil)
-	e.svc.SetContinueModels(func(context.Context, int64, int64) ([]providers.Choice, error) {
+	e.svc.SetContinueModels(func(context.Context, Principal) ([]providers.Choice, error) {
 		if _, err := e.db.Exec(`UPDATE conversations SET archived_at = 'now' WHERE id = ?`, c.ID); err != nil {
 			t.Error(err)
 		}
@@ -239,5 +242,97 @@ func TestAContinuedRunIsCountedInUsage(t *testing.T) {
 	}
 	if !marked {
 		t.Fatal("a continue left the conversation without a usage mark, so its run's tokens are never counted")
+	}
+}
+
+func TestContinueRechecksTheArchiveAfterTheUsageLookup(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	clearUsageMark(t, e, c.ID)
+	e.rt.onEntries = func() {
+		if _, err := e.db.Exec(`UPDATE conversations SET archived_at = 'now' WHERE id = ?`, c.ID); err != nil {
+			t.Error(err)
+		}
+	}
+	owner.expect(http.StatusConflict, http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("script", "script-1", 7))
+	if got := e.continues(); len(got) != 0 {
+		t.Fatalf("the runtime was asked to continue an archive that came during the usage lookup: %+v", got)
+	}
+}
+
+func TestAnArchiveWaitsForAContinueThatPassedItsCheck(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	archived := make(chan struct{})
+	e.rt.onContinue = func() {
+		go func() {
+			owner.expect(http.StatusOK, http.MethodPatch, path(ws, fmt.Sprintf("/%d", c.ID)), map[string]any{"archived": true})
+			close(archived)
+		}()
+		select {
+		case <-archived:
+			t.Error("an archive finished while a continue that had passed its archive check was still being admitted")
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("script", "script-1", 7))
+	waitFor(t, "the archive to finish after the continue", func() bool {
+		select {
+		case <-archived:
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+func TestContinueAsksForTheModelsOfTheConversationItContinues(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	var asked []Principal
+	var mu sync.Mutex
+	e.svc.SetContinueModels(func(_ context.Context, p Principal) ([]providers.Choice, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		asked = append(asked, p)
+		return e.runnable, nil
+	})
+	owner.expect(http.StatusOK, http.MethodGet, path(ws, fmt.Sprintf("/%d/continue-models", c.ID)), nil)
+	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("script", "script-1", 7))
+	want := Principal{Conversation: c.ID, AgentConversation: c.agentIDForTest(t, e), Workspace: ws, User: owner.id}
+	if len(asked) != 2 || asked[0] != want || asked[1] != want {
+		t.Fatalf("the models were asked for %+v, want the conversation %+v each time", asked, want)
+	}
+}
+
+func TestAContinuedRunIsCountedInTheDailyUsageWhenItSettles(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	clearUsageMark(t, e, c.ID)
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: {json.RawMessage(`{"id":1,"kind":"pi.user","model":[{"role":"user","content":"hi"}]}`)}}
+	e.rt.settle = make(chan struct{})
+	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("script", "script-1", 1))
+	e.rt.mu.Lock()
+	e.rt.rawEntries[agent] = append(e.rt.rawEntries[agent], usageEntries(2, 2)...)
+	e.rt.mu.Unlock()
+	close(e.rt.settle)
+	waitFor(t, "the continued reply's tokens to be counted", func() bool {
+		input, output, _ := agentUsage(t, e, owner.id)
+		return input == 3 && output == 2
+	})
+}
+
+func TestTheReplyOfAContinueNamesTheModelTheRuntimeAdmittedItOn(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	got := decode[SubmissionReply](t, owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7)))
+	if got.Model != (modelRef{Provider: "backup", ModelID: "b-1"}) {
+		t.Fatalf("the reply names %+v, want the model the run was admitted on", got.Model)
 	}
 }

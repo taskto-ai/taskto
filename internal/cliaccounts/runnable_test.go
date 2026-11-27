@@ -5,19 +5,34 @@ package cliaccounts
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"taskto.ai/taskto/internal/cliworker"
+	"taskto.ai/taskto/internal/cliworker/clitest"
+	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/providers"
 )
 
-func (e *turnEnv) runnable(c *client, cli cliworker.CLI) bool {
+var everyModel = []providers.ModelChoice{{ID: "default", Name: "Default"}, {ID: "opus", Name: "Opus"}, {ID: "sonnet", Name: "Sonnet"}}
+
+func (e *turnEnv) offered(c *client, conv int64, cli cliworker.CLI) []string {
 	e.t.Helper()
-	ok, _, err := e.svc.Runnable(context.Background(), e.ws, c.id, cli)
+	p := conversations.Principal{Conversation: conv, AgentConversation: conv, Workspace: e.ws, User: c.id}
+	got, err := e.svc.RunnableModels(context.Background(), p, cli, everyModel)
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	return ok
+	out := []string{}
+	for _, m := range got {
+		out = append(out, m.ID)
+	}
+	return out
+}
+
+func (e *turnEnv) runnable(c *client, cli cliworker.CLI) bool {
+	e.t.Helper()
+	return len(e.offered(c, e.conversation(c), cli)) > 0
 }
 
 func (e *turnEnv) setMode(c *client, mode any) {
@@ -98,19 +113,7 @@ func (e *turnEnv) setup2() *client { return e.invite(e.owner, e.ws, "third@examp
 
 func TestRunnableModelsOfASharedAccountAreOnlyTheModelItIsPinnedTo(t *testing.T) {
 	e := newTurnEnv(t)
-	models := []providers.ModelChoice{{ID: "default", Name: "Default"}, {ID: "opus", Name: "Opus"}, {ID: "sonnet", Name: "Sonnet"}}
-	ids := func(c *client) []string {
-		t.Helper()
-		got, err := e.svc.RunnableModels(context.Background(), e.ws, c.id, cliworker.Claude, models)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out := []string{}
-		for _, m := range got {
-			out = append(out, m.ID)
-		}
-		return out
-	}
+	ids := func(c *client) []string { return e.offered(c, e.conversation(c), cliworker.Claude) }
 	e.owner.addShared(e.ws, cliworker.Claude, newProvider(t).URL)
 	e.setMode(e.other, "shared")
 	if got := ids(e.other); len(got) != 3 {
@@ -132,5 +135,63 @@ func TestRunnableModelsOfASharedAccountAreOnlyTheModelItIsPinnedTo(t *testing.T)
 	e.connectedOwn(e.other, "connected")
 	if got := ids(e.other); len(got) != 3 {
 		t.Fatalf("a connected own account offers %v, want every model", got)
+	}
+}
+
+func (e *turnEnv) pinnedAccounts() int64 {
+	e.t.Helper()
+	p := newProvider(e.t)
+	opus := e.owner.addShared(e.ws, cliworker.Claude, p.URL)
+	sonnet := e.owner.addShared(e.ws, cliworker.Claude, p.URL)
+	for id, model := range map[int64]string{opus.ID: "opus", sonnet.ID: "sonnet"} {
+		if _, err := e.db.Exec(`UPDATE cli_shared_accounts SET model = ? WHERE id = ?`, model, id); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+	e.other.setSwitching(map[string]any{"enabled": true, "queue": []map[string]any{{"shared": opus.ID}, {"shared": sonnet.ID}}})
+	conv := e.conversation(e.other)
+	if d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "opus", Prompt: "hello"})); d.Status != cliworker.StatusOK {
+		e.t.Fatalf("the first turn = %+v", d)
+	}
+	e.other.setSwitching(map[string]any{"queue": []map[string]any{{"shared": sonnet.ID}, {"shared": opus.ID}}})
+	return conv
+}
+
+func TestRunnableModelsFollowTheAccountTheConversationKeeps(t *testing.T) {
+	e := newTurnEnv(t)
+	kept := e.pinnedAccounts()
+	if got := e.offered(e.other, e.conversation(e.other), cliworker.Claude); len(got) != 1 || got[0] != "sonnet" {
+		t.Fatalf("a new conversation is offered %v, want only sonnet, the first account of the queue", got)
+	}
+	if got := e.offered(e.other, kept, cliworker.Claude); len(got) != 1 || got[0] != "opus" {
+		t.Fatalf("a conversation that last ran on the opus account is offered %v, want only opus: its turns keep that account whatever the queue says", got)
+	}
+}
+
+func TestAPinnedTurnRunsOnlyOnTheModelItWasContinuedOn(t *testing.T) {
+	e := newTurnEnv(t)
+	conv := e.pinnedAccounts()
+	d := done(e.turn(conv, turnBody{Turn: "t2", CLI: "claude", Model: "sonnet", Prompt: "again", Pinned: true}))
+	if d.Status != cliworker.StatusFailed || !strings.Contains(d.Text, "continued on") {
+		t.Fatalf("a pinned turn on a model its account doesn't run = %+v, want a refusal", d)
+	}
+	if d := done(e.turn(conv, turnBody{Turn: "t3", CLI: "claude", Model: "opus", Prompt: "again", Pinned: true})); d.Status != cliworker.StatusOK {
+		t.Fatalf("a pinned turn on the model its account runs = %+v", d)
+	}
+}
+
+func TestAPinnedTurnIsNotMovedToAnotherAccountByALimit(t *testing.T) {
+	e, conv, models := switchEnv(t, true)
+	events := e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it", Pinned: true})
+	if d := done(events); d.Status != cliworker.StatusFailed {
+		t.Fatalf("done = %+v, want the limited account's failure", d)
+	}
+	for _, ev := range events {
+		if ev.Type == cliworker.EventNotice {
+			t.Fatalf("a pinned turn switched: %+v", ev)
+		}
+	}
+	if n := len(clitest.Calls(t, e.layout.User(e.owner.id).Config(cliworker.Codex))); n != 0 || len(models.list()) != 0 {
+		t.Fatalf("a pinned turn ran %d turns on Codex and wrote the model %v", n, models.list())
 	}
 }
