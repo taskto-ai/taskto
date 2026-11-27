@@ -2,6 +2,7 @@ package integrations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -364,5 +365,29 @@ func TestAPaidRefsExpiredLinkIsKept(t *testing.T) {
 				t.Fatalf("the payment changed: %s %s %s, %v", state, paidObject, settled, err)
 			}
 		})
+	}
+}
+
+// An open link is given again only to an entry whose money is read from the fields the link's was:
+// one that reads the same amount from other fields gets no link (the lock would protect the link's
+// fields, not the ones that entry reads), and nothing is made.
+func TestALinkIsGivenAgainOnlyForItsOwnMoneyFields(t *testing.T) {
+	p := newPay(t, publicURL)
+	record, r := p.sentInvoice(10, "EUR", "op-fields-0001")
+	p.stop()
+	p.act("op-fields-0002", "send", map[string]any{"id": record, "status": "sent", "customer": "B"})
+	req := paylinkRequest(p, record, p.entries()[1].id, "payments")
+	req.AmountField = "alternate_total"
+	_, err := p.svc.OpenPaymentLink(context.Background(), req)
+	var pe *paylink.Error
+	if !errors.As(err, &pe) || pe.Code != apierr.CodeIntegrationLinkStillOpen {
+		t.Fatalf("err = %v", err)
+	}
+	if refs := p.refs(); len(refs) != 1 || refs[0].id != r.id || len(p.posts()) != 1 {
+		t.Fatalf("refs = %+v, %d links", refs, len(p.posts()))
+	}
+	// The same fields are given it, as before.
+	if link, err := p.svc.OpenPaymentLink(context.Background(), paylinkRequest(p, record, p.entries()[1].id, "payments")); err != nil || link.ObjectID != r.object {
+		t.Fatalf("link = %+v, %v", link, err)
 	}
 }

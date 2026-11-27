@@ -719,6 +719,9 @@ type ref struct {
 	// linkExpiredAt is when the ref's own link was seen expired ("" if it wasn't): kept apart from its
 	// state, which stays paid for a ref paid on another key's object.
 	linkExpiredAt string
+	// amountField and currencyField are the record's fields the ref's money was read from ("" for a
+	// ref made before refs kept them, or an effect's own currency).
+	amountField, currencyField string
 }
 
 // newLink is what the provider is asked for under key a: the key's token, the ref's money and the
@@ -738,13 +741,13 @@ func (r ref) link() paylink.Link {
 // refColumns are integration_refs' own, so a query of that table alone reads a ref.
 const refColumns = `id, token, integration_id, app_id, record_id, slot, coalesce(provider_object_id, ''), coalesce(url, ''),
 	amount_minor, currency, key_seq, state, created_at, account_id, account_mode, success_url, cancel_url,
-	coalesce(paid_object_id, ''), coalesce(payment_id, ''), coalesce(effect_id, 0), url_field, coalesce(link_expired_at, '')`
+	coalesce(paid_object_id, ''), coalesce(payment_id, ''), coalesce(effect_id, 0), url_field, coalesce(link_expired_at, ''), amount_field, currency_field`
 
 func scanRef(row interface{ Scan(...any) error }) (ref, error) {
 	var r ref
 	err := row.Scan(&r.id, &r.token, &r.integrationID, &r.appID, &r.recordID, &r.slot, &r.objectID, &r.url,
 		&r.amountMinor, &r.currency, &r.keySeq, &r.state, &r.createdAt, &r.accountID, &r.accountMode, &r.successURL, &r.cancelURL,
-		&r.paidObjectID, &r.paymentID, &r.effectID, &r.urlField, &r.linkExpiredAt)
+		&r.paidObjectID, &r.paymentID, &r.effectID, &r.urlField, &r.linkExpiredAt, &r.amountField, &r.currencyField)
 	return r, err
 }
 
@@ -831,7 +834,7 @@ func (s *Service) beginRef(ctx context.Context, req paylink.Request, minor int64
 	if out.objectID == "" && out.integrationID != req.IntegrationID {
 		return ref{}, &paylink.Error{Code: apierr.CodeIntegrationChanged}
 	}
-	if out.objectID == "" && (out.amountMinor != minor || out.currency != cur) {
+	if out.objectID == "" && (out.amountMinor != minor || out.currency != cur || !sameMoneyFields(out, req)) {
 		// Not what the ref was made for (its keys ask what it asked): the record's earlier link, still
 		// being made, asks other money. Nothing else is made while it may still be paid.
 		return ref{}, &paylink.Error{Code: apierr.CodeIntegrationLinkStillOpen}
@@ -1111,7 +1114,7 @@ func (s *Service) earlierLink(ctx context.Context, provider PaymentProvider, cre
 			// Paid on another key's object, and its own link still takes payment: a person reconciles it.
 			return paylink.Link{}, false, 0, &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}
 		}
-		if prior.amountMinor != minor || prior.currency != cur {
+		if prior.amountMinor != minor || prior.currency != cur || !sameMoneyFields(prior, req) {
 			return paylink.Link{}, false, 0, &paylink.Error{Code: apierr.CodeIntegrationLinkStillOpen}
 		}
 		// Given again by an entry of the live release: its payment is written through the slot that
@@ -1249,4 +1252,14 @@ func (s *Service) noteLinkExpired(ctx context.Context, refID int64, objectID, at
 	_, err := s.store.db.ExecContext(ctx, `UPDATE integration_refs SET link_expired_at = coalesce(link_expired_at, ?)
 		WHERE id = ? AND provider_object_id = ?`, at, refID, objectID)
 	return err
+}
+
+// sameMoneyFields says whether the request reads its money from the fields the ref's was read from:
+// only then is the ref's link the request's, since the record's money is locked by the ref's fields
+// while the link may be paid. A ref made before refs kept them says nothing, and is taken as the same.
+func sameMoneyFields(r ref, req paylink.Request) bool {
+	if r.amountField == "" && r.currencyField == "" {
+		return true
+	}
+	return r.amountField == req.AmountField && r.currencyField == req.CurrencyField
 }

@@ -372,9 +372,12 @@ func paymentMoneyLocked(ctx context.Context, tx *sql.Tx, payments paylink.Opener
 		e := Effect{Kind: EffectCreatePaymentLink, AmountField: f.Amount, CurrencyField: f.Currency}
 		wasAmount, wasCode := e.moneyOf(def.Collection, before)
 		nowAmount, nowCode := e.moneyOf(def.Collection, after)
-		if wasAmount != nowAmount {
+		// What the field holds is compared too, not only the money read from it: a release that changed
+		// the field's type (an acknowledged change) reads no amount from it at all, and a change of its
+		// value is a change of the link's money all the same.
+		if wasAmount != nowAmount || !sameValue(before[f.Amount], after[f.Amount]) {
 			changed = f.Amount
-		} else if f.Currency != "" && wasCode != nowCode {
+		} else if f.Currency != "" && (wasCode != nowCode || !sameValue(before[f.Currency], after[f.Currency])) {
 			changed = f.Currency
 		}
 		if changed != "" {
@@ -386,4 +389,12 @@ func paymentMoneyLocked(ctx context.Context, tx *sql.Tx, payments paylink.Opener
 			"%s can't change while the record's payment link may still be paid: change it once the link has expired", changed)
 	}
 	return nil
+}
+
+// sameValue says whether two values of a record's field are the same as JSON: 120 read from the
+// database and 120 from a request are, whatever their Go types.
+func sameValue(a, b any) bool {
+	x, errA := json.Marshal(a)
+	y, errB := json.Marshal(b)
+	return errA == nil && errB == nil && string(x) == string(y)
 }

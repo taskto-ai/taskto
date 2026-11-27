@@ -652,7 +652,10 @@ write.
   none yet that has a key whose outcome is unknown or that made something. The fields are those the
   live release's effects read and those each waiting entry and each such reference was read from
   (`integration_refs.amount_field` and `currency_field`), so a release that stops asking for links
-  doesn't free them. So a link is never paid at an amount the record no longer says, and the payment
+  doesn't free them. What a field holds is compared as well as the money read from it, so a field
+  whose type a release changed stays locked too. An open link is given again only to an entry that
+  reads its money from the fields the link's was read from; another gets `integration_link_still_open`.
+  So a link is never paid at an amount the record no longer says, and the payment
   is always written to a record that asks it, with one exception the server can't see: an admin who
   confirms that no link exists when one does (see [When a payment's outcome is unknown](#when-a-payments-outcome-is-unknown)).
   The confirmation counts as the admin's word, as it does for the new key it allows, so the amount
