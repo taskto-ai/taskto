@@ -1700,3 +1700,51 @@ test('a check of a database that is not there stops its upgrade at once: no late
   expect(later).not.toHaveBeenCalled()
   expect(await databases()).not.toContain('taskto-offline-7')
 })
+
+test("a discard whose check of a database another tab already deleted outlasts the account's lock leaves no database made", async () => {
+  fakeLocks()
+  const overs: (() => void)[] = []
+  lockTimes.holdOver = (_ms, over) => {
+    overs.push(over)
+    return () => {}
+  }
+  const open = indexedDB.open.bind(indexedDB)
+  vi.spyOn(indexedDB, 'open').mockImplementation((name: string, version?: number) => {
+    queueMicrotask(() => {
+      for (const over of overs.splice(0)) over()
+    })
+    return open(name, version)
+  })
+  await expect(OfflineStore.deleteRetired(7)).rejects.toThrow()
+  await new Promise((done) => setTimeout(done, 50))
+  expect(await databases()).not.toContain('taskto-offline-7')
+})
+
+test("a start whose upgrade committed before the account's lock ran out, with the open's success still queued, leaves no database made", async () => {
+  fakeLocks()
+  const overs: (() => void)[] = []
+  lockTimes.holdOver = (_ms, over) => {
+    overs.push(over)
+    return () => {}
+  }
+  const open = indexedDB.open.bind(indexedDB)
+  vi.spyOn(indexedDB, 'open').mockImplementation((name: string, version?: number) => {
+    const request = open(name, version)
+    let success: IDBOpenDBRequest['onsuccess'] = null
+    Object.defineProperty(request, 'onsuccess', {
+      configurable: true,
+      get: () => success,
+      set: (fn: IDBOpenDBRequest['onsuccess']) => {
+        success = fn
+        request.addEventListener('success', (event) => {
+          for (const over of overs.splice(0)) over()
+          fn?.call(request, event)
+        })
+      },
+    })
+    return request
+  })
+  await expect(OfflineStore.open(7)).rejects.toThrow()
+  await new Promise((done) => setTimeout(done, 50))
+  expect(await databases()).not.toContain('taskto-offline-7')
+})

@@ -331,6 +331,7 @@ export class OfflineStore {
     } catch {}
     if (expired()) {
       db.close()
+      if (made) await deleteDatabase(name).catch(() => {})
       throw new StorageUnavailable('the offline database took too long')
     }
     if (!still()) return giveUp(db, new Superseded())
@@ -906,16 +907,22 @@ function withinTime<T>(work: Promise<T>, ms: number, timedOut: () => void = () =
 }
 
 async function retiredOrNew(name: string): Promise<boolean> {
-  let made = false
-  const db = await openDatabase(name, SCHEMA_VERSION, {
-    ...MIGRATIONS,
-    1: (d, tx) => {
-      made = true
-      MIGRATIONS[1]?.(d, tx)
-    },
-  })
+  let absent = false
+  let db: IDBDatabase
   try {
-    if (made) return true
+    db = await openDatabase(name, SCHEMA_VERSION, {
+      ...MIGRATIONS,
+      1: (_d, tx) => {
+        absent = true
+        tx.abort()
+        return 'stop'
+      },
+    })
+  } catch (e) {
+    if (absent) return true
+    throw e
+  }
+  try {
     return (await runTx(db, [META], 'readonly', (tx) => tx.store(META).get(RETIRED))) !== undefined
   } catch {
     return false
