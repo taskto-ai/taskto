@@ -319,7 +319,7 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		in.Capability = s.capability(c.ID, c.agentID)
 	}
 	model, _ := rt.Model(r.Context(), c.agentID)
-	entryCursor := s.entryCursor(r.Context(), rt, c.agentID)
+	s.startUsageMark(r.Context(), c.ID, s.entryCursor(r.Context(), rt, c.agentID))
 	sub, err := rt.Submit(r.Context(), c.agentID, in)
 	if err != nil {
 		conversationError(w, r, c, err)
@@ -329,7 +329,7 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		slog.WarnContext(r.Context(), "conversations: marking a conversation updated", "conversation", c.ID, "err", err)
 	}
 	user, _ := caller(r)
-	s.markWhenSettled(rt, Principal{Conversation: c.ID, AgentConversation: c.agentID, Workspace: c.WorkspaceID, User: user}, model.Provider, entryCursor, sub)
+	s.markWhenSettled(rt, Principal{Conversation: c.ID, AgentConversation: c.agentID, Workspace: c.WorkspaceID, User: user}, model.Provider, sub)
 	writeJSON(w, http.StatusAccepted, map[string]int64{"submission_id": sub})
 }
 

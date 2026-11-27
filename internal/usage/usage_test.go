@@ -97,3 +97,28 @@ func TestRecordPrunesOlderThan400DaysAndAccountDeletionCascades(t *testing.T) {
 		t.Fatalf("rows after account deletion = %d, %v", count, err)
 	}
 }
+
+func TestRecordCountsATurnOnce(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+	res, err := d.Exec(`INSERT INTO workspaces (name) VALUES ('Home')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, _ := res.LastInsertId()
+	one := user(t, d, "one@example.test")
+	entry := Entry{User: one, Workspace: workspace, Source: "cli", Engine: "codex", Input: 5, Output: 2, At: time.Now(), Turn: "c1-t1"}
+	for range 3 {
+		if err := Record(ctx, d, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entry.Turn = "c1-t2"
+	if err := Record(ctx, d, entry); err != nil {
+		t.Fatal(err)
+	}
+	var input, turns int64
+	if err := d.QueryRow(`SELECT input_tokens, turns FROM agent_usage_daily WHERE user_id = ?`, one).Scan(&input, &turns); err != nil || input != 10 || turns != 2 {
+		t.Fatalf("usage = %d input, %d turns, %v", input, turns, err)
+	}
+}

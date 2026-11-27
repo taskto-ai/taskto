@@ -167,6 +167,22 @@ func TestTurnRecordsTokenEventsOnceForItsOwner(t *testing.T) {
 	}
 }
 
+func TestReplayedTurnRecordsItsTokensOnce(t *testing.T) {
+	e := newTurnEnv(t)
+	e.owner.connect(cliworker.Codex)
+	conv := e.conversation(e.owner)
+	body := turnBody{Turn: "again", CLI: "codex", Model: "default", Prompt: "hello"}
+	e.turn(conv, body)
+	e.turn(conv, body)
+	var input, output, turns int64
+	if err := e.db.QueryRow(`SELECT input_tokens, output_tokens, turns FROM agent_usage_daily WHERE user_id = ? AND source = 'cli' AND engine = 'codex'`, e.owner.id).Scan(&input, &output, &turns); err != nil {
+		t.Fatal(err)
+	}
+	if input != 10 || output != 5 || turns != 1 {
+		t.Fatalf("usage after a replay = %d input, %d output, %d turns", input, output, turns)
+	}
+}
+
 func TestTurnWithoutTokenEventsRecordsNothing(t *testing.T) {
 	e := newTurnEnv(t)
 	e.owner.connect(cliworker.Codex)

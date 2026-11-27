@@ -16,6 +16,7 @@ type Entry struct {
 	Input     int64
 	Output    int64
 	At        time.Time
+	Turn      string
 }
 
 type Day struct {
@@ -28,27 +29,60 @@ type Day struct {
 }
 
 func Record(ctx context.Context, db *sql.DB, e Entry) error {
-	if e.User < 1 || e.Workspace < 1 || (e.Source != "cli" && e.Source != "agent") || len(e.Engine) < 1 || len(e.Engine) > 64 || e.Input < 0 || e.Output < 0 || e.At.IsZero() {
-		return errors.New("invalid usage entry")
+	if err := e.validate(); err != nil {
+		return err
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO agent_usage_daily
+	if err := RecordTx(ctx, tx, e); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (e Entry) validate() error {
+	if e.User < 1 || e.Workspace < 1 || (e.Source != "cli" && e.Source != "agent") || len(e.Engine) < 1 || len(e.Engine) > 64 || len(e.Turn) > 128 || e.Input < 0 || e.Output < 0 || e.At.IsZero() {
+		return errors.New("invalid usage entry")
+	}
+	return nil
+}
+
+func RecordTx(ctx context.Context, tx *sql.Tx, e Entry) error {
+	if err := e.validate(); err != nil {
+		return err
+	}
+	day := e.At.UTC().Format("2006-01-02")
+	if e.Turn != "" {
+		res, err := tx.ExecContext(ctx, `INSERT INTO agent_usage_turns (user_id, turn, day) VALUES (?, ?, ?)
+			ON CONFLICT (user_id, turn) DO NOTHING`, e.User, e.Turn, day)
+		if err != nil {
+			return fmt.Errorf("claim agent usage turn: %w", err)
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return nil
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_usage_daily
 		(user_id, workspace_id, day, source, engine, input_tokens, output_tokens, turns)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 1)
 		ON CONFLICT (user_id, workspace_id, day, source, engine) DO UPDATE SET
 		input_tokens = input_tokens + excluded.input_tokens,
 		output_tokens = output_tokens + excluded.output_tokens,
-		turns = turns + 1`, e.User, e.Workspace, e.At.UTC().Format("2006-01-02"), e.Source, e.Engine, e.Input, e.Output); err != nil {
+		turns = turns + 1`, e.User, e.Workspace, day, e.Source, e.Engine, e.Input, e.Output); err != nil {
 		return fmt.Errorf("record daily agent usage: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM agent_usage_daily WHERE user_id = ? AND day < date('now', '-400 days')`, e.User); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_usage_daily WHERE user_id = ? AND day < date('now', '-400 days')`, e.User); err != nil {
 		return fmt.Errorf("prune daily agent usage: %w", err)
 	}
-	return tx.Commit()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_usage_turns WHERE user_id = ? AND day < date('now', '-7 days')`, e.User); err != nil {
+		return fmt.Errorf("prune counted agent turns: %w", err)
+	}
+	return nil
 }
 
 func Daily(ctx context.Context, db *sql.DB, user, workspace int64, from, to time.Time) ([]Day, error) {

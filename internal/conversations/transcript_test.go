@@ -6,11 +6,29 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
 	"taskto.ai/taskto/internal/agentrt"
 )
+
+func usageEntries(first, last int64) []json.RawMessage {
+	var entries []json.RawMessage
+	for id := first; id <= last; id++ {
+		entries = append(entries, json.RawMessage(fmt.Sprintf(`{"id":%d,"kind":"pi.assistant","model":[{"role":"assistant","provider":"provider-a","usage":{"input":3,"output":2}}]}`, id)))
+	}
+	return entries
+}
+
+func agentUsage(t *testing.T, e *env, user int64) (input, output, turns int64) {
+	t.Helper()
+	err := e.db.QueryRow(`SELECT coalesce(sum(input_tokens), 0), coalesce(sum(output_tokens), 0), coalesce(sum(turns), 0) FROM agent_usage_daily WHERE user_id = ? AND source = 'agent'`, user).Scan(&input, &output, &turns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return input, output, turns
+}
 
 func TestAgentTurnRecordsAssistantUsageFromDurableEntries(t *testing.T) {
 	e := newEnv(t, false)
@@ -22,15 +40,78 @@ func TestAgentTurnRecordsAssistantUsageFromDurableEntries(t *testing.T) {
 		json.RawMessage(`{"id":2,"kind":"pi.assistant","model":[{"role":"assistant","provider":"provider-a","usage":{"input":3,"output":2}}]}`),
 		json.RawMessage(`{"id":3,"kind":"pi.assistant","model":[{"role":"assistant","provider":"provider-a","usage":{"input":4,"output":3}}]}`),
 	}}
-	if err := e.svc.recordAgentUsage(context.Background(), e.rt, Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}, "script", 1); err != nil {
+	p := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}
+	e.svc.startUsageMark(context.Background(), c.ID, 1)
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
 		t.Fatal(err)
 	}
-	var input, output, turns int64
-	if err := e.db.QueryRow(`SELECT input_tokens, output_tokens, turns FROM agent_usage_daily WHERE user_id = ? AND workspace_id = ? AND source = 'agent' AND engine = 'provider-a'`, owner.id, ws).Scan(&input, &output, &turns); err != nil {
-		t.Fatal(err)
-	}
-	if input != 7 || output != 5 || turns != 1 {
+	if input, output, turns := agentUsage(t, e, owner.id); input != 7 || output != 5 || turns != 1 {
 		t.Fatalf("recorded usage = %d input, %d output, %d turns", input, output, turns)
+	}
+}
+
+func TestAgentUsageIsCountedOnceWhenCollectorsOverlap(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: usageEntries(1, 4)}
+	p := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}
+	e.svc.startUsageMark(context.Background(), c.ID, 0)
+	e.svc.startUsageMark(context.Background(), c.ID, 4)
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if input, output, turns := agentUsage(t, e, owner.id); input != 12 || output != 8 || turns != 1 {
+		t.Fatalf("recorded usage = %d input, %d output, %d turns", input, output, turns)
+	}
+	e.rt.rawEntries[agent] = usageEntries(1, 5)
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
+		t.Fatal(err)
+	}
+	if input, output, turns := agentUsage(t, e, owner.id); input != 15 || output != 10 || turns != 2 {
+		t.Fatalf("usage after a later reply = %d input, %d output, %d turns", input, output, turns)
+	}
+}
+
+func TestAgentUsageReadsEveryEntryAcrossPages(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	count := int64(maxPageEntries)*2 + 30
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: usageEntries(1, count)}
+	e.svc.startUsageMark(context.Background(), c.ID, 5)
+	p := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
+		t.Fatal(err)
+	}
+	want := count - 5
+	if input, output, _ := agentUsage(t, e, owner.id); input != 3*want || output != 2*want {
+		t.Fatalf("recorded usage = %d input, %d output, want %d and %d", input, output, 3*want, 2*want)
+	}
+}
+
+func TestAgentUsageNeedsAStartingMark(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: usageEntries(1, 3)}
+	p := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
+		t.Fatal(err)
+	}
+	if input, _, turns := agentUsage(t, e, owner.id); input != 0 || turns != 0 {
+		t.Fatalf("usage without a mark = %d input, %d turns", input, turns)
 	}
 }
 

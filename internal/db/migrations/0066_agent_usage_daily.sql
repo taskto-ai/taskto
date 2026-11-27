@@ -9,3 +9,12 @@ CREATE TABLE agent_usage_daily (
     turns INTEGER NOT NULL DEFAULT 0 CHECK (turns >= 0),
     PRIMARY KEY (user_id, workspace_id, day, source, engine)
 ) STRICT;
+
+CREATE TABLE agent_usage_turns (
+    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    turn TEXT NOT NULL CHECK (length(turn) BETWEEN 1 AND 128),
+    day TEXT NOT NULL CHECK (length(day) = 10),
+    PRIMARY KEY (user_id, turn)
+) STRICT, WITHOUT ROWID;
+
+ALTER TABLE conversations ADD COLUMN usage_mark INTEGER;
