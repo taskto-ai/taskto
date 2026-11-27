@@ -228,7 +228,7 @@ func (x *Index) searchIndex(ctx context.Context, workspaceID int64, spaces []acc
 				if ctx.Err() != nil {
 					return Results{}, ctx.Err()
 				}
-				x.log.Warn("search: embedding a query failed; full text only", "err", err)
+				x.log.Warn("search: embedding a query failed; full text only", "refused", errors.Is(err, egress.ErrRefused))
 				res.note(Notice{Code: NoticeFailed}, noticeFailed)
 				if errors.Is(err, egress.ErrRefused) {
 					res.note(Notice{Code: NoticeRefused}, noticeRefused)
