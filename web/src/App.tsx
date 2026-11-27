@@ -345,11 +345,9 @@ export function App() {
 
   const logIn = useCallback(
     async (me: Me) => {
-      // The sign-in's answer is the newest login, as of now: the language loading after it can't make
-      // it older than one another tab learns meanwhile.
-      const asked = Date.now()
-      await setPreferences({ user: me.user.locale ?? null })
-      await signIn(me, asked)
+      // The sign-in's answer is the newest login, as of now. Its language is set once its claim held,
+      // never for a sign-in another tab overtook meanwhile (the language is the browser's tabs' choice).
+      await signIn(me, Date.now(), true)
     },
     [signIn],
   )

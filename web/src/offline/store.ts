@@ -400,16 +400,52 @@ export class OfflineStore {
 
   // Opening is one at a time with a sign-out's deletion of the same account's database (`withLock`):
   // a retired database made again here is never the one that deletion then removes.
-  static open(user: number): Promise<OfflineStore> {
-    return withLock(user, (expired) => OfflineStore.openNow(user, expired))
+  // `still`: whether the login this is opened for is still the browser's, asked once the lock is
+  // held, before anything is opened or made, and again after every wait inside it: a start that
+  // waited behind a sign-out's deletion never makes the database again for a login that is over. A
+  // database this open made for such a login is deleted again before the lock is let go. It throws
+  // `Superseded` then.
+  // `existing`: only a database that is there is opened; one this open would make is deleted again,
+  // and `NotOnDevice` thrown (an inspection, which never leaves an empty database behind).
+  static open(
+    user: number,
+    { still = () => true, existing = false }: { still?: () => boolean; existing?: boolean } = {},
+  ): Promise<OfflineStore> {
+    return withLock(user, (expired) => OfflineStore.openNow(user, expired, still, existing))
   }
 
   // `expired`: the account's lock was let go (its holder's time ran out) while this waited: what it
   // would do after that, another tab may be doing too, so it stops (a retired database it would
   // delete may be one made again since, with records saved in it).
-  private static async openNow(user: number, expired: () => boolean = () => false): Promise<OfflineStore> {
+  private static async openNow(
+    user: number,
+    expired: () => boolean,
+    still: () => boolean,
+    existing: boolean,
+  ): Promise<OfflineStore> {
     const name = OfflineStore.databaseName(user)
-    const db = await openDatabase(name, SCHEMA_VERSION, MIGRATIONS)
+    if (!still()) throw new Superseded()
+    // Opened as it is, or made (its first version's upgrade): `made` says which.
+    let made = false
+    const open = () => {
+      made = false
+      return openDatabase(name, SCHEMA_VERSION, {
+        ...MIGRATIONS,
+        1: (d, tx) => {
+          made = true
+          MIGRATIONS[1]?.(d, tx)
+        },
+      })
+    }
+    // A database opened for a login that is over, or one an inspection made: closed, and deleted when
+    // this made it (it holds nothing then), while the lock is still held.
+    const giveUp = async (db: IDBDatabase, error: Error): Promise<never> => {
+      db.close()
+      if (made && !expired()) await deleteDatabase(name).catch(() => {})
+      throw error
+    }
+    const db = await open()
+    if (made && existing) return giveUp(db, new NotOnDevice())
     // A database whose purge began (it was found empty, and marked) but did not finish: it is empty
     // by construction, and goes before it is used again.
     let retired = false
@@ -423,17 +459,23 @@ export class OfflineStore {
       db.close()
       throw new StorageUnavailable('the offline database took too long')
     }
+    if (!still()) return giveUp(db, new Superseded())
     if (!retired) return new OfflineStore(user, db)
     db.close()
+    // A retired database still here is a deletion that didn't finish: an inspection says so, and
+    // neither deletes nor makes it again.
+    if (existing) throw new StorageUnavailable('a retired offline database is still here')
     await deleteDatabase(name)
     // The same after the deletion's wait: it isn't made again once the lock was let go (another tab
     // may have signed the account out meanwhile), and a database opened late is closed, not left.
     if (expired()) throw new StorageUnavailable('the offline database took too long')
-    const fresh = await openDatabase(name, SCHEMA_VERSION, MIGRATIONS)
+    if (!still()) throw new Superseded()
+    const fresh = await open()
     if (expired()) {
       fresh.close()
       throw new StorageUnavailable('the offline database took too long')
     }
+    if (!still()) return giveUp(fresh, new Superseded())
     return new OfflineStore(user, fresh)
   }
 
@@ -1056,6 +1098,14 @@ export const lockTimes = {
     const timer = setTimeout(over, ms)
     return () => clearTimeout(timer)
   },
+}
+
+// An inspection of a database that isn't on this device (`OfflineStore.open`'s `existing`).
+export class NotOnDevice extends Error {
+  constructor() {
+    super('no offline database of the account here')
+    this.name = 'NotOnDevice'
+  }
 }
 
 // A sign-out's change of the database stopped because a newer login of the account started: the

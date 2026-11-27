@@ -53,7 +53,14 @@ function bounded<T>(work: Promise<T>, ms = SIGN_OUT_WAIT_MS): Promise<T> {
 // with the database. (A database the cleanup retired was emptied as it was, so one whose deletion
 // didn't follow holds nothing of theirs.) Not verified: a database that can't be read, and one the
 // person chose to discard whatever it held that is still there.
-async function verifiedClear(user: number, { keep, approved, discardUnreadable }: Decision): Promise<boolean> {
+// `still`: whether this sign-out still has the device (no newer login of the account started): the
+// database is only looked at while it does, and never made by looking (a cleanup that finished in
+// another tab meanwhile, which removed it, leaves nothing here either).
+async function verifiedClear(
+  user: number,
+  { keep, approved, discardUnreadable }: Decision,
+  still: () => boolean,
+): Promise<boolean> {
   if (lastUser()?.id === user) return false
   // A browser with no IndexedDB holds no database; one the person chose to keep is theirs.
   if (typeof indexedDB === 'undefined' || keep) return true
@@ -62,7 +69,7 @@ async function verifiedClear(user: number, { keep, approved, discardUnreadable }
   if (present === false) return true
   // One they chose to discard whatever it held is verified gone, or not at all.
   if (discardUnreadable) return false
-  const { left, unreadable } = await unsentState(user, new Map())
+  const { left, unreadable } = await unsentState(user, new Map(), { still })
   return !unreadable && !left.some((r) => approved.has(r.id))
 }
 
@@ -135,7 +142,7 @@ export async function cleanUpAfterSignOut(
     )
     if (superseded()) return true
     if (unreadable) return false
-    const clear = await bounded(verifiedClear(user, { keep, approved, discardUnreadable }))
+    const clear = await bounded(verifiedClear(user, { keep, approved, discardUnreadable }, still))
     // A newer login that started meanwhile has the device: this sign-out is over, not failed.
     if (superseded()) return true
     if (!clear) return false
@@ -175,8 +182,12 @@ export async function finishUnfinishedSignOuts(me: Me | null, asked = Date.now()
     const p = pendingSignOuts().find((r) => r.user === listed.user && r.session === listed.session)
     if (!p) continue
     if (me && sameLogin(p, me)) continue
+    // Another login of this account: over once this one is the browser's (its logout, sent with this
+    // login's cookie, is refused, and what is on the device is this login's), whenever it was
+    // recorded (a tab of the older login may sign it out while this start waits for its answer).
+    // Without this login known (it couldn't be remembered), only one recorded before this asked.
     if (me && p.user === me.user.id) {
-      if ((p.at ?? 0) <= asked) settleSignOut(p.user, p.session)
+      if ((p.at ?? 0) <= asked || loginIsCurrent(me.user.id, me.session)) settleSignOut(p.user, p.session)
       continue
     }
     // Recorded after this start asked: a login that began since is signing out (its logout may not

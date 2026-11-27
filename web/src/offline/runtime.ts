@@ -29,7 +29,7 @@ import {
 import { SchemaTooNew } from './idb'
 import { signOutPending } from './pendingSignOut'
 import { revalidate } from './revalidate'
-import { type Approval, type Download, OfflineStore, Superseded, seenOf, type UnsentRef } from './store'
+import { type Approval, type Download, NotOnDevice, OfflineStore, Superseded, seenOf, type UnsentRef } from './store'
 import { type SyncDeps, SyncEngine } from './sync'
 import { OfflineWriter, type WriterDeps } from './writer'
 
@@ -117,8 +117,9 @@ async function sweep(user: number, current: () => boolean): Promise<Foreign | nu
     if (!current()) throw new Lapsed()
     let store: OfflineStore
     try {
-      store = await OfflineStore.open(id)
-    } catch {
+      store = await OfflineStore.open(id, { still: current })
+    } catch (e) {
+      if (e instanceof Superseded) throw new Lapsed()
       keep.push(id)
       continue
     }
@@ -205,6 +206,10 @@ export async function activate(user: number, name?: string, still: () => boolean
   watch()
   if (opening) await opening.catch(() => {})
   if (state.runtime?.user === user) {
+    // Taken up only for the login this is for: one that lapsed while this waited writes no marker
+    // (another account's, or a newer login's, may be there by now) and starts nothing; its caller
+    // lets the runtime go.
+    if (!still()) return state
     if (name) rememberUser({ id: user, name })
     // Not while a sign-out of the account is unresolved (Back starting the app again): the queue goes
     // on once that is let go.
@@ -253,7 +258,9 @@ export async function activate(user: number, name?: string, still: () => boolean
     }
     let store: OfflineStore | undefined
     try {
-      store = await OfflineStore.open(user)
+      // Asked inside the account's lock too: a start that waited there behind a sign-out's deletion
+      // never makes the database again for a login that is over.
+      store = await OfflineStore.open(user, { still: current })
       if (!current()) return abandon(store)
       const opened = store
       // The tabs of the account tell each other when the database changed, so a list never stays as
@@ -291,6 +298,7 @@ export async function activate(user: number, name?: string, still: () => boolean
       void revalidate(opened).catch(() => {})
     } catch (e) {
       store?.close()
+      if (e instanceof Superseded) return abandon()
       set({ runtime: null, problem: e instanceof SchemaTooNew ? 'schema' : 'unavailable', foreign })
     }
     return state
@@ -300,14 +308,22 @@ export async function activate(user: number, name?: string, still: () => boolean
 }
 
 // The person chose to discard the other accounts' unsent records: everything of theirs on this
-// device is deleted.
+// device is deleted. Each one under its account's lock, and only while the choice still holds: the
+// account that made it is the one in use here, and the one deleted hasn't signed in since (in another
+// tab), which would make what is there theirs again.
 export async function discardForeign(): Promise<void> {
   if (opening) await opening.catch(() => {})
   const foreign = state.foreign
-  if (!foreign) return
-  for (const id of foreign.users) await OfflineStore.destroyFor(id).catch(() => {})
-  writeUsers(readUsers().filter((id) => !foreign.users.includes(id)))
-  set({ ...state, foreign: null })
+  const owner = state.runtime?.user
+  if (!foreign || owner === undefined) return
+  const gone: number[] = []
+  for (const id of foreign.users) {
+    const still = () => state.runtime?.user === owner && state.foreign === foreign && lastUser()?.id === owner
+    const outcome = await OfflineStore.deleteRetired(id, { force: true, still }).catch(() => 'failed' as const)
+    if (outcome === 'removed') gone.push(id)
+  }
+  writeUsers(readUsers().filter((id) => !gone.includes(id)))
+  if (state.foreign === foreign) set({ ...state, foreign: null })
 }
 
 // What signing out would lose: how many records of user's the server hasn't acknowledged, counted
@@ -372,17 +388,21 @@ export async function stillAgreed(user: number, approved: Approval = new Map()):
   return (await unsentState(user, approved)).left
 }
 
+// `inspect`: only looked at, as a sign-out's verification does: a database that isn't there is
+// none (never made by asking), and nothing is opened once `still` doesn't hold.
 export async function unsentState(
   user: number,
   approved: Approval = new Map(),
+  inspect?: { still: () => boolean },
 ): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
-  return checkUnsent(user, (store) => store.unapproved(approved))
+  return checkUnsent(user, (store) => store.unapproved(approved), inspect?.still, !!inspect)
 }
 
 async function checkUnsent(
   user: number | undefined,
   ask: (store: OfflineStore) => Promise<UnsentRef[]>,
   still: () => boolean = () => true,
+  existing = false,
 ): Promise<{ left: UnsentRef[]; unreadable: boolean }> {
   if (opening) await opening.catch(() => {})
   if (!still()) return { left: [], unreadable: false }
@@ -397,8 +417,10 @@ async function checkUnsent(
     let store = runtime?.user === id ? runtime.store : undefined
     const own = !store
     try {
-      store ??= await OfflineStore.open(id)
-    } catch {
+      store ??= await OfflineStore.open(id, existing ? { still, existing } : {})
+    } catch (e) {
+      if (e instanceof Superseded) return { left: [], unreadable: false }
+      if (e instanceof NotOnDevice) continue
       unreadable = true
       continue
     }

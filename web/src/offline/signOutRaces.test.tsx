@@ -24,7 +24,7 @@ import {
   signOutPending,
   unansweredSignOut,
 } from './pendingSignOut'
-import { activate, deactivate, lastUser, runtimeState } from './runtime'
+import { activate, deactivate, discardForeign, lastUser, runtimeState } from './runtime'
 import { databaseExists, lockTimes, OfflineStore, type OutboxItem } from './store'
 
 // Something can be made to happen as a start (or Back) takes the account up, before it is claimed.
@@ -805,7 +805,7 @@ test('a start whose earlier sign-outs take a while claims nothing when another p
   expect(browserLogin()).toMatchObject({ user: 8, session: 't1' })
 })
 
-test("a start that isn't stale still leaves a sign-out another login recorded after it asked", async () => {
+test("a start that isn't stale lets go of an older login's sign-out, even one recorded after it asked", async () => {
   let answer: (() => void) | undefined
   fakeFetch({
     ...signedIn,
@@ -814,7 +814,7 @@ test("a start that isn't stale still leaves a sign-out another login recorded af
         answer = () => done({ body: me })
       }),
   })
-  // Another tab asked who is signed in before this one did, and learned of a newer login.
+  // Another tab asked who is signed in before this one did, and learned of another login.
   rememberLogin(7, 's2', Date.now() - 1000)
   render(<App />)
   await waitFor(() => expect(answer).toBeDefined())
@@ -822,8 +822,10 @@ test("a start that isn't stale still leaves a sign-out another login recorded af
   recordSignOut(7, 's2', false, new Map())
   await act(async () => answer?.())
   await screen.findByRole('banner')
-  // Recorded after this start asked: that login's to finish, not this start's to drop.
-  expect(pendingSignOuts().find((p) => p.session === 's2')).toBeTruthy()
+  // This start's login is the browser's (its cookie is what that logout is sent with, and refused
+  // for): the older login's sign-out holds nothing of the device or the queue.
+  expect(pendingSignOuts().find((p) => p.session === 's2')).toBeUndefined()
+  expect(signOutPending(7)).toBe(false)
 })
 
 test('a start whose login another tab replaced while it took the account up opens nothing for it', async () => {
@@ -1363,4 +1365,217 @@ test('a start whose login another person overtakes just after its earlier sign-o
   expect(await screen.findByText('The account changed')).toBeTruthy()
   expect(localStorage.getItem('taskto:drafts-of')).toBe('8')
   expect(localStorage.getItem('taskto:builder-start:8:1')).toBe('a draft of the second person')
+})
+
+test("an older login's sign-out recorded while the newer login's start waited for its answer holds nothing of it", async () => {
+  rememberLogin(7, 's1', Date.now() - 10)
+  // A tab of the older login signs it out after this start asked who is signed in (the newer login's
+  // cookie was already the browser's; its answer is still on its way), and its logout got no answer.
+  recordSignOut(7, 's1', false, new Map(), false, Date.now() + 60_000)
+  unansweredSignOut(7, 's1')
+  fakeFetch({ ...signedIn, 'GET /api/me': { body: { ...me, session: 's2' } } })
+  await signedInAs()
+  expect(signOutPending(7)).toBe(false)
+  expect(pendingSignOuts()).toEqual([])
+  // Nor does it keep the newer login out of offline use.
+  cleanup()
+  await deactivate({ purge: false, user: 7 })
+  expect((await activate(7)).runtime?.user).toBe(7)
+})
+
+test.each([
+  ['a newer login of the same person', 7, 's4', 'Patricia'],
+  ['another person', 8, 't1', 'Sam'],
+])(
+  'a sign-in that takes up the runtime still open here writes no marker and starts nothing once %s signed in',
+  async (_, user, session, name) => {
+    fakeFetch({
+      ...signedIn,
+      'GET /api/me': { body: me },
+      'GET /api/login/methods': { body: { password: true, sso: [] } },
+      'POST /api/login': { body: { ...me, session: 's3' } },
+    })
+    await signedInAs()
+    await act(async () => {})
+    fakeFetch({
+      ...signedIn,
+      'GET /api/me': { status: 401, body: { error: 'not logged in' } },
+      'GET /api/login/methods': { body: { password: true, sso: [] } },
+      'POST /api/login': { body: { ...me, session: 's3' } },
+    })
+    await act(async () => {
+      await api('/api/me').catch(() => {})
+    })
+    await screen.findByLabelText('Password')
+    const runtime = runtimeState().runtime
+    if (runtime?.user !== 7) throw new Error('no runtime')
+    const resume = vi.spyOn(runtime.engine, 'resume')
+    // Just as this sign-in takes the account up, the other login starts in another tab (its signal not
+    // heard here yet).
+    during.activate = () => {
+      rememberLogin(user, session, Date.now() + 1)
+      localStorage.setItem(LAST, JSON.stringify({ id: user, name }))
+    }
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'pat@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+    expect(await screen.findByText('The account changed')).toBeTruthy()
+    expect(lastUser()).toEqual({ id: user, name })
+    expect(resume).not.toHaveBeenCalled()
+  },
+)
+
+test("a sign-in overtaken while it takes the account up never sets the browser's language", async () => {
+  fakeFetch({
+    ...signedIn,
+    'GET /api/me': { status: 401, body: { error: 'not logged in' } },
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: { ...me, user: { ...me.user, locale: 'pt-BR' } } },
+  })
+  render(<App />)
+  await screen.findByLabelText('Password')
+  during.claim = () => {
+    rememberLogin(8, 't1', Date.now() + 60_000)
+  }
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'pat@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  expect(await screen.findByText('The account changed')).toBeTruthy()
+  expect(localStorage.getItem('taskto.locale')).toBeNull()
+})
+
+test("a start waiting for the account's lock behind a sign-out never makes the database again once its login is over", async () => {
+  const names = fakeLocks()
+  let release: () => void = () => {}
+  const held = navigator.locks.request('taskto-offline-db:7', () => new Promise<void>((done) => (release = done)))
+  let current = true
+  const started = activate(7, 'Pat', () => current)
+  await waitFor(() => expect(names.filter((n) => n === 'taskto-offline-db:7')).toHaveLength(2))
+  // The login is signed out in another tab, whose deletion holds the lock, while this start waits.
+  current = false
+  const opens = vi.spyOn(indexedDB, 'open')
+  release()
+  await held
+  expect((await started).runtime).toBeNull()
+  // Not even opened once the lock was this start's.
+  expect(opens.mock.calls.some(([name]) => name === 'taskto-offline-7')).toBe(false)
+  vi.restoreAllMocks()
+  expect(await databases()).not.toContain('taskto-offline-7')
+})
+
+// The login ends just as the start's open of the database is under way.
+function endsWhileOpening(): { current: () => boolean } {
+  let current = true
+  const real = IDBFactory.prototype.open
+  vi.spyOn(indexedDB, 'open').mockImplementation(function (this: IDBFactory, name: string, version?: number) {
+    if (name === 'taskto-offline-7') current = false
+    return real.call(this, name, version)
+  })
+  return { current: () => current }
+}
+
+test("a database a start made for a login that ended meanwhile is deleted again before the account's lock goes", async () => {
+  fakeLocks()
+  const login = endsWhileOpening()
+  // Said as the account change it is, not as storage that failed.
+  expect(await activate(7, 'Pat', login.current)).toMatchObject({ runtime: null, problem: 'account' })
+  vi.restoreAllMocks()
+  expect(await databases()).not.toContain('taskto-offline-7')
+})
+
+test('a start whose login ended while it opened the database leaves what was already in it', async () => {
+  const store = await OfflineStore.open(7)
+  await store.enqueue(queued('kept'), [])
+  store.close()
+  fakeLocks()
+  const login = endsWhileOpening()
+  // Said as the account change it is, not as storage that failed.
+  expect(await activate(7, 'Pat', login.current)).toMatchObject({ runtime: null, problem: 'account' })
+  vi.restoreAllMocks()
+  const after = await OfflineStore.open(7)
+  expect((await after.listItems()).map((i) => i.id)).toEqual(['kept'])
+  after.close()
+})
+
+test("a sign-out's check that the device is clear never makes the database it looks for", async () => {
+  recordSignOut(7, 's1', false, new Map())
+  // The browser's list still names the database (another tab's cleanup removed it just after).
+  vi.spyOn(indexedDB, 'databases').mockResolvedValue([{ name: 'taskto-offline-7', version: 1 }])
+  expect(await cleanUpAfterSignOut(7, 's1', { keep: false, approved: new Map() })).toBe(true)
+  vi.restoreAllMocks()
+  expect(await databases()).not.toContain('taskto-offline-7')
+})
+
+test("discarding other accounts' records stops at one that signed in again meanwhile", async () => {
+  for (const id of [8, 9]) {
+    const theirs = await OfflineStore.open(id)
+    await theirs.enqueue({ ...queued(`of-${id}`), user: id }, [])
+    theirs.close()
+  }
+  localStorage.setItem('taskto:offline-users', JSON.stringify([8, 9]))
+  const state = await activate(7, 'Pat')
+  expect(state.foreign).toEqual({ users: [8, 9], count: 2 })
+  runtimeState().runtime?.engine.pause('manual')
+  const real = IDBFactory.prototype.deleteDatabase
+  vi.spyOn(indexedDB, 'deleteDatabase').mockImplementation(function (this: IDBFactory, name: string) {
+    // The third person signs in in another tab while the first deletion goes on.
+    if (name === 'taskto-offline-8') localStorage.setItem(LAST, JSON.stringify({ id: 9, name: 'Kim' }))
+    return real.call(this, name)
+  })
+  await discardForeign()
+  vi.restoreAllMocks()
+  expect(await databases()).not.toContain('taskto-offline-8')
+  const kims = await OfflineStore.open(9)
+  expect((await kims.listItems()).map((i) => i.id)).toEqual(['of-9'])
+  kims.close()
+})
+
+test.each([
+  ['its deletion of the retired database', 'deleteDatabase'],
+  ['its making of it again', 'open'],
+] as const)('a start whose login ended during %s leaves no database made again', async (_, when) => {
+  const retired = await OfflineStore.open(7)
+  await retired.retireOrKeepUnsent()
+  retired.close()
+  fakeLocks()
+  let current = true
+  let deleted = false
+  let opensAfter = 0
+  const realOpen = IDBFactory.prototype.open
+  const realDelete = IDBFactory.prototype.deleteDatabase
+  vi.spyOn(indexedDB, 'deleteDatabase').mockImplementation(function (this: IDBFactory, name: string) {
+    if (name === 'taskto-offline-7' && !deleted) {
+      deleted = true
+      if (when === 'deleteDatabase') current = false
+    }
+    return realDelete.call(this, name)
+  })
+  vi.spyOn(indexedDB, 'open').mockImplementation(function (this: IDBFactory, name: string, version?: number) {
+    if (name === 'taskto-offline-7' && deleted) {
+      opensAfter++
+      if (when === 'open') current = false
+    }
+    return realOpen.call(this, name, version)
+  })
+  expect((await activate(7, 'Pat', () => current)).runtime).toBeNull()
+  vi.restoreAllMocks()
+  // Not made again once the login was seen to be over.
+  if (when === 'deleteDatabase') expect(opensAfter).toBe(0)
+  expect(await databases()).not.toContain('taskto-offline-7')
+})
+
+test("a start's sweep makes no database for another account whose login it was overtaken in", async () => {
+  // Listed here, with no database left.
+  localStorage.setItem('taskto:offline-users', JSON.stringify([8]))
+  fakeLocks()
+  let current = true
+  const real = IDBFactory.prototype.open
+  vi.spyOn(indexedDB, 'open').mockImplementation(function (this: IDBFactory, name: string, version?: number) {
+    // The second person signs in in another tab just as the sweep opens their database.
+    if (name === 'taskto-offline-8') current = false
+    return real.call(this, name, version)
+  })
+  expect((await activate(7, 'Pat', () => current)).runtime).toBeNull()
+  vi.restoreAllMocks()
+  expect(await databases()).not.toContain('taskto-offline-8')
 })

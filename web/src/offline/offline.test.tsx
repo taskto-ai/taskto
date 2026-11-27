@@ -1560,7 +1560,7 @@ test('an account that signs in while another one’s database is still opening i
     return original(user)
   })
   const attempt = activate(7, 'Pat')
-  await waitFor(() => expect(opening).toHaveBeenCalledWith(7))
+  await waitFor(() => expect(opening).toHaveBeenCalledWith(7, expect.anything()))
   // Another tab signs in as Bob meanwhile: this tab has no runtime yet to hear it with.
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
   window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
@@ -1584,7 +1584,7 @@ test('an account that signs in while the others’ databases are swept is left a
     return original(user)
   })
   const attempt = activate(7, 'Pat')
-  await waitFor(() => expect(OfflineStore.open).toHaveBeenCalledWith(1))
+  await waitFor(() => expect(OfflineStore.open).toHaveBeenCalledWith(1, expect.anything()))
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
   held.open()
   expect(await attempt).toMatchObject({ runtime: null, problem: 'account' })
