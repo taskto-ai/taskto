@@ -277,7 +277,13 @@ func (s *Service) pollRef(ctx context.Context, rec record, creds Credentials, cl
 	case len(obs.Payments) > 0:
 		// A paid object is told even when it ended another way too: money is never dropped.
 		for _, p := range obs.Payments {
-			s.pollTell(ctx, rec, r, Event{ID: "poll:" + p.ObjectID + ":paid", Kind: EventPaymentSucceeded, ObjectID: p.ObjectID,
+			// A hosted link is paid through a session of its own: the event names the session, and the
+			// link it came from, as a webhook's event of it does (Event.LinkID).
+			link := ""
+			if r.successURL == "" && p.ObjectID != r.objectID {
+				link = r.objectID
+			}
+			s.pollTell(ctx, rec, r, Event{ID: "poll:" + p.ObjectID + ":paid", Kind: EventPaymentSucceeded, ObjectID: p.ObjectID, LinkID: link,
 				PaymentID: p.PaymentID, AmountMinor: p.AmountMinor, Currency: p.Currency, Livemode: p.Livemode, OccurredAt: p.PaidAt})
 		}
 	case obs.Expired:

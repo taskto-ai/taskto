@@ -244,6 +244,10 @@ func TestPollingFindsAPaymentThroughAPaymentLinkWithNoPublicURL(t *testing.T) {
 	if err := p.db.QueryRow(`SELECT paid_object_id FROM integration_refs WHERE id = ?`, ref.id).Scan(&paidObject); err != nil || paidObject != evs[0].object {
 		t.Fatalf("paid object %q, %v", paidObject, err)
 	}
+	// The one-use link was paid through its own session: it is used up, and the money is free again.
+	if yes, _, err := p.svc.MayBePaid(context.Background(), p.db, p.app.ID, record); err != nil || yes {
+		t.Fatalf("the paid link may still be paid: %v, %v", yes, err)
+	}
 }
 
 // A link nobody has paid is read, and nothing changes.

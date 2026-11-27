@@ -558,6 +558,10 @@
         "inspection": {
           "name": "Inspeção",
           "description": "Percorra um local, registre aprovado ou reprovado com o lugar e uma assinatura, e transforme cada reprovação em um cartão em um quadro que você escolher."
+        },
+        "invoicing": {
+          "name": "Faturamento",
+          "description": "Guarde suas faturas, envie uma com um link de pagamento e veja-a marcada como paga (ou reembolsada) quando o pagamento chegar. Um administrador precisa conectar uma conta de pagamentos e aprovar o app."
         }
       }
     },
@@ -1202,6 +1206,8 @@
     "integration_account_changed": "Este link de pagamento foi iniciado em outra conta do provedor de pagamentos, porque a chave da integração foi trocada. Um administrador precisa verificar essa conta primeiro: se o link anterior foi pago, nada deve ser recriado; se não, ele deve ser impedido de receber pagamento antes de a ação ser executada de novo.",
     "integration_changed": "Este link de pagamento foi criado em outra integração de pagamentos que não a que este app usa agora. Um administrador precisa verificar se esse link foi pago e, se não, impedi-lo de receber pagamento antes de a ação ser executada de novo.",
     "integration_link_already_paid": "Uma tentativa anterior deste link de pagamento foi paga ou não pode mais receber pagamento (foi paga, foi encerrada por uma pessoa ou atingiu o limite), então nenhum link novo foi criado. Um administrador precisa conciliar esse pagamento na conta do provedor de pagamentos antes de a ação ser executada de novo.",
+    "integration_link_still_open": "Este registro já tem um link de pagamento que ainda pode ser pago (ou ainda está sendo criado) e não pode ser dado de novo: ele pede outro valor ou moeda, lê esses valores de outros campos do registro, ou o registro tem mais de um. Nenhum segundo link foi criado. Execute a ação de novo quando esse link tiver expirado.",
+    "integration_amount_changed": "O valor ou a moeda do registro mudou depois que esta ação foi executada, então nenhum link de pagamento foi criado para o valor antigo. Execute a ação de novo para pedir o valor que o registro tem agora.",
     "integration_event_unavailable": "Chegou um pagamento, mas a integração de pagamentos do app não pode ser usada agora: a aprovação foi retirada, ela foi desligada ou este espaço foi removido dela. Corrija isso e tente o evento de novo.",
     "integration_event_integration_changed": "Chegou um pagamento por uma integração que não é mais a que este app usa. Conecte o app a ela de novo ou resolva o pagamento à mão.",
     "integration_event_app_offline": "Chegou um pagamento, mas o app está offline, não publicado ou em um espaço arquivado. Traga-o de volta e tente o evento de novo.",
@@ -1258,6 +1264,7 @@
     "app_field_not_signature": "{field} deve ser uma imagem de assinatura.",
     "app_field_not_barcode": "{field} deve ser o texto de um código válido (com o dígito verificador certo, se o campo lê EAN ou UPC).",
     "app_field_locked": "{field} foi capturado e não pode ser alterado depois.",
+    "app_payment_link_open": "{field} não pode mudar, nem ser lido de outro jeito por uma versão, enquanto o link de pagamento de um registro ainda puder ser pago (ou ainda estiver sendo criado). Altere quando o link tiver expirado.",
     "app_signature_type": "Uma assinatura deve ser uma imagem PNG.",
     "offline_downloads_disabled": "Um administrador desativou os downloads offline deste espaço.",
     "session_account_changed": "Este navegador agora está conectado com outra conta, em outra aba, então nada foi feito. Recarregue a página para continuar.",

@@ -82,7 +82,7 @@ func TestBundledTemplatesAreValid(t *testing.T) {
 			t.Errorf("%s offers no Home widget", tpl.ID)
 		}
 	}
-	if strings.Join(ids, ",") != "equipment-checkout,expense-tracker,inspection" {
+	if strings.Join(ids, ",") != "equipment-checkout,expense-tracker,inspection,invoicing" {
 		t.Fatalf("templates = %v", ids)
 	}
 	infos, _ := TemplateInfos()
@@ -132,7 +132,7 @@ func TestTemplatesAreListedToMembersOnly(t *testing.T) {
 	w := newWorld(t)
 	rec := w.alice.do(http.MethodGet, templatesPath(w.ws), nil)
 	expect(t, rec, http.StatusOK)
-	if got := decode[struct{ Templates []TemplateInfo }](t, rec).Templates; len(got) != 3 {
+	if got := decode[struct{ Templates []TemplateInfo }](t, rec).Templates; len(got) != 4 {
 		t.Fatalf("templates = %+v", got)
 	}
 	// Someone who left the workspace, and a request with no session.

@@ -13,6 +13,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/paylink"
 	"taskto.ai/taskto/internal/quota"
 )
 
@@ -219,7 +220,10 @@ type Service struct {
 	// clock is the time the outbox's worker goes by: the real one, a test's own otherwise.
 	clock func() time.Time
 	// wake tells the worker, if it runs in this process, that an entry was queued.
-	wake  chan struct{}
+	wake chan struct{}
+	// poll is how often the worker looks for due entries when nothing wakes it: outboxPoll,
+	// or a test's own (WithOutboxPoll).
+	poll  time.Duration
 	hooks outboxHooks
 	// dataDir holds the spaces' directories, where attachments are kept (WithFiles); empty if
 	// the service keeps no files.
@@ -1165,7 +1169,7 @@ func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, a
 		if fromOlder && (action.Exact || !liveTakes(live, def, action.Name, ch)) {
 			return &outdatedError{release: *action.Release, live: a.Live.Number}
 		}
-		ap, err := apply(ctx, tx, actor, appID, live, ch,
+		ap, err := apply(ctx, tx, actor, appID, live, ch, s.platform.Payments,
 			visibility{scope: acc.ModifyRecords, user: actor.UserID}, readable(acc, actor.UserID))
 		if err != nil {
 			return err
@@ -1350,7 +1354,7 @@ func shownBy(live, from Definition) Definition {
 // modify is the rows the actor may change: a row outside it is answered as one the app doesn't
 // have, so which rows exist isn't told to someone who may not touch them. read is the rows
 // they may read, which decides whether a conflict shows the row as it is now.
-func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Definition, ch Change, modify, read visibility) (applied, error) {
+func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Definition, ch Change, payments paylink.Opener, modify, read visibility) (applied, error) {
 	var count, size int
 	// Only live rows count against the limits. In bytes, as len() counts below: length() of
 	// TEXT counts characters, which would let non-ASCII rows hold more than MaxDataSize.
@@ -1412,6 +1416,10 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 		// required one is a change that is refused for what it is, not for the field's being required.
 		next := merged(cur.fields, ch.Data)
 		if err := def.Collection.lockedChange(cur.fields, next); err != nil {
+			return applied{}, err
+		}
+		// The money a payment link of the record asks stays as it is while the link may be paid.
+		if err := paymentMoneyLocked(ctx, tx, payments, appID, ch.ID, def, cur.fields, next); err != nil {
 			return applied{}, err
 		}
 		if err := def.Collection.Fits(next); err != nil {

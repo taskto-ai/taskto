@@ -5,8 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
+	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
@@ -120,6 +124,12 @@ func (s *Service) paymentGrantOf(ctx context.Context, q queryer, e effectRow, sp
 	}) {
 		return paymentGrant{}, refuse(apierr.CodeIntegrationConditionChanged)
 	}
+	// The money the entry asks is the record's still. It can't change while an entry waits to run
+	// (paymentMoneyLocked), but one that failed and is retried after the record's amount or currency
+	// changed would ask for a link at the old money, which the invoice no longer says.
+	if amount, code := p.moneyEffect().moneyOf(ap.liveDef.Collection, data); amount != p.Amount || code != p.Currency {
+		return paymentGrant{}, refuse(apierr.CodeIntegrationAmountChanged)
+	}
 	return paymentGrant{spaceID: spaceID, workspaceID: workspaceID, binding: b}, nil
 }
 
@@ -194,7 +204,7 @@ func (s *Service) createPaymentLink(ctx context.Context, e effectRow) (map[strin
 	}
 	link, err := s.platform.Payments.OpenPaymentLink(ctx, paylink.Request{
 		WorkspaceID: workspaceID, IntegrationID: b.IntegrationID, SpaceID: spaceID, AppID: e.appID, RecordID: e.recordID, EffectID: e.id,
-		Slot: p.Slot, Amount: p.Amount, Currency: p.Currency, Description: p.Description,
+		Slot: p.Slot, URLField: p.URLField, AmountField: p.AmountField, CurrencyField: p.CurrencyField, Amount: p.Amount, Currency: p.Currency, Description: p.Description,
 	})
 	if err != nil {
 		var pe *paylink.Error
@@ -300,4 +310,201 @@ func notePaymentLinkEntry(ctx context.Context, tx *sql.Tx, appID, recordID, effe
 		}
 	}
 	return nil
+}
+
+// moneyEffect is the effect as far as its money goes: where the entry's amount and currency were read.
+func (p payload) moneyEffect() Effect {
+	e := Effect{Kind: EffectCreatePaymentLink, AmountField: p.AmountField, CurrencyField: p.CurrencyField}
+	if p.CurrencyField == "" {
+		e.Currency = p.Currency
+	}
+	return e
+}
+
+// paymentMoneyLocked refuses a change of the record's money (the amount or the currency a payment
+// link effect of the app reads) while a payment link of the record may still be paid: an entry that
+// waits to run asks the money it was queued with, and a link that is open, still being made or whose
+// outcome is unknown asks the money it was made for. A payer would pay the old amount for an invoice
+// that says another, and the payment would settle it. Once the link is confirmed expired (or paid on
+// that very link), the money may change, and the next link asks the new one. Asked of the change's
+// own transaction, under the write lock, so no entry or link begins between the check and the change.
+// Every write of a record asks it: a person's, an action's, the agent's and the system's (an event's
+// handler, system.go).
+func paymentMoneyLocked(ctx context.Context, tx *sql.Tx, payments paylink.Opener, appID, recordID int64, def Definition, before, after map[string]any) error {
+	locked, err := lockedMoney(ctx, tx, payments, appID, recordID, def)
+	if err != nil {
+		return err
+	}
+	for _, f := range locked[recordID] {
+		e := Effect{Kind: EffectCreatePaymentLink, AmountField: f.Amount, CurrencyField: f.Currency}
+		wasAmount, wasCode := e.moneyOf(def.Collection, before)
+		nowAmount, nowCode := e.moneyOf(def.Collection, after)
+		changed := ""
+		// What the field holds is compared too, not only the money read from it: a release that changed
+		// the field's type (an acknowledged change) reads no amount from it at all, and a change of its
+		// value is a change of the link's money all the same.
+		if wasAmount != nowAmount || !sameValue(before[f.Amount], after[f.Amount]) {
+			changed = f.Amount
+		} else if f.Currency != "" && (wasCode != nowCode || !sameValue(before[f.Currency], after[f.Currency])) {
+			changed = f.Currency
+		}
+		if changed != "" {
+			return invalidAs(apierr.CodeAppPaymentLinkOpen, apierr.Params{"field": changed},
+				"%s can't change while the record's payment link may still be paid: change it once the link has expired", changed)
+		}
+	}
+	return nil
+}
+
+// paymentMoneyKept refuses a release (published, or rolled back to) that would read the money of a
+// record whose payment link may still be paid otherwise than the live release does: a field retyped,
+// a choice of currencies without the one the link asks, a bound that changes what is read. The link
+// asks what the live release read, and the payment of it settles the invoice the new one describes.
+// The fields are those the links and the entries that wait were read from, and those the live
+// release's effects read. A release may read money from other fields too: a new link asks those.
+func paymentMoneyKept(ctx context.Context, tx *sql.Tx, payments paylink.Opener, appID int64, live *Definition, next Definition) error {
+	if live == nil {
+		return nil // nothing was ever live: no link was asked of it
+	}
+	locked, err := lockedMoney(ctx, tx, payments, appID, 0, *live)
+	if err != nil {
+		return err
+	}
+	for _, id := range slices.Sorted(maps.Keys(locked)) {
+		var raw string
+		switch err := tx.QueryRowContext(ctx, `SELECT data FROM app_rows WHERE id = ? AND app_id = ? AND deleted_at IS NULL`, id, appID).Scan(&raw); {
+		case errors.Is(err, sql.ErrNoRows):
+			continue
+		case err != nil:
+			return err
+		}
+		var data map[string]any
+		if err := json.Unmarshal([]byte(raw), &data); err != nil {
+			return err
+		}
+		for _, f := range locked[id] {
+			e := Effect{Kind: EffectCreatePaymentLink, AmountField: f.Amount, CurrencyField: f.Currency}
+			wasAmount, wasCode := e.moneyOf(live.Collection, data)
+			nowAmount, nowCode := e.moneyOf(next.Collection, data)
+			field := ""
+			if wasAmount != nowAmount {
+				field = f.Amount
+			} else if wasCode != nowCode {
+				field = f.Currency
+			}
+			if field != "" {
+				return apierr.New(http.StatusUnprocessableEntity, apierr.CodeAppPaymentLinkOpen,
+					fmt.Sprintf("%s can't be read otherwise while a record's payment link may still be paid: publish this once the link has expired", field),
+					apierr.Params{"field": field})
+			}
+		}
+	}
+	return nil
+}
+
+// lockedMoney is, for each record of the app (recordID 0: every one) whose money is locked, the fields
+// it is locked in: those of the entries that wait to run, of the links that may still be paid, and of
+// the payment link effects of def. A link that doesn't say which fields it was read from (made before
+// links kept them, its entry cleaned up since) locks every field any release of the app read money
+// from, and def's.
+func lockedMoney(ctx context.Context, tx *sql.Tx, payments paylink.Opener, appID, recordID int64, def Definition) (map[int64][]paylink.MoneyFields, error) {
+	locked := map[int64][]paylink.MoneyFields{}
+	rows, err := tx.QueryContext(ctx, `SELECT record_id, coalesce(json_extract(payload, '$.amount_field'), ''), coalesce(json_extract(payload, '$.currency_field'), '')
+		FROM app_effects WHERE app_id = ? AND (? = 0 OR record_id = ?) AND kind = ? AND state IN ('pending', 'running')`,
+		appID, recordID, recordID, EffectCreatePaymentLink)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id int64
+		var f paylink.MoneyFields
+		if err := rows.Scan(&id, &f.Amount, &f.Currency); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		locked[id] = append(locked[id], f)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	if payments != nil {
+		linked, err := payments.PayableMoney(ctx, tx, appID, recordID)
+		if err != nil {
+			return nil, err
+		}
+		for id, fields := range linked {
+			locked[id] = append(locked[id], fields...)
+		}
+	}
+	if len(locked) == 0 {
+		return locked, nil
+	}
+	own := moneyFieldsOf(def)
+	var every []paylink.MoneyFields
+	for id, fields := range locked {
+		out := slices.Clone(own)
+		for _, f := range fields {
+			if f.Amount != "" {
+				out = append(out, f)
+				continue
+			}
+			if every == nil {
+				if every, err = releasesMoneyFields(ctx, tx, appID); err != nil {
+					return nil, err
+				}
+			}
+			out = append(out, every...)
+		}
+		slices.SortFunc(out, func(a, b paylink.MoneyFields) int {
+			return strings.Compare(a.Amount+"\x00"+a.Currency, b.Amount+"\x00"+b.Currency)
+		})
+		locked[id] = slices.Compact(out)
+	}
+	return locked, nil
+}
+
+// moneyFieldsOf are the fields the payment link effects of def read their money from.
+func moneyFieldsOf(def Definition) []paylink.MoneyFields {
+	var out []paylink.MoneyFields
+	for _, name := range slices.Sorted(maps.Keys(def.Actions)) {
+		for _, e := range def.Actions[name].Effects {
+			if e.Kind == EffectCreatePaymentLink {
+				out = append(out, paylink.MoneyFields{Amount: e.AmountField, Currency: e.CurrencyField})
+			}
+		}
+	}
+	return out
+}
+
+// releasesMoneyFields are the fields the payment link effects of every release of the app read their
+// money from: what a link that doesn't say its own may have been read from (never nil, so it is read
+// once per check).
+func releasesMoneyFields(ctx context.Context, tx *sql.Tx, appID int64) ([]paylink.MoneyFields, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT definition FROM app_releases WHERE app_id = ? ORDER BY number`, appID)
+	if err != nil {
+		return nil, err
+	}
+	out := []paylink.MoneyFields{}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		var def Definition
+		if err := json.Unmarshal([]byte(raw), &def); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		out = append(out, moneyFieldsOf(def)...)
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+// sameValue says whether two values of a record's field are the same as JSON: 120 read from the
+// database and 120 from a request are, whatever their Go types.
+func sameValue(a, b any) bool {
+	x, errA := json.Marshal(a)
+	y, errB := json.Marshal(b)
+	return errA == nil && errB == nil && string(x) == string(y)
 }

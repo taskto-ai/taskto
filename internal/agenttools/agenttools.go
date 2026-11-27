@@ -288,7 +288,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p, err := s.Authorize(r)
 	var refusal *Refusal
 	if errors.As(err, &refusal) {
-		writeError(w, refusal.Status, refusal.Message, refusal.Code)
+		writeRefusal(w, refusal)
 		return
 	}
 	if err != nil {
@@ -362,13 +362,15 @@ func (s *Service) Call(ctx context.Context, c Caller, name string, args json.Raw
 }
 
 // Refusal is a call the tools turned down: Message says why, for the model, and Status is
-// the HTTP status the tools socket answers with.
+// the HTTP status the tools socket answers with. Code and Params, when set, are the API's error
+// code for it (internal/apierr) and its params, as the REST API would answer the same refusal.
 type Refusal struct {
 	Status  int
 	Message string
 	// Code, when set, says why as an error code (internal/apierr): the CLI worker isn't ready yet,
-	// say, which the caller tries again after.
-	Code apierr.Code
+	// say, which the caller tries again after. Params go with it.
+	Code   apierr.Code
+	Params apierr.Params
 }
 
 func (r *Refusal) Error() string { return r.Message }
@@ -378,6 +380,7 @@ func (r *Refusal) Error() string { return r.Message }
 func (s *Service) refusal(ctx context.Context, name string, err error) error {
 	var invalid errInvalid
 	var refused *Refusal
+	var coded *apierr.Error
 	switch {
 	case errors.As(err, &refused):
 		return refused
@@ -406,6 +409,10 @@ func (s *Service) refusal(ctx context.Context, name string, err error) error {
 			unit = "second"
 		}
 		return &Refusal{Status: http.StatusTooManyRequests, Message: fmt.Sprintf("too many actions run with access tokens just now: try again in %d %s", seconds, unit)}
+	case errors.As(err, &coded):
+		// An API error with its own status and code (a release that would read an open payment link's
+		// money otherwise: app_payment_link_open), answered as the REST API answers it.
+		return &Refusal{Status: coded.Status, Message: coded.Msg, Code: coded.Code, Params: coded.Params}
 	case errors.Is(err, knowledge.ErrTooLarge), errors.Is(err, knowledge.ErrRepoFull):
 		return &Refusal{Status: http.StatusRequestEntityTooLarge, Message: err.Error()}
 	case errors.Is(err, quota.ErrExceeded):
@@ -432,17 +439,28 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, name string, err 
 			return // the sidecar went away
 		}
 	}
-	writeError(w, refused.Status, refused.Message, refused.Code)
+	writeRefusal(w, refused)
 }
 
-func writeError(w http.ResponseWriter, status int, msg string, code ...apierr.Code) {
+// writeRefusal answers with the refusal's status, its message and, if it has one, its code.
+func writeRefusal(w http.ResponseWriter, r *Refusal) {
+	if r.Code == "" {
+		writeError(w, r.Status, r.Message)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	body := map[string]string{"error": msg}
-	if len(code) > 0 && code[0] != "" {
-		body["code"] = string(code[0])
+	w.WriteHeader(r.Status)
+	body := map[string]any{"error": r.Message, "code": r.Code}
+	if len(r.Params) > 0 {
+		body["params"] = r.Params
 	}
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
 // decode reads a tool's arguments strictly: unknown fields and trailing data are errors,
