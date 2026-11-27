@@ -4,10 +4,19 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
+	"strings"
 )
 
+var revision = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+
 func diff(base, head string) ([]change, error) {
-	out, err := exec.Command("git", "diff", "--numstat", "-z", "-M", base+"..."+head).Output()
+	for _, r := range []string{base, head} {
+		if !revision.MatchString(r) || strings.Contains(r, "..") {
+			return nil, fmt.Errorf("not a revision: %q", r)
+		}
+	}
+	out, err := exec.Command("git", "diff", "--numstat", "-z", "-M", "--end-of-options", base+"..."+head).Output()
 	if err != nil {
 		return nil, fmt.Errorf("git diff: %w", err)
 	}

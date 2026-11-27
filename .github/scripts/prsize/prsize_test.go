@@ -194,6 +194,20 @@ func TestParseNumstatReadsRenamesBinariesAndUnusualNames(t *testing.T) {
 	}
 }
 
+func TestOnlyRevisionsReachGit(t *testing.T) {
+	r := newRepo(t)
+	r.write("a.go", "a\n")
+	r.commit("seed")
+	for _, bad := range []string{"--output=/tmp/x", "-p", "main..HEAD", "", "a b"} {
+		if _, err := diff(bad, "main"); err == nil {
+			t.Errorf("base %q was given to git", bad)
+		}
+		if _, err := diff("main", bad); err == nil {
+			t.Errorf("head %q was given to git", bad)
+		}
+	}
+}
+
 func TestTheLimitAndTheException(t *testing.T) {
 	at := tally{production: limit}
 	over := tally{production: limit + 1}
