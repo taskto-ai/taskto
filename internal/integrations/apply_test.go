@@ -957,6 +957,9 @@ func TestTheEventsRoutesAreForAnAdminOfTheIntegrationsWorkspaceOnly(t *testing.T
 	expect(t, p.owner.do(http.MethodPost, wsPath(p.ws, fmt.Sprintf("integrations/%d/events/%d/retry", other.ID, failed.id)), nil), http.StatusNotFound)
 	rec = p.owner.do(http.MethodPost, wsPath(p.ws, fmt.Sprintf("integrations/%d/events/%d/retry", p.in.ID, 999999)), nil)
 	expect(t, rec, http.StatusNotFound)
+	if _, err := p.fake.Expire(ref.object); err != nil {
+		t.Fatal(err)
+	}
 	p.put(Event{Kind: EventPaymentExpired, RefToken: ref.token, ObjectID: ref.object, AmountMinor: ref.amount, Currency: "EUR"})
 	p.drain()
 	applied := p.lastEvent(EventPaymentExpired)
@@ -1085,7 +1088,7 @@ func TestAPaymentForARefWhoseOutcomeWasUnknownIsAppliedAndNeverDropped(t *testin
 	if list := decode[PaymentLinkOutcomes](t, rec); len(list.PaymentLinks) != 0 {
 		t.Fatalf("list = %+v", list)
 	}
-	rec = p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{})
+	rec = p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), p.checkedBody(e.id))
 	expect(t, rec, http.StatusConflict)
 	if got := decode[struct {
 		Code string `json:"code"`
@@ -1125,7 +1128,7 @@ func TestAPaymentThatNamesNoObjectForAnUnknownRefIsStillApplied(t *testing.T) {
 	if n := len(p.fake.RequestsTo(http.MethodPost, linkShapes["a checkout session"].path)); n != calls {
 		t.Fatalf("%d calls that make an object, want the %d made before the payment", n, calls)
 	}
-	rec := p.owner.do(http.MethodPost, p.confirmPath(0, fmt.Sprintf("%d/confirm-no-link", p.entries()[0].id)), map[string]any{})
+	rec := p.owner.do(http.MethodPost, p.confirmPath(0, fmt.Sprintf("%d/confirm-no-link", p.entries()[0].id)), p.checkedBody(p.entries()[0].id))
 	expect(t, rec, http.StatusConflict)
 	p.put(Event{Kind: EventPaymentRefunded, PaymentID: payment, AmountMinor: 1000, Currency: "EUR"})
 	p.drain()
@@ -1271,7 +1274,7 @@ func TestAPaymentThroughAnEarlierKeyStopsTheConfirmationOfTheNext(t *testing.T) 
 	}
 	p.exec(`UPDATE app_effects SET state = 'failed', error_code = ? WHERE id = ?`, string(apierr.CodeIntegrationOutcomeUnknown), req.EffectID)
 	spaces := map[int64]bool{p.space.ID: true}
-	if err := p.svc.ConfirmNoPaymentLink(ctx, p.ws, p.owner.id, p.in.ID, req.EffectID, spaces); err != nil {
+	if err := p.svc.ConfirmNoPaymentLink(ctx, p.ws, p.owner.id, p.in.ID, req.EffectID, p.checkedAttempt(req.EffectID), spaces); err != nil {
 		t.Fatal(err)
 	}
 	p.fake.Fail(testprovider.ServerError().KeptUnderKey().On(http.MethodPost, sessionsPath))
@@ -1308,7 +1311,7 @@ func TestAPaymentThroughAnEarlierKeyStopsTheConfirmationOfTheNext(t *testing.T) 
 	if list := decode[PaymentLinkOutcomes](t, rec); len(list.PaymentLinks) != 0 {
 		t.Fatalf("list = %+v", list.PaymentLinks)
 	}
-	rec = p.owner.do(http.MethodPost, p.confirmPath(req.EffectID, fmt.Sprintf("%d/confirm-no-link", req.EffectID)), map[string]any{})
+	rec = p.owner.do(http.MethodPost, p.confirmPath(req.EffectID, fmt.Sprintf("%d/confirm-no-link", req.EffectID)), p.checkedBody(req.EffectID))
 	expect(t, rec, http.StatusConflict)
 	if got := decode[struct {
 		Code string `json:"code"`
@@ -1380,6 +1383,9 @@ func TestAnEndOfAnEarlierKeysObjectLeavesTheLaterLinkAlone(t *testing.T) {
 		t.Fatalf("an old key's expiry ended the ref: %+v", now)
 	}
 
+	if _, err := p.fake.Expire(link.ObjectID); err != nil {
+		t.Fatal(err)
+	}
 	p.put(Event{Kind: EventPaymentExpired, RefToken: p.keyToken(1), ObjectID: link.ObjectID, AmountMinor: 1000, Currency: "EUR"})
 	p.drain()
 	p.mustEvent(p.lastEvent(EventPaymentExpired), EventIgnored, apierr.CodeIntegrationEventNoHandler)

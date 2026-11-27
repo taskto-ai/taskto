@@ -23,6 +23,11 @@
     overflow-wrap: anywhere;
   }
 
+  .ui-app-markdown {
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+  }
+
   .ui-stat {
     box-sizing: border-box;
     display: grid;

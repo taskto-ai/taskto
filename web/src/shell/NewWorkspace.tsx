@@ -2,7 +2,7 @@ import { type FormEvent, useEffect, useId, useRef, useState } from 'react'
 import { api, errorText, forAccount, type Me, type Workspace } from '../api'
 import { useT } from '../i18n'
 import { useMounted } from '../mounted'
-import { navigate, routePath } from '../router'
+import { navigateWholeApp, routePath } from '../router'
 import { sameSession } from '../session'
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
@@ -22,7 +22,7 @@ export interface NewWorkspaceDialogProps {
   onMe: (me: Me) => void
 }
 
-const openWorkspace = (id: number) => navigate(routePath({ workspace: id, section: 'conversations' }))
+const openWorkspace = (id: number) => navigateWholeApp(routePath({ workspace: id, section: 'conversations' }))
 
 export function NewWorkspaceDialog({ open, onClose, user, onMe }: NewWorkspaceDialogProps) {
   const t = useT()

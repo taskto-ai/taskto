@@ -256,8 +256,11 @@ export function inline(text: string, onLink?: LinkHandler, depth = 0): ReactNode
         continue
       }
       if (link) {
-        const label = image ? [link.label || link.href] : inline(link.label, onLink, depth + 1)
-        push(<A key={out.length} href={link.href} onLink={onLink} label={label} />)
+        const written = image ? link.label || link.href : link.label
+        const label = image ? [written] : inline(link.label, onLink, depth + 1)
+        push(
+          <A key={out.length} href={link.href} onLink={onLink} label={label} showHref={written.trim() !== link.href} />,
+        )
         i = link.end
         continue
       }
@@ -350,10 +353,29 @@ function parseLink(text: string, at: number): { label: string; href: string; end
 
 export type LinkHandler = (href: string) => (() => void) | null
 
-function A({ href, label, onLink }: { href: string; label: ReactNode; onLink?: LinkHandler }) {
+function A({
+  href,
+  label,
+  onLink,
+  showHref = false,
+}: {
+  href: string
+  label: ReactNode
+  onLink?: LinkHandler
+  showHref?: boolean
+}) {
   const className = useContext(Prose) ? 'ui-prose-link' : undefined
+  const links = useContext(Links)
   const safe = safeHref(href)
   if (safe === null) return <span>{label}</span>
+  if (links === 'text') {
+    return (
+      <span>
+        {label}
+        {showHref ? ` (${safe})` : null}
+      </span>
+    )
+  }
   if (external(safe)) {
     return (
       <a className={className} href={safe} target="_blank" rel="noopener noreferrer">
@@ -480,6 +502,7 @@ function Mention({ id, label }: { id: string; label: string }) {
 const HeadingShift = createContext(0)
 const LineBreaks = createContext(false)
 const Prose = createContext(false)
+const Links = createContext<'open' | 'text'>('open')
 
 function InlineCode({ children }: { children: ReactNode }) {
   return <code className={useContext(Prose) ? 'ui-prose-code' : undefined}>{children}</code>
@@ -503,6 +526,7 @@ export function Markdown({
   lineBreaks = false,
   mentions,
   look,
+  links = 'open',
 }: {
   text: string
   onLink?: LinkHandler
@@ -510,6 +534,7 @@ export function Markdown({
   lineBreaks?: boolean
   mentions?: MentionNames
   look?: 'document'
+  links?: 'open' | 'text'
 }) {
   const prose = look === 'document'
   return (
@@ -517,7 +542,11 @@ export function Markdown({
       <LineBreaks.Provider value={lineBreaks}>
         <Mentions.Provider value={mentions ?? null}>
           <Prose.Provider value={prose}>
-            <div className={prose ? 'ui-prose' : 'tt-markdown'}>{render(parseBlocks(text), onLink, false, prose)}</div>
+            <Links.Provider value={links}>
+              <div className={prose ? 'ui-prose' : 'tt-markdown'}>
+                {render(parseBlocks(text), onLink, false, prose)}
+              </div>
+            </Links.Provider>
           </Prose.Provider>
         </Mentions.Provider>
       </LineBreaks.Provider>

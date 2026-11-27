@@ -47,19 +47,33 @@ workers' isolation, the worker's network, backups, the agent browser) and a secr
 
 1. Fork the repository and branch from `main`.
 2. Keep the change small and about one thing. Several small pull requests are easier to
-   review than one large one.
-3. Follow [AGENTS.md](AGENTS.md): it has the layout and the rules every change keeps,
+   review than one large one. A pull request changes at most **800 lines of production
+   code**, counted over the changes GitHub shows for the pull request by CI's "Pull request
+   size" check, leaving out tests (`_test.go`, `.test.ts(x)`, `testdata/`, `e2e/`,
+   `web/src/test/` and the test helper packages), generated files, lock files,
+   translations (`locales/`) and Markdown. Over that, split the work into pull requests that
+   each stand on `main` and keep it working: the schema and storage first, then the routes,
+   then the screens; or one behaviour at a time behind code nothing calls yet. A maintainer
+   can allow a larger one, such as a mechanical change across the tree, with the
+   `size-exception` label. The check runs as it is on `main`, so a pull request can't
+   change its own limit. It reads the label each time the pull request is pushed or
+   labelled; the merge queue doesn't count again, so a maintainer removes the label before
+   the pull request is queued, not after.
+3. Say in the description which rules the change keeps and which test fails when each
+   rule's guard is removed (the template's "Rules this PR keeps"). Reviewers check the
+   change against those rules.
+4. Follow [AGENTS.md](AGENTS.md): it has the layout and the rules every change keeps,
    among them:
    - every new API checks the caller's access, and has a test for a cross-user attempt;
    - every string people see is translated (`t()`, and a key in `en.json`);
    - schema changes are new migrations, never edits to a merged one;
    - no secrets in the repository, an agent's environment or a log.
-4. Add or update tests, and the docs the change touches (`docs/api.md` for the API).
-5. Open a pull request against `main`:
+5. Add or update tests, and the docs the change touches (`docs/api.md` for the API).
+6. Open a pull request against `main`:
    - a conventional title: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`;
    - a description that says what changed, why, and how you checked it;
    - a reason for any new dependency: we keep them few.
-6. CI must be green, and a maintainer reviews it. Answer each review comment with a change
+7. CI must be green, and a maintainer reviews it. Answer each review comment with a change
    or a reason. Pull requests are squash-merged.
 
 Docs and code comments explain the reasoning in the repository itself: don't refer to
