@@ -317,6 +317,9 @@ func (stripe) find(ctx context.Context, creds Credentials, c *Client, l NewLink,
 					continue
 				default:
 					if o.Status == "complete" {
+						if len(l.Paid) > 0 {
+							continue
+						}
 						return seen, false, false, &CallError{Kind: CallSettled, Status: status}
 					}
 					return seen, false, false, &CallError{Kind: CallRefused, Status: status}

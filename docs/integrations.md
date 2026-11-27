@@ -751,10 +751,14 @@ write.
   `failed` for an admin to retry after the attempts), the key stays unresolved and the money stays
   locked; once every object has ended, the retry moves it on. The same proof stands before the end
 of a kept link is noted on a reference that was paid on another object, and the object the reference
-was paid on counts as settled, not as one that may still be paid: while any other object of the token
-may be paid the end isn't noted, the event is tried again with its backoff (`integration_link_still_open`)
+was paid on counts as settled, not as one that may still be paid, and so does any other object of the
+token that completed (it can't be paid again): while any other object of the token may be paid, that is
+one still open, the end isn't noted, the event is tried again with its backoff (`integration_link_still_open`)
 and the record's money stays locked; once every other object has ended, the retry notes the kept link
-ended and the money is released, with no admin step. What a field holds is compared as well as the money read from it, so a field
+ended and the money is released, with no admin step. A completed object's own payment is not this
+rule's business: when its event comes it is a second payment on a paid reference and the admins are told as
+below (`integration_event_second_payment`); if it never comes, nothing tells them, and the payment shows
+only at Stripe. What a field holds is compared as well as the money read from it, so a field
   whose type a release changed stays locked too. An open link is given again only to an entry that
   reads its money from the fields the link's was read from; another gets `integration_link_still_open`.
   So a link is never paid at an amount the record no longer says, and the payment

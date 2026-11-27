@@ -116,6 +116,9 @@ func TestAnExpiryEventIsNeverProvenAgainstAnotherAccount(t *testing.T) {
 	}
 	first := p.fake.Sessions()[0].ID
 	second := p.secondSessionOfToken(first)
+	if _, err := p.fake.Expire(first); err != nil {
+		t.Fatal(err)
+	}
 	p.fake.SetAccount("acct_" + "Other" + "Account1")
 	p.expires(second)
 	if n := p.count(`SELECT count(*) FROM integration_ref_attempts WHERE outcome = 'expired'`); n != 0 {
@@ -165,6 +168,50 @@ func TestAPaidRefsSavedLinkExpiryIsNotNotedWhileAnotherObjectOfTheTokenMayBePaid
 	}
 	p.later(time.Hour)
 	p.drain()
+	if n := p.count(`SELECT count(*) FROM integration_refs WHERE link_expired_at IS NOT NULL`); n != 1 {
+		t.Fatalf("%d saved links noted ended after every object had ended", n)
+	}
+	if may, _, err := p.svc.MayBePaid(ctx, p.db, p.app.ID, record); err != nil || may {
+		t.Fatalf("may be paid = %v, %v: the money stayed locked after every object of the token had ended", may, err)
+	}
+	if n := p.count(`SELECT count(*) FROM integration_events WHERE state = 'failed'`); n != 0 {
+		t.Fatalf("%d events failed", n)
+	}
+}
+
+func TestAPaidRefsSavedLinkExpiryIsNotedOnceTheOtherObjectOfTheTokenCompleted(t *testing.T) {
+	ctx := context.Background()
+	p := newPay(t, publicURL)
+	record := p.invoice(10, "EUR")
+	req := p.direct(record, "op-event-paid-0002")
+	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("the lost answer was no error")
+	}
+	first := p.fake.Sessions()[0].ID
+	second := p.secondSessionOfToken(first)
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err != nil {
+		t.Fatalf("the retry found no link: %v", err)
+	}
+	refs := p.refs()
+	if len(refs) != 1 {
+		t.Fatalf("refs = %+v", refs)
+	}
+	saved, other := refs[0].object, first
+	if saved == first {
+		other = second
+	}
+	third := p.secondSessionOfToken(first)
+	p.pays(other)
+	if refs := p.refs(); len(refs) != 1 || refs[0].state != "paid" {
+		t.Fatalf("refs = %+v: the payment of %s was not applied", refs, other)
+	}
+	if _, err := p.fake.Pay(third); err != nil {
+		t.Fatal(err)
+	}
+
+	p.expires(saved)
+
 	if n := p.count(`SELECT count(*) FROM integration_refs WHERE link_expired_at IS NOT NULL`); n != 1 {
 		t.Fatalf("%d saved links noted ended after every object had ended", n)
 	}
