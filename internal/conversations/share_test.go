@@ -490,3 +490,97 @@ func TestAStaleOwnerCannotShareOrUnshareAnotherConversation(t *testing.T) {
 		t.Fatalf("%d shares of the new conversation", n)
 	}
 }
+
+func TestASharedConversationIsUnreachableWhileItsOwnerIsNotAMember(t *testing.T) {
+	e := newEnv(t, false)
+	admin, ws := e.setup()
+	owner := e.invite(admin, ws, "owner2@example.com")
+	reader := e.invite(admin, ws, "reader@example.com")
+	conv := owner.create(ws, nil)
+	one := path(ws, fmt.Sprintf("/%d", conv.ID))
+	owner.expect(http.StatusOK, http.MethodPut, one+fmt.Sprintf("/members/%d", reader.id), map[string]any{"role": "viewer"})
+	reader.expect(http.StatusOK, http.MethodGet, one, nil)
+
+	admin.expect(http.StatusNoContent, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, owner.id), nil)
+	if n := e.count(`SELECT count(*) FROM conversation_members WHERE user_id = ?`, reader.id); n != 1 {
+		t.Fatalf("the owner leaving removed the reader's share: %d left", n)
+	}
+	for _, suffix := range []string{"", "/entries", "/messages", "/model", "/members", "/events"} {
+		reader.expectCode(http.StatusNotFound, "conversation_not_found", http.MethodGet, one+suffix, nil)
+	}
+	if got := listOf(t, reader, ws, "?shared=true"); len(got) != 0 {
+		t.Fatalf("shared list while the owner is not a member = %v", ids(got))
+	}
+}
+
+func TestAViewerWhoIsDisabledOrNotAMemberReadsNothing(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	reader := e.invite(owner, ws, "reader@example.com")
+	conv := owner.create(ws, nil)
+	owner.expect(http.StatusOK, http.MethodPut, path(ws, fmt.Sprintf("/%d/members/%d", conv.ID, reader.id)), map[string]any{"role": "viewer"})
+	reads := func() error {
+		_, err := e.svc.reach(t.Context(), ws, reader.id, conv.ID)
+		return err
+	}
+	listed := func() int {
+		got, err := e.svc.list(t.Context(), ws, reader.id, false, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(got)
+	}
+	if err := reads(); err != nil || listed() != 1 {
+		t.Fatalf("the viewer can't read their share: %v, %d listed", err, listed())
+	}
+
+	if _, err := e.db.Exec(`UPDATE users SET disabled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, reader.id); err != nil {
+		t.Fatal(err)
+	}
+	if err := reads(); !errors.Is(err, errNotFound) || listed() != 0 {
+		t.Fatalf("a disabled viewer: %v, %d listed", err, listed())
+	}
+	if _, err := e.db.Exec(`UPDATE users SET disabled_at = NULL WHERE id = ?`, reader.id); err != nil {
+		t.Fatal(err)
+	}
+	if err := reads(); err != nil {
+		t.Fatalf("enabling the viewer again: %v", err)
+	}
+
+	if _, err := e.db.Exec(`DROP TRIGGER conversation_members_leave_workspace`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`, ws, reader.id); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.count(`SELECT count(*) FROM conversation_members WHERE user_id = ?`, reader.id); n != 1 {
+		t.Fatalf("the share row went with the membership: %d left, so the read check is not what is tested", n)
+	}
+	if err := reads(); !errors.Is(err, errNotFound) || listed() != 0 {
+		t.Fatalf("a viewer who left the workspace, with the row still there: %v, %d listed", err, listed())
+	}
+}
+
+func TestAStaleReadCannotShareAConversationThatChangedItsAgentConversation(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	reader := e.invite(owner, ws, "reader@example.com")
+	conv := owner.create(ws, nil)
+	read, err := e.svc.reach(t.Context(), ws, owner.id, conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`DELETE FROM conversations WHERE id = ?`, conv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`INSERT INTO conversations (id, workspace_id, owner_id, agent_id, title) VALUES (?, ?, ?, ?, '')`,
+		conv.ID, ws, owner.id, read.agentID+1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.share(t.Context(), read, owner.id, reader.id, RoleViewer); !errors.Is(err, errNotFound) {
+		t.Fatalf("share with a read of the replaced conversation = %v, want %v", err, errNotFound)
+	}
+	if n := e.count(`SELECT count(*) FROM conversation_members`); n != 0 {
+		t.Fatalf("%d shares of the new conversation", n)
+	}
+}
