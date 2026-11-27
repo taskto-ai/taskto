@@ -438,6 +438,9 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
           throw error
         }
         replay = false
+        if (done.continueWith) {
+          return result(done.continueWith, rec.text(), false, helps.latest(), helps.savedApps())
+        }
         if (done.status === 'login_required') {
           api.output(
             `⚠ ${PRODUCT[cli]} needs you to sign in again: reconnect it (Settings → CLI accounts). This conversation goes on by itself once you have.\n`,
@@ -461,9 +464,6 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
           continue
         }
         if (done.status === 'ok') return result(done.text, rec.text(), false, helps.latest(), helps.savedApps())
-        if (done.continueWith) {
-          return result(done.continueWith, rec.text(), false, helps.latest(), helps.savedApps())
-        }
         return result(
           done.text || `the ${PRODUCT[cli]} turn failed`,
           rec.text(),

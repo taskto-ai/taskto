@@ -105,6 +105,12 @@ describe('a CLI turn that stopped on a limit and goes on with a model', () => {
     expect(messages.at(-1)?.role).toBe('assistant')
   })
 
+  it('goes on with the model also when the account needed a new sign-in, without waiting for one', async () => {
+    const messages = await run({ status: 'login_required', text: 'sign in again', continue: true, note: NOTE })
+    expect(text(messages.findLast((m) => m.role === 'toolResult'))).toBe(NOTE)
+    expect(text(messages.at(-1))).toBe(`carrying on after: ${NOTE}`)
+  })
+
   it('ends with the failure when the server did not say to continue', async () => {
     const messages = await run({ status: 'failed', text: 'usage limit', note: NOTE })
     const result = messages.findLast((m) => m.role === 'toolResult')

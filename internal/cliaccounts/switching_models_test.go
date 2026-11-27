@@ -186,3 +186,16 @@ func TestSwitchingAPIKeepsModelsApartFromAccounts(t *testing.T) {
 		t.Errorf("queue after the refusals = %+v", st.Queue)
 	}
 }
+
+func TestAnExpiredLoginContinuesOnTheQueuedModel(t *testing.T) {
+	e, conv, models := limitedClaudeEnv(t, true)
+	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Expired: true})
+	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
+	d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it"}))
+	if !d.Continue || d.Status != cliworker.StatusLoginRequired || !strings.Contains(d.Note, "needs you to sign in again") {
+		t.Fatalf("done = %+v", d)
+	}
+	if got := models.refs; len(got) != 1 || got[0] != mine(e, "api")+"/big" {
+		t.Errorf("model changes = %v", got)
+	}
+}

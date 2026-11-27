@@ -133,6 +133,14 @@ export function SwitchingPanel({ workspace }: { workspace?: number }) {
         </Notice>
       </Panel>
       <Alert error={action.error} />
+      {providers.error && (
+        <Notice tone="danger">
+          {t('settings.switching.modelsFailed', { error: providers.error })}{' '}
+          <Button size="sm" variant="ghost" onClick={() => providers.reload()}>
+            {t('app.tryAgain')}
+          </Button>
+        </Notice>
+      )}
       {queue.length === 0 ? (
         <p className="settings-muted">{t('settings.switching.empty')}</p>
       ) : (

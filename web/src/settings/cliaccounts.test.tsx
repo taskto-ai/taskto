@@ -613,3 +613,40 @@ test('automatic switching: a model can be added from the workspace models', asyn
     queue: [{ account: 'claude' }, { provider: 'u2-mine', model_id: 'small' }],
   })
 })
+
+test('automatic switching: a failed models request says so, keeps the accounts editable and can be retried', async () => {
+  let attempts = 0
+  const calls = fakeFetch({
+    'GET /api/me/cli-accounts': list(account('claude', 'Claude Code', { state: 'connected' })),
+    'GET /api/workspaces/1/cli-accounts': {
+      body: { enabled: true, mode: 'own_else_shared', default_mode: 'own_else_shared', accounts: [] },
+    },
+    'GET /api/workspaces/1/models': () => {
+      attempts++
+      return attempts === 1
+        ? { status: 500, body: { error: 'models are down', code: 'internal' } }
+        : {
+            body: {
+              providers: [
+                { provider: 'ws1-team', name: 'Team', scope: 'workspace', models: [{ id: 'big', name: 'Big model' }] },
+              ],
+            },
+          }
+    },
+    'GET /api/me/cli-switching': {
+      body: {
+        enabled: true,
+        queue: [],
+        available: [{ kind: 'own', id: 'claude', cli: 'claude', title: 'Claude Code', limited: false }],
+      },
+    },
+  })
+  render(<CliAccountsTab workspace={1} />)
+  const panel = await screen.findByRole('region', { name: 'Automatic switching' })
+  expect(await within(panel).findByText(/Couldn't load the models you can add/)).toBeTruthy()
+  expect(within(panel).getByRole('option', { name: 'Claude Code' })).toBeTruthy()
+  fireEvent.click(within(panel).getByRole('button', { name: 'Try again' }))
+  expect(await within(panel).findByRole('option', { name: 'Model: Big model' })).toBeTruthy()
+  expect(within(panel).queryByText(/Couldn't load the models/)).toBeNull()
+  expect(count(calls, 'GET', '/api/workspaces/1/models')).toBe(2)
+})

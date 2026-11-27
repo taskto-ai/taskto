@@ -1997,6 +1997,7 @@
       "ownNumbered": "{name} (account {number})",
       "shared": "{name} ({label}, {workspace})",
       "model": "Model: {name}",
+      "modelsFailed": "Couldn't load the models you can add: {error}",
       "limitedBadge": "At its limit"
     },
     "dictation": {
