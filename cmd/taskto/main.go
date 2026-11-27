@@ -425,6 +425,11 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	// the apps' records (UseRecords), stopped before the database closes.
 	stopIntegrationEvents := integrationSvc.StartEvents(ctx)
 	defer stopIntegrationEvents()
+	// The reconciliation polling reads the objects of open payments at their providers, on a worker of
+	// its own, whether or not the server has a public address; what it finds goes through the same
+	// event worker as a webhook's events.
+	stopIntegrationPolling := integrationSvc.StartPolling(ctx)
+	defer stopIntegrationPolling()
 	var accounts *auth.Service
 	handler, err := server.New(version, sqlDB, server.Options{
 		AccountsReady: func(svc *auth.Service) {

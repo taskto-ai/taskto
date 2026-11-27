@@ -172,7 +172,7 @@ definition has no place for a URL, a header or a key. The guide for admins and a
 ## Scheduled work
 
 Timed work for people (a card's due-date reminder, an app's scheduled
-action) runs on one general scheduler, `internal/schedule`, not on tickers of its own. It is a
+action; an integration's polling has a worker of its own, [integrations](integrations.md#reconciliation-polling)) runs on one general scheduler, `internal/schedule`, not on tickers of its own. It is a
 library and a worker in the server process (the data directory has one server, so one worker, and
 no extra process); it has no feature of its own.
 

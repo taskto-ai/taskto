@@ -733,6 +733,8 @@ type ref struct {
 	// amountField and currencyField are the record's fields the ref's money was read from ("" for a
 	// ref made before refs kept them, or an effect's own currency).
 	amountField, currencyField string
+	// polls counts the reads the reconciliation polling made of the ref's object (poll.go).
+	polls int
 }
 
 // newLink is what the provider is asked for under key a: the key's token, the ref's money and the
@@ -753,13 +755,13 @@ func (r ref) link() paylink.Link {
 const refColumns = `id, token, integration_id, app_id, record_id, slot, coalesce(provider_object_id, ''), coalesce(url, ''),
 	amount_minor, currency, key_seq, state, created_at, account_id, account_mode, success_url, cancel_url,
 	coalesce(paid_object_id, ''), coalesce(payment_id, ''), coalesce(effect_id, 0), coalesce(paid_link_id, ''), coalesce(link_expired_at, ''),
-	amount_field, currency_field`
+	amount_field, currency_field, polls`
 
 func scanRef(row interface{ Scan(...any) error }) (ref, error) {
 	var r ref
 	err := row.Scan(&r.id, &r.token, &r.integrationID, &r.appID, &r.recordID, &r.slot, &r.objectID, &r.url,
 		&r.amountMinor, &r.currency, &r.keySeq, &r.state, &r.createdAt, &r.accountID, &r.accountMode, &r.successURL, &r.cancelURL,
-		&r.paidObjectID, &r.paymentID, &r.effectID, &r.paidLinkID, &r.linkExpiredAt, &r.amountField, &r.currencyField)
+		&r.paidObjectID, &r.paymentID, &r.effectID, &r.paidLinkID, &r.linkExpiredAt, &r.amountField, &r.currencyField, &r.polls)
 	return r, err
 }
 

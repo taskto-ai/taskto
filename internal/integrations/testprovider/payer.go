@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -81,7 +83,7 @@ func (s *Stripe) intentOf(ss *session, status string) map[string]any {
 
 func (s *Stripe) chargeOf(ss *session, status string) map[string]any {
 	return map[string]any{
-		"id": ss.chargeID, "object": "charge", "amount": ss.AmountTotal,
+		"id": ss.chargeID, "object": "charge", "amount": ss.AmountTotal, "created": ss.chargeCreated,
 		"amount_captured": map[bool]int64{true: ss.AmountTotal}[status == "succeeded"],
 		"amount_refunded": ss.refunded, "currency": ss.Currency, "paid": status == "succeeded",
 		"refunded": ss.refunded >= ss.AmountTotal, "status": status, "payment_intent": ss.piID,
@@ -132,7 +134,7 @@ func (s *Stripe) Pay(sessionID string) ([]Event, error) {
 // payLocked pays an open session by card at time at, and returns the events. The caller holds s.mu.
 func (s *Stripe) payLocked(ss *session, at time.Time) []*Event {
 	evs := s.begin(ss, at)
-	ss.chargeID = "ch_" + randomID(24)
+	ss.chargeID, ss.chargeCreated = "ch_"+randomID(24), at.Unix()
 	ss.receiptURL = "https://pay.stripe.com/receipts/payment/" + randomID(40)
 	ss.Status, ss.PaymentStatus, ss.URL = SessionComplete, PaymentPaid, nil
 	d := s.payer
@@ -152,6 +154,37 @@ func (s *Stripe) payLocked(ss *session, at time.Time) []*Event {
 func (s *Stripe) PayLink(linkID string) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.payLinkLocked(linkID, "")
+}
+
+// PayLinkAt is a payer opening the address of a hosted payment link, as it was handed out, and paying
+// with a card. The link is found by its address, and the address's client_reference_id parameter, if it
+// has one, is copied into the Checkout Session the payer's visit makes, the way Stripe does
+// (https://docs.stripe.com/payment-links/url-parameters): a value of letters, digits, dashes and
+// underscores up to 200 characters, which Stripe takes and any other it leaves out.
+func (s *Stripe) PayLinkAt(rawURL string) ([]Event, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrNoSuchLink, err)
+	}
+	ref := u.Query().Get("client_reference_id")
+	if len(ref) > 200 || strings.Trim(ref, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != "" {
+		ref = ""
+	}
+	u.RawQuery, u.Fragment = "", ""
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, l := range s.links {
+		if l.URL == u.String() {
+			return s.payLinkLocked(id, ref)
+		}
+	}
+	return nil, fmt.Errorf("%w: %s", ErrNoSuchLink, u.String())
+}
+
+// payLinkLocked is PayLink for a payer whose session carries the reference ref ("" for none). The caller
+// holds s.mu.
+func (s *Stripe) payLinkLocked(linkID, ref string) ([]Event, error) {
 	l, ok := s.links[linkID]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNoSuchLink, linkID)
@@ -170,7 +203,8 @@ func (s *Stripe) PayLink(linkID string) ([]Event, error) {
 		piMetadata: map[string]string{},
 		Session: Session{
 			ID: id, Object: "checkout.session", AmountSubtotal: sum, AmountTotal: sum,
-			Created: at.Unix(), Currency: l.Currency, CustomFields: []any{}, CustomerCreation: "if_required",
+			ClientReferenceID: optional(ref),
+			Created:           at.Unix(), Currency: l.Currency, CustomFields: []any{}, CustomerCreation: "if_required",
 			ExpiresAt: at.Add(24 * time.Hour).Unix(), Livemode: s.live, Metadata: maps.Clone(l.Metadata),
 			Mode: "payment", PaymentLink: &link, PaymentMethodCollection: "always",
 			PaymentMethodTypes: []string{"card"}, PaymentStatus: PaymentUnpaid, Status: SessionOpen,
@@ -228,7 +262,7 @@ func (s *Stripe) SettleDelayed(sessionID string, succeeded bool) ([]Event, error
 			s.emit(EventSessionAsyncPaymentFailed, ss.snapshot(), at),
 		}), nil
 	}
-	ss.chargeID = "ch_" + randomID(24)
+	ss.chargeID, ss.chargeCreated = "ch_"+randomID(24), at.Unix()
 	ss.receiptURL = "https://pay.stripe.com/receipts/payment/" + randomID(40)
 	ss.PaymentStatus = PaymentPaid
 	return values([]*Event{
@@ -249,7 +283,7 @@ func (s *Stripe) Decline(sessionID string) ([]Event, error) {
 	}
 	evs := s.begin(ss, at)
 	ss.attempts++
-	ss.chargeID = "ch_" + randomID(24) // the intent's latest charge, in the failure events too
+	ss.chargeID, ss.chargeCreated = "ch_"+randomID(24), at.Unix() // the intent's latest charge, in the failure events too
 	failed := s.chargeOf(ss, "failed")
 	failed["failure_code"] = "card_declined"
 	evs = append(evs,
