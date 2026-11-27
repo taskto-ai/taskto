@@ -208,3 +208,58 @@ test('closing the records with an unsaved change in a record asks first, from th
   fireEvent.click(within(await ask()).getByRole('button', { name: 'Discard my changes' }))
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Records and history' })).toBeNull())
 })
+
+test('standalone, the app has no way back to the list and none to its builder, and fills the width', async () => {
+  serve()
+  const { container } = render(<LaunchedApp standalone workspace={1} space={2} app={1} writable />)
+  const heading = await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  const header = heading.closest('header') as HTMLElement
+  expect(within(header).queryByRole('link', { name: 'All apps' })).toBeNull()
+  expect(within(header).queryByRole('link', { name: /with AI/ })).toBeNull()
+  expect(within(header).queryByRole('button', { name: 'Open in a new window' })).toBeNull()
+  expect(within(header).queryByRole('link', { name: 'Open in a new tab' })).toBeNull()
+  expect(within(header).getByRole('link', { name: 'Open in taskto' }).getAttribute('href')).toBe('/w/1/apps/2-1')
+  expect(within(header).getByRole('button', { name: 'Records and history' })).toBeTruthy()
+  expect(container.querySelector('.ui-page')?.getAttribute('data-width')).toBe('full')
+})
+
+test('standalone, the browser tab is named for the app, and the title is put back when it goes', async () => {
+  serve()
+  document.title = 'before'
+  const { unmount } = render(<LaunchedApp standalone workspace={1} space={2} app={1} writable screen="home" />)
+  await waitFor(() => expect(document.title).toBe('Expenses · taskto.ai'))
+  expect(screen.getByRole('link', { name: 'Open in taskto' }).getAttribute('href')).toBe('/w/1/apps/2-1-home')
+  unmount()
+  expect(document.title).toBe('before')
+})
+
+test('in the shell the title is left alone', async () => {
+  serve()
+  document.title = 'before'
+  render(<LaunchedApp workspace={1} space={2} app={1} writable />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  expect(document.title).toBe('before')
+})
+
+test('the app opens in a window of its own, a popup named for the app, or in a new tab by its link', async () => {
+  serve()
+  const open = vi.fn()
+  vi.stubGlobal('open', open)
+  render(<LaunchedApp workspace={1} space={2} app={1} writable screen="home" />)
+  const windowButton = await screen.findByRole('button', { name: 'Open in a new window' })
+  fireEvent.click(windowButton)
+  expect(open).toHaveBeenCalledTimes(1)
+  expect(open).toHaveBeenCalledWith('/w/1/run/2-1-home', 'taskto-app-2-1', 'popup,width=480,height=800')
+  const tab = screen.getByRole('link', { name: 'Open in a new tab' })
+  expect(tab.getAttribute('href')).toBe('/w/1/run/2-1-home')
+  expect(tab.getAttribute('target')).toBe('_blank')
+  expect(tab.getAttribute('rel')).toContain('noopener')
+})
+
+test('an offline app has no window to open', async () => {
+  serve({ archived_at: '2026-11-18T00:00:00.000Z' })
+  render(<LaunchedApp workspace={1} space={2} app={1} writable />)
+  await screen.findByText(/This app is offline/)
+  expect(screen.queryByRole('button', { name: 'Open in a new window' })).toBeNull()
+  expect(screen.queryByRole('link', { name: 'Open in a new tab' })).toBeNull()
+})

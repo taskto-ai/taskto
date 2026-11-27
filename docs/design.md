@@ -541,6 +541,19 @@ place the section's name appears.
   the page behind it is inert, Escape (one no menu or dialog took) closes it, a press on the scrim
   closes it, and focus goes back to the button, or to the page when a link in it was followed.
 
+### An app on its own
+
+An app also opens by itself, at `/w/{workspace}/run/{space}-{app}[-{screen}]`, in a browser tab or in
+a window kept beside other work: the page is only the app, full width, with no sidebar, no phone bar
+and no way to the builder; a top line has its name (the page's `h1`), its records and an "Open in
+taskto" link to the same app inside the shell. The app page's header has "Open in a new window", a
+popup named for the app so each app has one window, and "Open in a new tab", a plain link; the app
+list's menu has the window too. The shell reads this path before it looks for a section (a section
+would rewrite it to the conversations), and signing in keeps it. It is the one page that owns the
+browser tab's title: the app's name and the brand, put back when the page goes. Nothing is asked of
+the server that the app page doesn't ask, so a person who can't read the app's space sees "This app
+wasn't found" and no data.
+
 ## The logo
 
 The sidebar, the phone's bar and the login screens show the website's logo

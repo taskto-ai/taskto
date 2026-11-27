@@ -13,6 +13,26 @@ export function appPath(workspace: number, space: number, app: number, screen?: 
   return routePath({ workspace, section: 'apps', item: appItem(space, app, screen) })
 }
 
+export function runPath(workspace: number, space: number, app: number, screen?: string): string {
+  return `/w/${workspace}/run/${appItem(space, app, screen)}`
+}
+
+export function parseRunPath(path: string): { workspace: number; space: number; app: number; screen?: string } | null {
+  const m = /^\/w\/(\d+)\/run\/([^/]+)\/?$/.exec(path)
+  const item = parseItem(m?.[2])
+  return m && item ? { workspace: Number(m[1]), ...item } : null
+}
+
+export function runWindowName(space: number, app: number): string {
+  return `taskto-app-${space}-${app}`
+}
+
+export const RUN_WINDOW_FEATURES = 'popup,width=480,height=800'
+
+export function openRunWindow(workspace: number, space: number, app: number, screen?: string): void {
+  window.open(runPath(workspace, space, app, screen), runWindowName(space, app), RUN_WINDOW_FEATURES)
+}
+
 export type BuilderRoute =
   | { kind: 'new' }
   | { kind: 'conversation'; conversation: number }

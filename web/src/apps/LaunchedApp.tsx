@@ -1,8 +1,9 @@
-import { useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { type App, api, type Space, ws } from '../api'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
 import { OfflinePanel } from '../offline/OfflinePanel'
+import { BRAND } from '../shell/nav'
 import { Button, ButtonLink } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { Page } from '../ui/Page'
@@ -13,7 +14,7 @@ import { AppEffects } from './AppEffects'
 import { AppRecords, RecordsButton } from './AppRecords'
 import { AppStage } from './AppStage'
 import { BackToApps } from './AppTemplates'
-import { builderPath } from './route'
+import { appPath, builderPath, openRunWindow, runPath } from './route'
 import './LaunchedApp.css'
 
 export function LaunchedApp({
@@ -23,6 +24,7 @@ export function LaunchedApp({
   writable,
   screen,
   spaceInfo,
+  standalone = false,
 }: {
   workspace: number
   space: number
@@ -30,6 +32,7 @@ export function LaunchedApp({
   writable: boolean
   screen?: string
   spaceInfo?: Space
+  standalone?: boolean
 }) {
   const base = `${ws(workspace)}/spaces/${space}/apps/${app}`
   const info = useLoad(() => api<App>(base), [base])
@@ -58,6 +61,15 @@ export function LaunchedApp({
     }
   }
   const running = data && !data.archived_at
+  const name = data?.name
+  useEffect(() => {
+    if (!standalone || !name) return
+    const before = document.title
+    document.title = `${name} · ${BRAND}`
+    return () => {
+      document.title = before
+    }
+  }, [standalone, name])
 
   const notes = running
     ? [
@@ -68,9 +80,9 @@ export function LaunchedApp({
     : []
 
   return (
-    <Page width="list">
+    <Page width={standalone ? 'full' : 'list'}>
       <PageHeader
-        path={<BackToApps workspace={workspace} />}
+        path={standalone ? undefined : <BackToApps workspace={workspace} />}
         title={data?.name ?? t('apps.app')}
         help={notes.length > 0 ? notes.join(' ') : undefined}
         actions={
@@ -83,7 +95,21 @@ export function LaunchedApp({
                 ref={recordsToggle}
                 onToggle={() => (recordsOpen ? closeRecords(false) : setRecordsOpen(true))}
               />
-              {writable && data.access.design && (
+              {standalone ? (
+                <ButtonLink variant="ghost" icon="apps" href={appPath(workspace, space, app, screen)}>
+                  {t('apps.openInTaskto')}
+                </ButtonLink>
+              ) : (
+                <>
+                  <Button variant="ghost" icon="browser" onClick={() => openRunWindow(workspace, space, app, screen)}>
+                    {t('apps.openWindow')}
+                  </Button>
+                  <ButtonLink variant="ghost" href={runPath(workspace, space, app, screen)} target="_blank">
+                    {t('apps.openTab')}
+                  </ButtonLink>
+                </>
+              )}
+              {!standalone && writable && data.access.design && (
                 <ButtonLink
                   icon="edit"
                   href={builderPath(workspace, { kind: 'edit', space, app })}
