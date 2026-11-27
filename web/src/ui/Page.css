@@ -1,5 +1,4 @@
 @layer components {
-  /* The scroll container: it fills what the shell gives the page and scrolls on its own. */
   .ui-page {
     block-size: 100%;
     min-block-size: 0;

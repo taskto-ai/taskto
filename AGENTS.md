@@ -130,6 +130,21 @@ apps built by asking the agent. See [docs/architecture.md](docs/architecture.md)
   account names. CI runs gitleaks over the full history.
 - **Secrets in the database are sealed** with `serverkey` and never returned, logged or put
   in an error message. API keys are write-only: the API says `"set"` or `"not set"`.
+- **No comments in code.** Go, TypeScript, JavaScript and CSS carry no comments: the code
+  says what it does through its names, types, small functions and tests, and the reasons
+  go in `docs/` or the PR description. Don't add a comment, a doc comment or a
+  commented-out line, and don't turn one into a string to keep it. The only comments kept
+  are the ones a tool needs to build or run the code: `//go:build`, `//go:embed`,
+  `//go:generate`, `/// <reference>`, `@vitest-environment`, `@vite-ignore`, shebangs and a
+  generated file's `Code generated … DO NOT EDIT.` header. Migrations, shell scripts, YAML
+  and Markdown are not code in this sense and keep theirs; a merged migration is never
+  edited anyway.
+- **No lint or type suppressions in code.** No `//nolint`, `#nosec`, `biome-ignore`,
+  `@ts-expect-error` or `@ts-ignore`: fix what the linter or the compiler reports. Only a
+  finding that can't be fixed without changing behaviour, or a false positive, goes in the
+  linter's config, scoped to its file and rule (`linters.exclusions.rules` in
+  `.golangci.yml`, an `overrides` entry in `biome.json`), with the reason in the PR
+  description.
 - Keep dependencies few. A new dependency needs a reason in the PR description.
 - **Schema changes are new migrations.** Add `internal/db/migrations/NNNN_description.sql`
   with the next number; never edit one that has been merged. Each runs in a transaction
@@ -169,6 +184,6 @@ installed).
 - A release is cut by the Release workflow (`.github/workflows/release.yml`, [docs/releasing.md](docs/releasing.md)): a `vMAJOR.MINOR.PATCH` tag (no leading zeros, no suffix), pushed atomically at the `main` commit whose CI passed, with its images; servers on the release channel update themselves to it. A release that needs a person is cut with the `manual_upgrade` input, which puts `manual-upgrade: true` in its notes from the moment it is published.
 - CI is `.github/workflows/`, on GitHub-hosted runners only: never a self-hosted runner,
   since fork pull requests run there. Its scripts are in `.github/scripts/`.
-- Docs, comments and tests explain themselves inside the repository: no issue or ticket
+- Docs and tests explain themselves inside the repository: no issue or ticket
   numbers, links to private notes, private hostnames or people's names. CI's reference
   check (`.github/scripts/refguard.go`) fails on them.

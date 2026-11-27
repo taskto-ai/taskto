@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// roleSet is the capabilities each role grants, once the space allows everything: the table
-// in apps.go, checked a role at a time.
 func TestRolesGrantTheirCapabilities(t *testing.T) {
 	type caps struct {
 		view, design, publish, submit, manage bool
@@ -28,30 +26,24 @@ func TestRolesGrantTheirCapabilities(t *testing.T) {
 	}
 }
 
-// Roles combine by union, and the space's access is a ceiling over the result.
 func TestRolesCombineAndTheSpaceCaps(t *testing.T) {
 	got := appAccess(Write, []AppRole{AppUser, AppReader}, true, false)
 	if got.ReadRecords != ScopeAll || got.ModifyRecords != ScopeOwn || !got.Submit {
 		t.Fatalf("user and reader = %+v", got)
 	}
-	// Every role of a viewer of the space is no more than reading.
 	got = appAccess(Read, AppRoles, true, false)
 	if got.Design || got.Publish || got.Submit || got.ManageRoles || got.ModifyRecords != ScopeNone || got.ReadRecords != ScopeAll {
 		t.Fatalf("every role under a read-only space = %+v", got)
 	}
-	// And a user's own-only reading stays own-only.
 	if got := appAccess(Read, []AppRole{AppUser}, true, false); got.ReadRecords != ScopeOwn {
 		t.Fatalf("user under a read-only space = %+v", got)
 	}
-	// Nothing at all without access to the space.
 	got = appAccess(None, AppRoles, true, false)
 	if got.View || got.Design || got.Submit || got.ReadRecords != ScopeNone || got.ModifyRecords != ScopeNone {
 		t.Fatalf("no access to the space = %+v", got)
 	}
 }
 
-// An app with no assignments gives what the space gave before roles: write is every role,
-// read is reading everything.
 func TestUnrestrictedAppIsTheSpaceAlone(t *testing.T) {
 	w := appAccess(Write, nil, false, false)
 	if w.Restricted || !w.View || !w.Design || !w.Publish || !w.Submit || !w.ManageRoles || w.ReadRecords != ScopeAll || w.ModifyRecords != ScopeAll {
@@ -66,8 +58,6 @@ func TestUnrestrictedAppIsTheSpaceAlone(t *testing.T) {
 	}
 }
 
-// A user's own assignment replaces the default's; with neither, an app with assignments
-// gives them no role, and only an app without any is unrestricted.
 func TestResolvePicksOwnThenDefault(t *testing.T) {
 	row := func(user int64, role AppRole) grantRow {
 		return grantRow{userID: sql.NullInt64{Int64: user, Valid: user != 0}, role: role}
@@ -76,11 +66,9 @@ func TestResolvePicksOwnThenDefault(t *testing.T) {
 	if roles, restricted := resolve(rows, 7, true); !restricted || !slices.Equal(roles, []AppRole{AppUser, AppBuilder}) {
 		t.Fatalf("own = %v, %v", roles, restricted)
 	}
-	// Another's assignment is not theirs.
 	if roles, restricted := resolve(rows, 9, true); !restricted || !slices.Equal(roles, []AppRole{AppReader}) {
 		t.Fatalf("default = %v, %v", roles, restricted)
 	}
-	// Another's assignment and no default: they hold nothing (fail closed), never every role.
 	if roles, restricted := resolve(rows[1:], 9, true); !restricted || len(roles) != 0 {
 		t.Fatalf("unnamed member = %v, %v; want no roles", roles, restricted)
 	}

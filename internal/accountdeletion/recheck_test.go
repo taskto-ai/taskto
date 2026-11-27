@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// A job is a reminder to look, not the deadline: a job left over from a request that was cancelled
-// and made again must not purge before the new request's grace period ends.
 func TestAnOverdueJobDoesNotPurgeARequestWhoseDeadlineIsInTheFuture(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -21,7 +19,6 @@ func TestAnOverdueJobDoesNotPurgeARequestWhoseDeadlineIsInTheFuture(t *testing.T
 	exec(t, w.db, `UPDATE users SET disabled_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, w.leaver)
 	exec(t, w.db, `INSERT INTO account_deletions (user_id, requested_at, purge_at) VALUES (?, '2026-01-01T00:00:00.000Z', ?)`,
 		w.leaver, future.Format(stampFormat))
-	// The old request's job, overdue.
 	tx, err := w.db.Begin()
 	if err != nil {
 		t.Fatal(err)
@@ -54,16 +51,13 @@ func TestAnOverdueJobDoesNotPurgeARequestWhoseDeadlineIsInTheFuture(t *testing.T
 	}
 }
 
-// Reconcile lists the accounts that have no job, then writes each one's. A request cancelled and
-// made again in between has another deadline, and one cancelled has none: what is written is what
-// the request says when it is written.
 func TestReconcileUsesTheRequestAsItIsWhenTheJobIsWritten(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
 	if err := w.svc.Attach(); err != nil {
 		t.Fatal(err)
 	}
-	w.deleteAccount() // purge_at 2026-01-15
+	w.deleteAccount()
 	newDeadline := "2027-03-01T00:00:00.000Z"
 	w.svc.beforeSchedule = func(user int64) {
 		exec(t, w.db, `DELETE FROM account_deletions WHERE user_id = ?`, user)
@@ -80,7 +74,6 @@ func TestReconcileUsesTheRequestAsItIsWhenTheJobIsWritten(t *testing.T) {
 		t.Errorf("the job runs at %s: the old deadline was written over the new request, want %s", runAt, newDeadline)
 	}
 
-	// Cancelled in between: no job for a request that is gone.
 	w2 := newWorld(t)
 	if err := w2.svc.Attach(); err != nil {
 		t.Fatal(err)
@@ -96,7 +89,6 @@ func TestReconcileUsesTheRequestAsItIsWhenTheJobIsWritten(t *testing.T) {
 		t.Errorf("%d jobs for a request that was cancelled", n)
 	}
 
-	// Made again, with its own job, in between: that job is left alone.
 	w3 := newWorld(t)
 	if err := w3.svc.Attach(); err != nil {
 		t.Fatal(err)
@@ -123,9 +115,6 @@ func TestReconcileUsesTheRequestAsItIsWhenTheJobIsWritten(t *testing.T) {
 	}
 }
 
-// Every purge records its own rewriting of the providers file. A run that read the records before a
-// later account was deleted acknowledges only its own, so the later account's retry is not lost,
-// and its keys are removed when it runs.
 func TestEachPurgeKeepsItsOwnProvidersStepAgainstAnotherRunsAcknowledgement(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -142,14 +131,14 @@ func TestEachPurgeKeepsItsOwnProvidersStepAgainstAnotherRunsAcknowledgement(t *t
 		n := calls
 		mu.Unlock()
 		switch n {
-		case 1: // the first account's purge: fails, so its step stays recorded
+		case 1:
 			return fail
-		case 2: // a periodic run for the first account: held while the second account is purged
+		case 2:
 			close(started)
 			<-release
 			return nil
 		}
-		return fail // the second account's purge: fails, so its step stays recorded
+		return fail
 	})
 
 	w.deleteAccount()
@@ -162,7 +151,7 @@ func TestEachPurgeKeepsItsOwnProvidersStepAgainstAnotherRunsAcknowledgement(t *t
 
 	done := make(chan error, 1)
 	go func() { done <- w.svc.RunCleanups(ctx) }()
-	<-started // it has read the first account's record, and nothing of the second
+	<-started
 
 	exec(t, w.db, `INSERT INTO account_deletions (user_id, requested_at, purge_at) VALUES (?, '2026-01-01T00:00:00.000Z', '2026-01-15T00:00:00.000Z')`, other)
 	if err := w.svc.Purge(ctx, other); err != nil {
@@ -179,7 +168,6 @@ func TestEachPurgeKeepsItsOwnProvidersStepAgainstAnotherRunsAcknowledgement(t *t
 	if n := w.count(`SELECT count(*) FROM purge_cleanups WHERE user_id = ?`, w.leaver); n != 0 {
 		t.Errorf("%d steps of the first account remain", n)
 	}
-	// And it is still done by the next run.
 	mu.Lock()
 	calls = 100
 	mu.Unlock()
@@ -192,8 +180,6 @@ func TestEachPurgeKeepsItsOwnProvidersStepAgainstAnotherRunsAcknowledgement(t *t
 	}
 }
 
-// The audit event counts the providers file's rewriting among the steps still to do: it is done
-// after the account is gone.
 func TestAuditCleanupsPendingCountsTheProvidersStep(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -205,8 +191,6 @@ func TestAuditCleanupsPendingCountsTheProvidersStep(t *testing.T) {
 	if err := w.db.QueryRow(`SELECT details FROM audit_events WHERE action = 'account_purged' LIMIT 1`).Scan(&details); err != nil {
 		t.Fatal(err)
 	}
-	// Two conversations were handled before the account went, the CLI directory too: only the
-	// providers file's rewriting was still to do, and it is counted.
 	var got map[string]any
 	if err := json.Unmarshal([]byte(details), &got); err != nil {
 		t.Fatal(err)

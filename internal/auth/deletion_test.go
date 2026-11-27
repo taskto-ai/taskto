@@ -17,7 +17,6 @@ import (
 	"taskto.ai/taskto/internal/audit"
 )
 
-// purgeLog is a DeletionScheduler that notes what it is asked.
 type purgeLog struct {
 	mu        sync.Mutex
 	scheduled map[int64]time.Time
@@ -72,7 +71,6 @@ func TestDeletingYourOwnAccountNeedsYourPasswordAndSwitchesItOffAtOnce(t *testin
 		t.Fatalf("status = %+v", status)
 	}
 
-	// Without the password, or with another one, nothing happens.
 	rec := tm.member.do(http.MethodPost, tm.deletionPath(), map[string]string{})
 	expect(t, rec, http.StatusBadRequest)
 	rec = tm.member.do(http.MethodPost, tm.deletionPath(), map[string]string{"password": "not-the-password"})
@@ -96,7 +94,6 @@ func TestDeletingYourOwnAccountNeedsYourPasswordAndSwitchesItOffAtOnce(t *testin
 		t.Fatalf("the purge was scheduled for %v", at)
 	}
 
-	// Switched off at once, as a disabled account is: every login and token ended.
 	expect(t, tm.member.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 	expect(t, tm.phone.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 	if code := e.withToken(tm.token, http.MethodGet, fmt.Sprintf("/api/workspaces/%d/members", tm.ws), nil); code != http.StatusUnauthorized {
@@ -107,12 +104,10 @@ func TestDeletingYourOwnAccountNeedsYourPasswordAndSwitchesItOffAtOnce(t *testin
 	if n := e.count(`SELECT count(*) FROM users WHERE id = ? AND disabled_at IS NOT NULL`, tm.memberID); n != 1 {
 		t.Errorf("the account isn't disabled")
 	}
-	// Nothing was deleted yet: that is the purge's, after the grace period.
 	if n := e.count(`SELECT count(*) FROM memberships WHERE user_id = ?`, tm.memberID); n != 1 {
 		t.Errorf("the membership went at once")
 	}
 
-	// The record says who and what, and the admin sees it in the members' list and the operator's list.
 	if n := e.count(`SELECT count(*) FROM audit_events WHERE action = ? AND actor_id = ? AND target_id = ?`,
 		audit.AccountDeletionRequested, tm.memberID, tm.memberID); n != 1 {
 		t.Errorf("%d deletion events", n)
@@ -139,7 +134,6 @@ func TestDeletionWithTwoFactorNeedsTheCodeToo(t *testing.T) {
 		t.Fatal("status doesn't say two-factor is on")
 	}
 
-	// The password alone isn't enough, nor is a wrong code.
 	rec := tm.member.do(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword})
 	expect(t, rec, http.StatusForbidden)
 	rec = tm.member.do(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword, "code": "000000"})
@@ -156,7 +150,6 @@ func TestDeletionWithTwoFactorNeedsTheCodeToo(t *testing.T) {
 func TestAnAccountWithNoPasswordProvesItselfWithAFreshLogin(t *testing.T) {
 	tm, _ := newDeletionTeam(t)
 	e := tm.e
-	// A person who signs in with a provider has no password.
 	if _, err := e.db.Exec(`UPDATE users SET password_hash = '' WHERE id = ?`, tm.memberID); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +158,6 @@ func TestAnAccountWithNoPasswordProvesItselfWithAFreshLogin(t *testing.T) {
 		t.Fatalf("status = %+v", status)
 	}
 
-	// Their session is old: they sign in again first.
 	e.advance(10 * time.Minute)
 	if decode[DeletionStatus](t, tm.member.do(http.MethodGet, tm.deletionPath(), nil)).Fresh {
 		t.Fatal("an old login counts as fresh")
@@ -179,7 +171,6 @@ func TestAnAccountWithNoPasswordProvesItselfWithAFreshLogin(t *testing.T) {
 		t.Fatal("deleted on an old login")
 	}
 
-	// A new session, made now: that proves it.
 	if _, err := e.db.Exec(`UPDATE sessions SET created_at = ? WHERE user_id = ?`, stamp(e.now), tm.memberID); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +181,6 @@ func TestTheLastWorkingAdminCantDeleteTheAccount(t *testing.T) {
 	tm, _ := newDeletionTeam(t)
 	e := tm.e
 
-	// The owner is the only admin of the workspace the server's setup made: its operator.
 	rec := tm.owner.do(http.MethodPost, tm.deletionPath(), map[string]string{"password": ownerPassword})
 	expect(t, rec, http.StatusConflict)
 	if got := errCode(t, rec); got != string(apierr.CodeDeletionLastOperator) {
@@ -201,7 +191,6 @@ func TestTheLastWorkingAdminCantDeleteTheAccount(t *testing.T) {
 		t.Fatalf("blockers = %+v", status.Blockers)
 	}
 
-	// A member who is the only admin of a workspace of their own is blocked there too.
 	other := e.addWorkspace(tm.memberID, "Side project")
 	rec = tm.member.do(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword})
 	expect(t, rec, http.StatusConflict)
@@ -213,7 +202,6 @@ func TestTheLastWorkingAdminCantDeleteTheAccount(t *testing.T) {
 	}
 	expect(t, tm.member.do(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword}), http.StatusAccepted)
 
-	// An admin who is disabled doesn't count as a successor: the owner is the only one in use.
 	if _, err := e.db.Exec(`UPDATE memberships SET role = 'admin' WHERE workspace_id = ? AND user_id = ?`, tm.ws, tm.memberID); err != nil {
 		t.Fatal(err)
 	}
@@ -228,9 +216,6 @@ func TestNobodyButThePersonDeletesAnAccount(t *testing.T) {
 	tm, sched := newDeletionTeam(t)
 	e := tm.e
 
-	// The route an admin deleted a member's account by is gone: an admin, who administers every
-	// workspace the member belongs to, gets neither an acceptance nor a refusal of a kind that
-	// would say the route exists.
 	for _, c := range []struct {
 		who  *client
 		user int64
@@ -251,8 +236,6 @@ func TestNobodyButThePersonDeletesAnAccount(t *testing.T) {
 	}
 	expect(t, tm.member.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 
-	// What an admin may still do with a member is remove them from the workspace, which leaves
-	// their account, and what they own, alone.
 	expect(t, tm.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", tm.ws, tm.memberID), nil), http.StatusNoContent)
 	if n := e.count(`SELECT count(*) FROM users WHERE id = ?`, tm.memberID); n != 1 {
 		t.Fatal("removing a member deleted their account")
@@ -267,7 +250,6 @@ func TestOnlyAnOperatorCancelsADeletionAndTheAccountComesBack(t *testing.T) {
 	e := tm.e
 	expect(t, tm.member.do(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword}), http.StatusAccepted)
 
-	// A member, and an admin of another workspace who isn't the operator, can neither see nor cancel.
 	expect(t, tm.phone.do(http.MethodDelete, tm.cancelPath(tm.memberID), nil), http.StatusUnauthorized)
 	side := e.addWorkspace(tm.memberID, "Side")
 	_ = side
@@ -279,14 +261,12 @@ func TestOnlyAnOperatorCancelsADeletionAndTheAccountComesBack(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM account_deletions`); n != 1 {
 		t.Fatal("a refused cancel changed the deletion")
 	}
-	// A token can't, and a deletion that isn't there is not found.
 	rec := tm.owner.do(http.MethodDelete, tm.cancelPath(tm.ownerID), nil)
 	expect(t, rec, http.StatusNotFound)
 	if got := errCode(t, rec); got != string(apierr.CodeDeletionNotPending) {
 		t.Fatalf("code = %q", got)
 	}
 
-	// The operator cancels: the account is on again, with its old login, and its purge is gone.
 	expect(t, tm.owner.do(http.MethodDelete, tm.cancelPath(tm.memberID), nil), http.StatusNoContent)
 	if _, ok := sched.scheduled[tm.memberID]; ok {
 		t.Fatal("the purge is still scheduled")
@@ -305,7 +285,6 @@ func TestOnlyAnOperatorCancelsADeletionAndTheAccountComesBack(t *testing.T) {
 func TestACancelledDeletionLeavesADisabledAccountDisabled(t *testing.T) {
 	tm, _ := newDeletionTeam(t)
 	tm.disable()
-	// The member can't sign in to ask, so the deletion is recorded as the person's request would.
 	if err := tm.e.svc.write(context.Background(), func(tx *sql.Tx) error {
 		_, err := tm.e.svc.requestDeletion(context.Background(), tx, tm.memberID)
 		return err
@@ -371,9 +350,6 @@ func TestRemovingAMemberWhoseAccountIsWaitingLeavesItsPurge(t *testing.T) {
 	}
 }
 
-// SQLite gives the next account the largest id plus one, so the newest account's id would go to
-// whoever registers after it is purged. What is kept by id (a browser's drafts and offline records,
-// the mentions in comments) would then be theirs. The id is never given again.
 func TestAPurgedNewestAccountsIDIsNotGivenToTheNextToRegister(t *testing.T) {
 	tm, _ := newDeletionTeam(t)
 	e := tm.e
@@ -384,7 +360,6 @@ func TestAPurgedNewestAccountsIDIsNotGivenToTheNextToRegister(t *testing.T) {
 		t.Fatalf("fixture: the newest account is %d, %v; want %d", newest, err, lastID)
 	}
 
-	// What the purge does, last: the account's private spaces and then its row go.
 	for _, q := range []string{`DELETE FROM spaces WHERE owner_id = ?`, `DELETE FROM users WHERE id = ?`} {
 		if _, err := e.db.Exec(q, lastID); err != nil {
 			t.Fatal(err)
@@ -398,7 +373,6 @@ func TestAPurgedNewestAccountsIDIsNotGivenToTheNextToRegister(t *testing.T) {
 	if got := e.userID(other); got <= lastID {
 		t.Fatalf("a new account got id %d, which the purged account %d had", got, lastID)
 	}
-	// Deleting the highest again, and the mark stays where it was or goes up, never down.
 	var before int64
 	if err := e.db.QueryRow(`SELECT high FROM user_ids`).Scan(&before); err != nil {
 		t.Fatal(err)
@@ -414,14 +388,12 @@ func TestAPurgedNewestAccountsIDIsNotGivenToTheNextToRegister(t *testing.T) {
 	}
 }
 
-// The route checks that the caller is an operator before its handler runs; the handler checks again
-// in the transaction that cancels, so an operator demoted in between can't cancel.
 func TestCancelingADeletionChecksTheOperatorAgainInItsTransaction(t *testing.T) {
 	tm, _ := newDeletionTeam(t)
 	e := tm.e
 	expect(t, tm.member.do(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword}), http.StatusAccepted)
 	adminElsewhere, _ := e.join(e.invite(tm.owner, tm.ws, "second@example.com", RoleMember), "Second")
-	secondID := e.userID(adminElsewhere) // not an operator: only the setup workspace's admins are
+	secondID := e.userID(adminElsewhere)
 
 	req := httptest.NewRequest(http.MethodDelete, "/", nil)
 	req.SetPathValue("user", strconv.FormatInt(tm.memberID, 10))
@@ -437,9 +409,6 @@ func TestCancelingADeletionChecksTheOperatorAgainInItsTransaction(t *testing.T) 
 	}
 }
 
-// A deletion's answer that arrives after another account signed in on the same browser must not
-// expire that account's cookie: the answer sets no session cookie, and the deleted account's
-// sessions are already revoked.
 func TestADelayedDeletionAnswerLeavesANewerSessionsCookie(t *testing.T) {
 	tm, _ := newDeletionTeam(t)
 	jar, err := cookiejar.New(nil)
@@ -450,13 +419,11 @@ func TestADelayedDeletionAnswerLeavesANewerSessionsCookie(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The browser holds the member's cookie when the deletion is sent.
 	jar.SetCookies(u, []*http.Cookie{tm.member.cookie})
 	req := tm.member.req(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword})
 	rec := httptest.NewRecorder()
 	tm.e.h.ServeHTTP(rec, req)
 	expect(t, rec, http.StatusAccepted)
-	// Before the answer arrives, the owner signs in here: the jar holds the owner's cookie.
 	jar.SetCookies(u, []*http.Cookie{tm.owner.cookie})
 	jar.SetCookies(u, rec.Result().Cookies())
 	var held string
@@ -468,13 +435,9 @@ func TestADelayedDeletionAnswerLeavesANewerSessionsCookie(t *testing.T) {
 	if held != tm.owner.cookie.Value {
 		t.Fatalf("the owner's cookie is %q after the old answer, want it kept", held)
 	}
-	// And the deleted account's own cookie opens nothing.
 	expect(t, tm.member.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 }
 
-// Two tabs submit the deletion: the first commits, the second reaches authentication with the
-// session the first revoked and is answered 401. That answer must not expire the cookie of an
-// account that signed in here in the meantime: the revoked session's cookie is inert anyway.
 func TestASecondDeletionRefusedAsStaleLeavesANewerSessionsCookie(t *testing.T) {
 	tm, _ := newDeletionTeam(t)
 	jar, err := cookiejar.New(nil)
@@ -487,10 +450,7 @@ func TestASecondDeletionRefusedAsStaleLeavesANewerSessionsCookie(t *testing.T) {
 	}
 	stale := tm.member.cookie
 	jar.SetCookies(u, []*http.Cookie{stale})
-	// The first tab's deletion commits.
 	expect(t, tm.member.do(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword}), http.StatusAccepted)
-	// The second tab's request was sent with the old cookie, and is answered after the owner
-	// signed in here: the jar holds the owner's cookie by then.
 	req := tm.member.req(http.MethodPost, tm.deletionPath(), map[string]string{"password": otherPassword})
 	req.Header.Del("Cookie")
 	req.AddCookie(stale)

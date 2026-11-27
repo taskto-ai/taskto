@@ -1,7 +1,3 @@
-// Your own sessions: the browsers and devices logged in as you, each with where it was made,
-// when, and when it was last used, to sign out one at a time or all the others at once. The server
-// never sends a session's token (docs/api.md#your-sessions).
-
 import { api, type Session } from '../api'
 import { type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -21,7 +17,6 @@ export function SessionsTab() {
 
   const run = (change: () => Promise<unknown>) =>
     action.run(change).then((ok) => {
-      // A failed change may still have ended some of them: show what is true now.
       sessions.reload()
       return ok
     })
@@ -102,7 +97,6 @@ export function SessionsTab() {
   )
 }
 
-// "Firefox on macOS", or whichever of the two the server could tell.
 function deviceName(t: T, s: Session): string {
   if (s.browser && s.os) return t('settings.sessions.device', { browser: s.browser, os: s.os })
   return s.browser || s.os || t('settings.sessions.unknown')

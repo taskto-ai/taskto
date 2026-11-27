@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-//
-// Apps with several screens, drawn from the golden messages the Go server sends for the bundled Task
-// planner (internal/apps/screens_test.go): the host draws the screen the data model names,
-// navigating only changes that, so the form keeps what was typed, and Show hides an input until
-// its rule holds.
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
@@ -21,7 +16,6 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-// What the server answers each navigate action with.
 const answers: Record<string, unknown[]> = {
   new_task: openNew,
   back_to_tasks: openTasks,
@@ -35,7 +29,6 @@ function planner(sent: ActionPayload[] = []) {
       label="Task planner"
       release={{ definition_version: DEFINITION_VERSION, requires: ['component.Screens', 'component.Show'] }}
       transport={{
-        // Fresh messages each time, as a response is: the data model keeps the objects it is given.
         load: async () => structuredClone(surface),
         act: async (action) => {
           sent.push(action)
@@ -46,7 +39,6 @@ function planner(sent: ActionPayload[] = []) {
   )
 }
 
-// A2UI's inputs don't link their <label> to their <input>: find the input by its label's text.
 function input(label: string): HTMLInputElement {
   const found = screen.getByText(label).parentElement?.querySelector('input')
   if (!found) throw new Error(`no input for ${label}`)
@@ -58,7 +50,6 @@ test('draws the entry screen of an app with screens, and no other', async () => 
   await screen.findByText('Tasks')
   expect(screen.getByText('Pay rent')).toBeTruthy()
   expect(screen.getByText('Fix the shelf')).toBeTruthy()
-  // The open count is summarised over the rows not done.
   expect(screen.getByText('Open tasks').closest('dl')?.querySelector('dd')?.textContent).toBe('1')
   expect(screen.queryByText('Add task')).toBeNull()
   expect(screen.queryByText('Mark done')).toBeNull()
@@ -75,7 +66,6 @@ test('navigating opens the screen the server names, and the form keeps what was 
   fireEvent.input(input('Title'), { target: { value: 'Draft a plan' } })
   await waitFor(() => expect(input('Title').value).toBe('Draft a plan'))
 
-  // Back to the list and again to the form: the draft is where it was left.
   fireEvent.click(screen.getByRole('button', { name: 'Back' }))
   await screen.findByText('Open tasks')
   fireEvent.click(screen.getByRole('button', { name: 'New task' }))
@@ -91,7 +81,6 @@ test('a row opens its detail screen with its id, and the screen shows the record
   fireEvent.click(screen.getAllByRole('button', { name: 'Open' })[1])
   await screen.findByRole('heading', { name: 'Fix the shelf' })
   expect(sent[0]).toMatchObject({ name: 'open_task', context: { id: 2 } })
-  // The record's category is "other", so the rule shows its note.
   expect(screen.getByText('Kind').closest('dl')?.querySelector('dd')?.textContent).toBe('errand')
   expect(screen.getByRole('button', { name: 'Mark done' })).toBeTruthy()
 })
@@ -173,10 +162,8 @@ test('an error about a field names it as the form does, and by its name when no 
   fireEvent.click(screen.getByRole('button', { name: 'New task' }))
   await screen.findByRole('heading', { name: 'New task' })
   fireEvent.click(screen.getByRole('button', { name: 'Add task' }))
-  // The input's label, "Due date", and not the field's name, "due_date".
   expect((await screen.findByRole('alert')).textContent).toBe('Due date is required.')
 
-  // A field no input on the screen holds is named as the app does.
   rerender(view('elsewhere'))
   fireEvent.click(screen.getByRole('button', { name: 'Add task' }))
   await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('elsewhere is required.'))

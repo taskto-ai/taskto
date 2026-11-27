@@ -43,7 +43,6 @@ func TestSetupToken(t *testing.T) {
 	owner := e.client()
 	expect(t, owner.do(http.MethodPost, "/api/setup", body(&testSetupToken)), http.StatusCreated)
 
-	// Reused: setup is done, and the token itself is spent.
 	expect(t, e.client().do(http.MethodPost, "/api/setup", body(&testSetupToken)), http.StatusConflict)
 	if e.svc.validSetupToken(testSetupToken) {
 		t.Fatal("the setup token is still valid after setup")
@@ -53,7 +52,6 @@ func TestSetupToken(t *testing.T) {
 	}
 }
 
-// A server started without a setup token refuses setup with any token.
 func TestSetupWithoutToken(t *testing.T) {
 	e := newEnv(t, Options{})
 	e.svc = New(e.db, Options{HashParams: cheap})

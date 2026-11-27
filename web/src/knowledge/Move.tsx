@@ -1,5 +1,3 @@
-// Moving a document to another path, in a dialog, naming the version it was based on.
-
 import { type FormEvent, useId, useState } from 'react'
 import { api, type Doc } from '../api'
 import { useT } from '../i18n'

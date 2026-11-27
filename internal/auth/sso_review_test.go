@@ -18,10 +18,8 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// leak is a synthetic secret planted where a provider's answer might carry one.
 const leak = "s3cr3t-LEAK-value"
 
-// lockedBuffer is a log destination safe for the handler's goroutines.
 type lockedBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer
@@ -39,7 +37,6 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-// captureLogs sends slog's default logger to a buffer until the test ends.
 func captureLogs(t *testing.T) *lockedBuffer {
 	t.Helper()
 	buf := &lockedBuffer{}
@@ -49,7 +46,6 @@ func captureLogs(t *testing.T) *lockedBuffer {
 	return buf
 }
 
-// hitCounter returns a server and a count of the requests a server gets.
 func hitCounter(t *testing.T, tls bool) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var n atomic.Int32
@@ -64,9 +60,6 @@ func hitCounter(t *testing.T, tls bool) (*httptest.Server, *atomic.Int32) {
 	return srv, &n
 }
 
-// ---- 1. Google ----
-
-// googleEnv is a provider that counts as Google's: the fake's issuer stands in for it.
 func googleEnv(t *testing.T, tweak ...func(*SSOProvider, *Options)) *ssoEnv {
 	t.Helper()
 	old := googleIssuer
@@ -77,7 +70,7 @@ func googleEnv(t *testing.T, tweak ...func(*SSOProvider, *Options)) *ssoEnv {
 func TestSSOGoogleNeedsGmailOrAWorkspaceToLink(t *testing.T) {
 	t.Run("a third-party address without hd links nothing", func(t *testing.T) {
 		s := googleEnv(t)
-		s.setup() // owner@example.com
+		s.setup()
 		s.wantFailure(s.signIn(s.browser(), "", verified("owner@example.com")), apierr.CodeSSOGoogleEmailUntrusted)
 		if n := s.count(`SELECT count(*) FROM user_identities`); n != 0 {
 			t.Fatalf("identities = %d", n)
@@ -123,7 +116,6 @@ func TestSSOGoogleNeedsGmailOrAWorkspaceToLink(t *testing.T) {
 		claims := verified("owner@example.com")
 		claims["hd"] = "example.com"
 		s.wantLogin(b, s.signIn(b, "", claims), "/", "owner@example.com")
-		// Later the token has no hd, and the address is a stranger's: the subject is the key.
 		b2 := s.browser()
 		s.wantLogin(b2, s.signIn(b2, "", verified("whoever@example.org")), "/", "owner@example.com")
 	})
@@ -178,11 +170,11 @@ func TestGoogleEmailTrusted(t *testing.T) {
 		{"a@notgmail.com", "", false},
 		{"gmail.com@example.com", "", false},
 		{"User@GMAIL.COM", "", true},
-		{"a@gmaİl.com", "", false}, // U+0130 lower-cases to an ASCII i
-		{"a@gmaıl.com", "", false}, // a dotless ı
+		{"a@gmaİl.com", "", false},
+		{"a@gmaıl.com", "", false},
 		{"a@gmail.com\u212a", "", false},
 		{"a@gmail.co\u0301m", "", false},
-		{"a@gmail.com\u00a0", "", false}, // a trailing no-break space, which TrimSpace would drop
+		{"a@gmail.com\u00a0", "", false},
 		{"a@gmail.com\u3000", "", false},
 		{" a@gmail.com ", "", false},
 		{"a@example.com", "", false},
@@ -196,8 +188,6 @@ func TestGoogleEmailTrusted(t *testing.T) {
 		}
 	}
 }
-
-// ---- 2. https on every provider endpoint ----
 
 func TestSSORefusesDiscoveredEndpointsThatAreNotHTTPS(t *testing.T) {
 	for _, field := range []string{"authorization_endpoint", "token_endpoint", "jwks_uri", "userinfo_endpoint"} {
@@ -232,7 +222,7 @@ func TestSSORefusesDiscoveredEndpointsThatAreNotHTTPS(t *testing.T) {
 }
 
 func TestSSOFollowsNoRedirectOnTheTokenExchange(t *testing.T) {
-	other, hits := hitCounter(t, true) // another origin, https, sharing the test certificate
+	other, hits := hitCounter(t, true)
 	idp := newFakeIdPWith(t, func(f *fakeIdP) {
 		f.useTLS = true
 		f.handlers["/token"] = func(w http.ResponseWriter, r *http.Request) {
@@ -277,8 +267,6 @@ func TestGuardTransport(t *testing.T) {
 		}
 	}
 }
-
-// ---- 3. no secrets in logs ----
 
 func TestSSOLogsAndAnswersCarryNoProviderText(t *testing.T) {
 	logs := captureLogs(t)
@@ -361,8 +349,6 @@ func TestSSOLogsAndAnswersCarryNoProviderText(t *testing.T) {
 	})
 }
 
-// ---- 5. the invitee's landing ----
-
 func TestSSOInviteScreenAfterSignIn(t *testing.T) {
 	t.Run("an account made from its invites goes to its first workspace", func(t *testing.T) {
 		s := newSSOEnv(t)
@@ -407,14 +393,11 @@ func TestSSOInviteScreenAfterSignIn(t *testing.T) {
 	})
 }
 
-// ---- 6. discovery doesn't hold a lock across the network ----
-
 func TestSSODiscoveryIsSharedAndEachCallerKeepsItsOwnDeadline(t *testing.T) {
 	var stall atomic.Bool
 	var asked atomic.Int32
 	stall.Store(true)
 	idp := newFakeIdP(t)
-	// Wrap discovery: stalled until released.
 	inner := idp.srv.Config.Handler
 	idp.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/.well-known/openid-configuration") {
@@ -427,7 +410,6 @@ func TestSSODiscoveryIsSharedAndEachCallerKeepsItsOwnDeadline(t *testing.T) {
 		inner.ServeHTTP(w, r)
 	})
 	s := newSSOEnvWith(t, idp)
-	// Long enough that a caller whose goroutine starts late still joins the first one's discovery.
 	const timeout = time.Second
 	s.svc.sso.timeout = timeout
 
@@ -455,7 +437,6 @@ func TestSSODiscoveryIsSharedAndEachCallerKeepsItsOwnDeadline(t *testing.T) {
 		t.Fatalf("the provider was asked %d times, want one shared discovery", n)
 	}
 
-	// A caller with a shorter deadline of its own gives up at that, not at the timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	began = time.Now()
@@ -466,10 +447,8 @@ func TestSSODiscoveryIsSharedAndEachCallerKeepsItsOwnDeadline(t *testing.T) {
 		t.Fatalf("a caller with a 30 ms deadline waited %v", took)
 	}
 
-	// The failure was forgotten: the provider answering again is found by the next login, and
-	// a success is kept.
 	stall.Store(false)
-	time.Sleep(timeout + 100*time.Millisecond) // the stalled attempt has ended
+	time.Sleep(timeout + 100*time.Millisecond)
 	expect(t, s.browser().do(http.MethodPost, "/api/sso/fake/start", map[string]string{}), http.StatusOK)
 	before := asked.Load()
 	expect(t, s.browser().do(http.MethodPost, "/api/sso/fake/start", map[string]string{}), http.StatusOK)
@@ -477,8 +456,6 @@ func TestSSODiscoveryIsSharedAndEachCallerKeepsItsOwnDeadline(t *testing.T) {
 		t.Fatal("a discovered provider was asked again")
 	}
 }
-
-// ---- 7. audience ----
 
 func TestSSOAudience(t *testing.T) {
 	s := newSSOEnv(t)
@@ -519,19 +496,16 @@ func TestSSOAudience(t *testing.T) {
 	}
 }
 
-// ---- 8. a stale callback ----
-
 func TestSSOStaleCallbackLeavesANewerAttemptsCookie(t *testing.T) {
 	s := newSSOEnv(t)
 	s.setup()
 	b := s.browser()
 	qa := s.start(b, "/a")
-	qb := s.start(b, "/b") // replaces the cookie
+	qb := s.start(b, "/b")
 	if c := b.cookies[s.svc.ssoCookieName()]; c == nil || c.Value != qb.Get("state") {
 		t.Fatalf("cookie %+v", c)
 	}
 
-	// A's callback arrives late and fails: the state isn't the cookie's.
 	codeA := s.idp.issue(qa.Get("nonce"), qa.Get("code_challenge"), verified("owner@example.com"))
 	s.wantFailure(b.do(http.MethodGet, "/api/sso/fake/callback?state="+url.QueryEscape(qa.Get("state"))+"&code="+codeA, nil),
 		apierr.CodeSSOExpired)
@@ -539,11 +513,9 @@ func TestSSOStaleCallbackLeavesANewerAttemptsCookie(t *testing.T) {
 		t.Fatal("A's failed callback cleared B's cookie")
 	}
 
-	// B's callback goes through.
 	codeB := s.idp.issue(qb.Get("nonce"), qb.Get("code_challenge"), verified("owner@example.com"))
 	rec := b.do(http.MethodGet, "/api/sso/fake/callback?state="+url.QueryEscape(qb.Get("state"))+"&code="+codeB, nil)
 	s.wantLogin(b, rec, "/b", "owner@example.com")
-	// The callback never clears the cookie: it expires with the state, which works once.
 	if c := b.cookies[s.svc.ssoCookieName()]; c == nil || c.MaxAge != int(ssoTTL/time.Second) {
 		t.Fatalf("cookie %+v, want one that lives as long as the state", c)
 	}

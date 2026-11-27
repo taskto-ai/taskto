@@ -13,7 +13,6 @@ import (
 	"testing"
 )
 
-// cliSteps lists the CLI steps recorded for the leaver, sorted.
 func (w *world) cliSteps() []string {
 	w.t.Helper()
 	rows, err := w.db.Query(`SELECT target FROM purge_cleanups WHERE kind = ? AND user_id = ? ORDER BY target`, cleanCLIHome, w.leaver)
@@ -55,17 +54,13 @@ func (w *world) makeLocalHome(user int64) {
 	}
 }
 
-// Both kinds of worker have run here. The purge runs with the workers off: the local worker's
-// directory is removed from the data directory, and the container worker's copy waits. The operator
-// then turns on local mode: the local worker can't reach the container's volume, so the step stays.
-// Only the container worker, once it runs, clears it.
 func TestTheContainersCopyWaitsForTheContainerWorker(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
 	w.history(cliLocal, cliContainer)
 	w.makeLocalHome(w.leaver)
 	w.makeLocalHome(w.carol)
-	w.cli.kind = "" // CLI workers off
+	w.cli.kind = ""
 	w.deleteAccount()
 	if err := w.svc.Purge(ctx, w.leaver); err != nil {
 		t.Fatal(err)
@@ -81,7 +76,6 @@ func TestTheContainersCopyWaitsForTheContainerWorker(t *testing.T) {
 		t.Fatalf("steps with the workers off = %v, want %v", got, want)
 	}
 
-	// Local mode: its Forget succeeds, but it isn't the worker that holds the copy.
 	w.cli.kind = cliLocal
 	if err := w.svc.RunCleanups(ctx); err != nil {
 		t.Fatal(err)
@@ -90,7 +84,6 @@ func TestTheContainersCopyWaitsForTheContainerWorker(t *testing.T) {
 		t.Fatalf("steps after a run in local mode = %v, want %v: the container's copy is still there", got, want)
 	}
 
-	// The container worker runs: it removes its copy, and the step is done.
 	w.cli.kind = cliContainer
 	if err := w.svc.RunCleanups(ctx); err != nil {
 		t.Fatal(err)
@@ -103,7 +96,6 @@ func TestTheContainersCopyWaitsForTheContainerWorker(t *testing.T) {
 	}
 }
 
-// A container worker that fails keeps the step, as a failure.
 func TestAFailingContainerWorkerKeepsItsStep(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -118,7 +110,6 @@ func TestAFailingContainerWorkerKeepsItsStep(t *testing.T) {
 	}
 }
 
-// In local mode the local worker forgets the person (stopping their logins) and the directory goes.
 func TestLocalModeForgetsThroughTheLocalWorker(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -140,8 +131,6 @@ func TestLocalModeForgetsThroughTheLocalWorker(t *testing.T) {
 	}
 }
 
-// An install that never ran a CLI worker has nothing of the person's to clean: the purge completes
-// with no CLI step left waiting, and says so.
 func TestNoCLIStepWaitsWhereNoWorkerEverRan(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -163,9 +152,6 @@ func TestNoCLIStepWaitsWhereNoWorkerEverRan(t *testing.T) {
 	}
 }
 
-// Where the record doesn't go back far enough (an install from before it, or a restore), an account
-// that existed then may have files with either worker: both steps wait, whatever runs now. An account
-// made since has files only with a worker that ran since, which the record has.
 func TestAnUnknownPastKeepsBothStepsForTheAccountsOfThatPast(t *testing.T) {
 	ctx := context.Background()
 	t.Run("an account from before the record", func(t *testing.T) {
@@ -178,7 +164,6 @@ func TestAnUnknownPastKeepsBothStepsForTheAccountsOfThatPast(t *testing.T) {
 		if err := w.svc.Purge(ctx, w.leaver); err != nil {
 			t.Fatal(err)
 		}
-		// The local copy is removed from here; the container's waits.
 		want := []string{fmt.Sprintf("container:%d", w.leaver)}
 		if got := w.cliSteps(); !slices.Equal(got, want) {
 			t.Fatalf("steps = %v, want %v", got, want)
@@ -200,7 +185,6 @@ func TestAnUnknownPastKeepsBothStepsForTheAccountsOfThatPast(t *testing.T) {
 	})
 }
 
-// The log says what waiting steps wait for, and for how many accounts.
 func TestRunCleanupsLogsWhatTheWaitingStepsWaitFor(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -222,16 +206,12 @@ func TestRunCleanupsLogsWhatTheWaitingStepsWaitFor(t *testing.T) {
 	}
 }
 
-// The container worker doesn't answer: its step fails and stays, but the local directory under the
-// data directory is removed all the same (each kind is a step of its own), and the account's purge
-// is tried again until the container's copy is gone too.
 func TestAnUnreachableContainerWorkerDoesNotKeepTheLocalDirectory(t *testing.T) {
 	ctx := context.Background()
 	for _, history := range [][]string{{cliLocal, cliContainer}, {cliUnknown}} {
 		t.Run(fmt.Sprint(history), func(t *testing.T) {
 			w := newWorld(t)
 			w.history(history...)
-			// An account from before the history was known, for the unknown case.
 			exec(t, w.db, `UPDATE users SET created_at = '2025-06-01T00:00:00.000Z' WHERE id = ?`, w.leaver)
 			w.makeLocalHome(w.leaver)
 			w.cli.kind = cliContainer
@@ -257,8 +237,6 @@ func TestAnUnreachableContainerWorkerDoesNotKeepTheLocalDirectory(t *testing.T) 
 	}
 }
 
-// The local CLI directory, like the container's copy, holds the browser's profile: its step waits
-// while the browser step is recorded.
 func TestTheLocalCLIStepWaitsForTheBrowserStep(t *testing.T) {
 	ctx := context.Background()
 	w, b, _ := browserWorld(t)

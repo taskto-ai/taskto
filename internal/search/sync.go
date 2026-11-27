@@ -14,27 +14,18 @@ import (
 )
 
 const (
-	// syncBatch is how many files one transaction of a sync writes, and syncBatchBytes
-	// about how much of their text: a batch ends at whichever comes first, so a sync of a
-	// large space never holds more than about that much in memory.
 	syncBatch      = 100
 	syncBatchBytes = 32 << 20
-	// searchSyncWait is how long a search waits for a sync of a space already running.
 	searchSyncWait = 2 * time.Second
-	// maxBody is how much of a document full-text search indexes, in bytes.
-	maxBody = 4 << 20
+	maxBody        = 4 << 20
 )
 
-// indexed is a file as the index has it.
 type indexed struct {
 	id      int64
 	version string
-	format  int // the textFormat its full text was indexed in
+	format  int
 }
 
-// Sync brings sp's index up to main's head and returns the commit it now reflects ("" for
-// a space without documents). Only sp's ID and workspace ID are used: the index reads every
-// space, as the server.
 func (x *Index) Sync(ctx context.Context, sp access.Space) (string, error) {
 	unlock, err := x.lock(ctx, sp.ID)
 	if err != nil {
@@ -44,14 +35,8 @@ func (x *Index) Sync(ctx context.Context, sp access.Space) (string, error) {
 	return x.sync(ctx, sp, 0)
 }
 
-// errLargeSync is for a sync bigger than its caller would wait for.
 var errLargeSync = errors.New("search: a sync bigger than allowed here")
 
-// syncForSearch is Sync for a search, bounded: if a sync of sp is already running (a
-// catch-up at startup, say), it waits for it at most x.syncWait; and it syncs at most one
-// batch itself, leaving a bigger catch-up (after a large change made outside the server)
-// to the background worker. Either way it reports false, and the search answers from what
-// is indexed.
 func (x *Index) syncForSearch(ctx context.Context, sp access.Space) (bool, error) {
 	wait, cancel := context.WithTimeout(ctx, x.syncWait)
 	unlock, err := x.lock(wait, sp.ID)
@@ -68,8 +53,6 @@ func (x *Index) syncForSearch(ctx context.Context, sp access.Space) (bool, error
 	return err == nil, err
 }
 
-// sync is Sync, with the space's sync locked; with limit > 0, it does nothing and returns
-// errLargeSync if more than limit files changed.
 func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, error) {
 	sp = access.Space{ID: sp.ID, WorkspaceID: sp.WorkspaceID, Kind: sp.Kind, Access: access.Read}
 
@@ -80,7 +63,7 @@ func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, e
 		return "", err
 	}
 	if partial {
-		since = "" // a sync stopped half-way: start over from main's files
+		since = ""
 	}
 	head, err := x.kb.Head(ctx, sp)
 	if err != nil {
@@ -90,7 +73,6 @@ func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, e
 		if head != "" {
 			return head, nil
 		}
-		// No documents, and none indexed: nothing to do, and nothing to write.
 		var any bool
 		if err := x.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM search_docs WHERE space_id = ?)`, sp.ID).Scan(&any); err != nil || !any {
 			return "", err
@@ -119,8 +101,6 @@ func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, e
 		return "", err
 	}
 
-	// What to write: changed files whose version the index doesn't have, or has in an
-	// older textFormat, and, after a full listing, the indexed files that are gone.
 	var todo []knowledge.Change
 	for _, c := range diff.Changes {
 		if d, ok := have[c.Path]; (c.Version == "" && !ok) || (ok && d.version == c.Version && d.format == textFormat) {
@@ -144,9 +124,6 @@ func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, e
 		return "", errLargeSync
 	}
 	embed := false
-	// At least one transaction, which records the commit, even with nothing to write: a
-	// space marked partial whose files are all indexed, or one never indexed whose files
-	// are all gone.
 	for i, first := 0, true; first || i < len(todo); first = false {
 		var docs []doc
 		size := 0
@@ -164,9 +141,6 @@ func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, e
 			x.onBatch(len(docs), size)
 		}
 		err := x.write(ctx, func(tx *sql.Tx) error {
-			// A sync that takes more than one transaction says so in its first: searches
-			// still see what is indexed, and if it stops half-way, the next one starts
-			// over from main's files rather than trust what this one left.
 			if first && !last {
 				if _, err := tx.ExecContext(ctx, `INSERT INTO search_spaces (space_id, commit_id, partial) VALUES (?, ?, 1)
 					ON CONFLICT (space_id) DO UPDATE SET partial = 1`, sp.ID, since); err != nil {
@@ -190,7 +164,6 @@ func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, e
 				sp.ID, diff.Head)
 			return err
 		})
-		// A document changed or gone has lost its vectors.
 		var written []int64
 		for _, d := range docs {
 			if id := have[d.path].id; id != 0 {
@@ -208,14 +181,11 @@ func (x *Index) sync(ctx context.Context, sp access.Space, limit int) (string, e
 	return diff.Head, nil
 }
 
-// doc is a file to index, or to remove from the index if version is empty.
 type doc struct {
 	path, version, title, body string
 	markdown                   bool
 }
 
-// load reads what the index needs of the change c at the commit head: a Markdown
-// document's title and text; an upload's path only.
 func (x *Index) load(ctx context.Context, sp access.Space, head string, c knowledge.Change) (doc, error) {
 	d := doc{path: c.Path, version: c.Version, markdown: knowledge.IsMarkdown(c.Path)}
 	if d.version == "" {
@@ -228,7 +198,6 @@ func (x *Index) load(ctx context.Context, sp access.Space, head string, c knowle
 	got, err := x.kb.Read(ctx, sp, c.Path, head)
 	switch {
 	case errors.Is(err, knowledge.ErrInvalid) || errors.Is(err, knowledge.ErrNotFound):
-		// A name the knowledge base refuses (made outside the server): its path is enough.
 		d.markdown = false
 		return d, nil
 	case err != nil:
@@ -239,7 +208,6 @@ func (x *Index) load(ctx context.Context, sp access.Space, head string, c knowle
 	return d, nil
 }
 
-// writeDoc puts d in the index, in place of cur (zero if the index doesn't have it).
 func writeDoc(ctx context.Context, tx *sql.Tx, spaceID int64, cur indexed, d doc) error {
 	switch {
 	case d.version == "":
@@ -256,16 +224,12 @@ func writeDoc(ctx context.Context, tx *sql.Tx, spaceID int64, cur indexed, d doc
 		}
 		return writeText(ctx, tx, id, d)
 	case cur.version == d.version:
-		// Only indexed in an older textFormat: its text again, and its vectors, which are of
-		// the same version, stay.
 		if _, err := tx.ExecContext(ctx, `UPDATE search_docs SET markdown = ?, title = ?, text_format = ? WHERE id = ?`,
 			d.markdown, d.title, textFormat, cur.id); err != nil {
 			return err
 		}
 		return writeText(ctx, tx, cur.id, d)
 	default:
-		// Vectors are only ever of a document's current version: the old ones go now, and
-		// the embeddings worker makes new ones.
 		if _, err := tx.ExecContext(ctx, `DELETE FROM search_chunks WHERE doc_id = ?`, cur.id); err != nil {
 			return err
 		}
@@ -278,8 +242,6 @@ func writeDoc(ctx context.Context, tx *sql.Tx, spaceID int64, cur indexed, d doc
 	}
 }
 
-// writeText puts d's path, title and text in the full-text index, as row id, in place of
-// what it had there, if anything: a migration to a new textFormat can have emptied it.
 func writeText(ctx context.Context, tx *sql.Tx, id int64, d doc) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM search_fts WHERE rowid = ?`, id); err != nil {
 		return err
@@ -289,8 +251,6 @@ func writeText(ctx context.Context, tx *sql.Tx, id int64, d doc) error {
 	return err
 }
 
-// cleanBody is the text full-text search indexes: valid UTF-8, at most maxBody bytes,
-// without the characters that mark matches in snippets or separate characters (sep).
 func cleanBody(content []byte) string {
 	if len(content) > maxBody {
 		content = content[:maxBody]
@@ -303,7 +263,6 @@ func cleanBody(content []byte) string {
 	}, strings.ToValidUTF8(string(content), "\uFFFD"))
 }
 
-// fileTitle is a file's name without its extension.
 func fileTitle(name string) string {
 	base := path.Base(name)
 	if t := strings.TrimSuffix(base, path.Ext(base)); t != "" {
@@ -312,11 +271,8 @@ func fileTitle(name string) string {
 	return base
 }
 
-// maxTitle is the longest title, in characters.
 const maxTitle = 200
 
-// docTitle is a Markdown document's title: its front matter's title, else its first
-// top-level heading, else its file name.
 func docTitle(name, body string) string {
 	title := ""
 	lines := strings.Split(body, "\n")
@@ -333,7 +289,7 @@ func docTitle(name, body string) string {
 			}
 		}
 		if start == 0 {
-			title = "" // no end to the front matter: it wasn't front matter
+			title = ""
 		}
 	}
 	fence := ""
@@ -366,7 +322,6 @@ func docTitle(name, body string) string {
 	return title
 }
 
-// codeFence returns the fence a line opens or closes (``` or ~~~), or "".
 func codeFence(line string) string {
 	for _, f := range []string{"```", "~~~"} {
 		if strings.HasPrefix(line, f) {

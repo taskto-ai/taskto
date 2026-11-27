@@ -1,6 +1,7 @@
 package cliworker
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,71 +17,32 @@ import (
 	"taskto.ai/taskto/internal/browser"
 )
 
-// The helper is how every CLI process starts, and the only code that touches a user's
-// directories: `taskto cli-helper`, the same binary, started for one user. In container mode
-// it runs as that user's own Unix user, so nothing the worker does as root ever opens a path
-// inside a home (a user can make any path there a symlink to anywhere). In local mode it
-// runs as the server's user, the same code either way.
-//
-// It reads one JSON request from its stdin, up to a newline, byte by byte so that nothing
-// after it is consumed, and then:
-//
-//   - "exec": prepares the user's directories and the CLI's settings, and execs the CLI in
-//     the conversation's working directory (or the home) with the clean environment. What
-//     follows the request on stdin is the CLI's stdin (a prompt, or a login's code); with
-//     PromptFile it is read into a file the CLI gets instead (Grok Build) and stdin closes.
-//   - "limits": prints the usage limits Codex recorded for a thread, as JSON.
-//   - "authfile": prints whether the CLI's credentials file exists, as JSON.
-//   - "browser", "browser-vnc", "browser-clean", "browser-purge": the user's agent browser (browser.go).
-//
-// The exec replaces the helper, so the CLI keeps its PID: the worker's process group,
-// records and signals work as if it had started the CLI itself.
-
-// HelperArg is the helper's subcommand.
 const HelperArg = "cli-helper"
 
-// promptFilePlaceholder stands for the prompt file's path in an exec request's Args.
 const promptFilePlaceholder = "{prompt-file}"
 
 type helperRequest struct {
-	Op         string `json:"op"`
-	LayoutRoot string `json:"layout_root"`
-	User       int64  `json:"user"`
-	CLI        CLI    `json:"cli"`
-	// Slot is the account directory: the CLI's config directory for it.
-	Slot Slot `json:"slot,omitempty"`
-	// Proxy, for a turn on a shared account (see TurnSpec.Proxy).
-	Proxy *Proxy `json:"proxy,omitempty"`
-	// Tools, for a turn with taskto's tools (see TurnSpec.Tools).
-	Tools     *Tools    `json:"tools,omitempty"`
-	Bin       string    `json:"bin,omitempty"`
-	Args      []string  `json:"args,omitempty"`
-	Path      string    `json:"path,omitempty"`
-	Overrides Overrides `json:"overrides,omitzero"`
-	// Conversation sets the working directory; 0 means the home.
-	Conversation int64 `json:"conversation,omitempty"`
-	// PromptFile: the rest of stdin is the prompt, for a file (promptFilePlaceholder in Args).
-	PromptFile bool `json:"prompt_file,omitempty"`
-	// Sandbox is Codex's sandbox_mode.
-	Sandbox string `json:"sandbox,omitempty"`
-	// Thread is the Codex thread for "limits".
-	Thread string `json:"thread,omitempty"`
-	// Approve is the permission hook's command line, written into the CLI's settings.
-	Approve []string `json:"approve,omitempty"`
-	// AllowRoot lets an exec run the CLI as root (the worker's UnsafePrivileged).
-	AllowRoot bool `json:"allow_root,omitempty"`
-	// Browser is the process a "browser" op starts (browser.go).
-	Browser *browser.ProcSpec `json:"browser,omitempty"`
+	Op           string            `json:"op"`
+	LayoutRoot   string            `json:"layout_root"`
+	User         int64             `json:"user"`
+	CLI          CLI               `json:"cli"`
+	Slot         Slot              `json:"slot,omitempty"`
+	Proxy        *Proxy            `json:"proxy,omitempty"`
+	Tools        *Tools            `json:"tools,omitempty"`
+	Bin          string            `json:"bin,omitempty"`
+	Args         []string          `json:"args,omitempty"`
+	Path         string            `json:"path,omitempty"`
+	Overrides    Overrides         `json:"overrides,omitzero"`
+	Conversation int64             `json:"conversation,omitempty"`
+	PromptFile   bool              `json:"prompt_file,omitempty"`
+	Sandbox      string            `json:"sandbox,omitempty"`
+	Thread       string            `json:"thread,omitempty"`
+	Approve      []string          `json:"approve,omitempty"`
+	AllowRoot    bool              `json:"allow_root,omitempty"`
+	Browser      *browser.ProcSpec `json:"browser,omitempty"`
 }
 
-// RunHelper is the helper's main: call it when os.Args[1] is HelperArg, and exit with what
-// it returns. An exec never returns: the CLI has taken the process over.
 func RunHelper() int {
-	// no_new_privs (unprivileged) is a property of the OS thread that sets it, and the program
-	// exec'd gets the attributes of the thread that calls execve. Without this lock the
-	// goroutine may move to another thread between the two (the helper does file I/O in
-	// between), and the CLI or browser would then run without no_new_privs. Never unlocked:
-	// the exec replaces the process, and an error ends it.
 	runtime.LockOSThread()
 	if err := runHelper(os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "cli-helper:", err)
@@ -103,10 +65,6 @@ func runHelper(stdin *os.File, stdout io.Writer) error {
 	}
 	layout := Layout{Root: req.LayoutRoot}
 	if req.Op == "forget" {
-		// A deleted account: the user's whole directory goes, logins, sessions, working
-		// directories and the browser's profile with it. It is not made again.
-		// The user's Unix user (container mode) owns what is inside the directory, not the
-		// directory's place in the layout: its contents go first, then the directory if it can.
 		root := layout.User(req.User).Root
 		entries, err := os.ReadDir(root)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -136,8 +94,6 @@ func runHelper(stdin *os.File, stdout io.Writer) error {
 		info, err := os.Stat(filepath.Join(dirs.ConfigOf(req.CLI, req.Slot), credentials(req.CLI)))
 		return json.NewEncoder(stdout).Encode(map[string]bool{"exists": err == nil && info.Mode().IsRegular() && info.Size() > 0})
 	case "reset":
-		// Disconnecting: everything the CLI kept for the account goes, then the empty
-		// directories are made again (the first account's; another's is made when used).
 		if err := os.RemoveAll(layout.User(req.User).ConfigOf(req.CLI, req.Slot)); err != nil {
 			return err
 		}
@@ -212,7 +168,6 @@ func runHelper(stdin *os.File, stdout io.Writer) error {
 	return execve(bin, append([]string{bin}, args...), env(req.CLI, req.Slot, dirs, req.Path, req.Overrides, req.Proxy, req.Tools))
 }
 
-// readLine reads up to a newline, one byte at a time, so the rest stays for the CLI.
 func readLine(f *os.File, limit int) ([]byte, error) {
 	var line []byte
 	b := make([]byte, 1)
@@ -231,8 +186,6 @@ func readLine(f *os.File, limit int) ([]byte, error) {
 	return nil, errors.New("request too long")
 }
 
-// cleanTmp removes the turns' temporary directories older than a day: a prompt file is left
-// behind when the helper execs the CLI.
 func cleanTmp(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -246,7 +199,6 @@ func cleanTmp(dir string) {
 	}
 }
 
-// credentials is where each CLI keeps its login, in its config directory.
 func credentials(cli CLI) string {
 	if cli == Claude {
 		return ".credentials.json"
@@ -254,14 +206,8 @@ func credentials(cli CLI) string {
 	return "auth.json"
 }
 
-// helperCommand returns the command that runs req for user through the helper: as the user's
-// own Unix user in container mode. Its stdin starts with the request; extra follows it (the
-// CLI's stdin), unless the caller wires stdin itself (then extra is nil and it must write
-// header() first).
 func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte, error) {
 	w.helperLaunches.Add(1)
-	// Every op but the one that removes the user's directory makes it (and a login's files in
-	// it): none runs for a forgotten user (forget.go).
 	if req.Op != "forget" && w.isForgotten(user) {
 		return nil, nil, ErrForgotten
 	}
@@ -269,21 +215,18 @@ func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte
 	if req.Path == "" {
 		req.Path = w.cfg.Path
 	}
-	// Only the worker's own (tests'): a request never brings its own.
 	req.Overrides = w.cfg.Overrides[req.CLI]
 	req.Approve = w.approveCommand(req.CLI)
 	req.AllowRoot = w.cfg.UnsafePrivileged
 	if w.cfg.Isolation != nil && req.Sandbox == "" {
-		// The OS boundary is ours; Codex's own sandbox can't start inside a container.
 		req.Sandbox = "danger-full-access"
 	}
 	header, err := json.Marshal(req)
 	if err != nil {
 		return nil, nil, err
 	}
-	cmd := exec.Command(w.cfg.Helper, HelperArg) //nolint:gosec,noctx // G204: our own binary; stopped as a group by the caller
+	cmd := exec.CommandContext(context.Background(), w.cfg.Helper, HelperArg)
 	cmd.Dir = "/"
-	// The helper builds the CLI's environment itself; it needs none of ours.
 	cmd.Env = []string{"PATH=" + w.cfg.Path}
 	newGroup(cmd)
 	if err := w.asUser(cmd, user); err != nil {
@@ -292,10 +235,6 @@ func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte
 	return cmd, append(header, '\n'), nil
 }
 
-// unprivileged is the last step before the helper execs a CLI or an agent browser: they and
-// every command they run never act as root (docs/agent-safety.md). It refuses to go on as
-// root (unless the worker's development override allows it), and sets no_new_privs, which
-// the exec keeps, so no setuid program can raise them.
 func unprivileged(req helperRequest) error {
 	if (os.Getuid() == 0 || os.Geteuid() == 0) && !req.AllowRoot {
 		return errors.New("refusing to run an agent's program as root (docs/agent-safety.md)")

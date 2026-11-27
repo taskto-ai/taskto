@@ -1,10 +1,3 @@
-// Search: the workspace's embeddings model, which admins choose, and each space's consent
-// to it, which only the space's owner or editors give. Consent is a privacy decision: it
-// sends the space's Markdown documents, and its searches, from the server to one endpoint
-// (account, model and base URL). So the endpoint is shown in full, consent names it back
-// to the server (which refuses if it changed meanwhile), and a change of endpoint stops
-// embedding until someone consents again.
-
 import { type FormEvent, type ReactNode, useId, useState } from 'react'
 import {
   api,
@@ -38,7 +31,6 @@ export function SearchTab({ workspace, admin }: { workspace: number; admin: bool
   )
   const spaces = useLoad(() => api<{ spaces: Space[] }>(`${base}/spaces`).then((r) => r.spaces), [base])
   const members = useLoad(() => api<{ members: Member[] }>(`${base}/members`).then((r) => r.members), [base])
-  // A new endpoint changes what every space's consent is for.
   const [round, setRound] = useState(0)
   const t = useT()
 
@@ -63,8 +55,6 @@ export function SearchTab({ workspace, admin }: { workspace: number; admin: bool
         {settings.data && <Status settings={settings.data} accounts={accounts.data} />}
         {admin && settings.data && accounts.data && (
           <EmbeddingsForm
-            // A new form for each saved endpoint: after a save, or another admin's change seen on
-            // reload, it starts from what the server has, never from what this form held.
             key={
               settings.data.embeddings ? `${settings.data.embeddings.account}/${settings.data.embeddings.model}` : 'off'
             }
@@ -178,7 +168,6 @@ function EmbeddingsForm({
             ))}
           </datalist>
         </div>
-        {/* Under the row rather than under the model, so the two fields' boxes line up. */}
         {chosen && (
           <p className="settings-muted" id={servedId}>
             {t.rich('settings.search.servedAt', { url: <code>{`${chosen.base_url}/embeddings`}</code> })}
@@ -251,7 +240,6 @@ function SpaceConsent({
     const ok = await action.run(async () => setShown(await api<Consent>(url, { method: 'PUT', body })))
     setAsking(false)
     if (!ok) {
-      // Refused, say because the endpoint changed meanwhile: show it as it is now, to review.
       setShown(null)
       consent.reload()
     }

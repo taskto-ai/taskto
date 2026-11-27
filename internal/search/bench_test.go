@@ -9,11 +9,8 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// benchDims is the size of the vectors of the benchmarks: nomic-embed-text's, and most
-// models' near it.
 const benchDims = 768
 
-// randomVector is a vector of length 1, of dims normally distributed components.
 func randomVector(r *rand.Rand, dims int) []float32 {
 	v := make([]float64, dims)
 	for i := range v {
@@ -22,9 +19,6 @@ func randomVector(r *rand.Rand, dims int) []float32 {
 	return normalize(v)
 }
 
-// fillVectors gives sp n embedded passages of random vectors of dims dimensions, perDoc to
-// a document, written straight to the index as the embeddings worker would, under the
-// workspace's model key. It returns the documents' IDs.
 func (w *world) fillVectors(sp access.Space, key string, n, perDoc, dims int, seed uint64) []int64 {
 	t := w.e.t
 	t.Helper()
@@ -64,7 +58,6 @@ func (w *world) fillVectors(sp access.Space, key string, n, perDoc, dims int, se
 	return docs
 }
 
-// spacesJSON is the spaces' IDs as nearest takes them.
 func spacesJSON(t testing.TB, spaces ...access.Space) string {
 	ids := make([]int64, len(spaces))
 	for i, sp := range spaces {
@@ -77,12 +70,6 @@ func spacesJSON(t testing.TB, spaces ...access.Space) string {
 	return string(raw)
 }
 
-// BenchmarkNearest ranks a team space's passages for a query, to the depth a hybrid search
-// fuses: reading every vector from SQLite (brute), from the vector cache once it has them
-// (cached), and from the cache after the space was invalidated, which reloads it (reload).
-// -cpu 1,10 shows what the cache gains on one core and on ten.
-//
-//	go test ./internal/search -run '^$' -bench Nearest -benchtime 10x -cpu 1,10
 func BenchmarkNearest(b *testing.B) {
 	for _, n := range []int{20_000, 100_000, 200_000} {
 		w := newWorld(b)

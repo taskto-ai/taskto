@@ -1,7 +1,3 @@
-// Members and invites, for admins. An invite's link, or a member's password reset link, is
-// shown once, when it is made: the server keeps only a hash of its token. The token rides in
-// the URL's fragment, which browsers don't send to servers or in Referer.
-
 import { type FormEvent, useState } from 'react'
 import {
   ApiError,
@@ -49,9 +45,6 @@ export function MembersTab({ workspace, me, operator = false }: { workspace: num
   const invites = useLoad(() => api<{ invites: Invite[] }>(`${base}/invites`).then((r) => r.invites), [base])
   const action = useAction()
   const [confirmDialog, confirm] = useConfirm()
-  // A reset link sets a password: with password login turned off the server refuses it, so the
-  // action is offered only once the server has said password login is on (a server without the
-  // route, 404, has only passwords): not while the answer is pending, nor after it failed.
   const methods = useLoad(
     () =>
       api<{ password: boolean }>('/api/login/methods').catch((e: unknown) => {
@@ -62,7 +55,6 @@ export function MembersTab({ workspace, me, operator = false }: { workspace: num
   )
   const passwordLogin = methods.data?.password === true
 
-  // The accounts waiting to be deleted, which only the server's operators see and can cancel.
   const deletions = useLoad(
     () =>
       operator
@@ -206,8 +198,6 @@ export function MembersTab({ workspace, me, operator = false }: { workspace: num
                               {t('settings.members.resetLink')}
                             </MenuItem>
                           )}
-                          {/* A waiting deletion has already switched the account off: only an operator's
-                              cancel (below) acts on it. */}
                           {!m.deletion_at &&
                             (m.disabled ? (
                               <MenuItem icon="check" onSelect={() => setDisabled(m, false)} disabled={action.busy}>
@@ -360,14 +350,10 @@ function InviteForm({ workspace, base, onInvited }: { workspace: number; base: s
     email: string
     link: string
     expires: string
-    // Whether the email was asked for, and went: null when it wasn't asked for.
     emailed: boolean | null
   } | null>(null)
   const [sendEmail, setSendEmail] = useState(true)
   const action = useAction()
-  // Offered only where the server can email links; any failure to know says no, and the invite is
-  // made and copied by hand, as it always was. A failure (an admin who doesn't run the server is
-  // refused the mail status) is null: unknown, so nothing is said about the server's email.
   const mail = useLoad(() => api<MailStatus>(mailPath(workspace)).catch(() => null), [workspace])
   const canEmail = mail.data?.sends_links === true
 

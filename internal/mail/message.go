@@ -15,28 +15,19 @@ import (
 	"time"
 )
 
-// maxRecipients bounds one message's recipients: this is a notification mailer, not a list.
 const maxRecipients = 50
 
-// envelope is a message ready to send: the sender and recipients' bare addresses, and the
-// bytes of the message.
 type envelope struct {
 	from string
 	to   []string
 	data []byte
 }
 
-// envelopeAddress is a's address as MAIL FROM and RCPT TO take it: the bare address, with a
-// local part that needs quotes (`"billing alerts"@example.com`) quoted. Address.Address is the
-// unquoted text, which a server would read as something else.
 func envelopeAddress(a *netmail.Address) string {
 	bare := (&netmail.Address{Address: a.Address}).String()
 	return strings.TrimSuffix(strings.TrimPrefix(bare, "<"), ">")
 }
 
-// build checks m and renders it as an RFC 5322 message from from. Every header value is
-// built from parsed addresses and encoded words, so nothing in a subject or a name can
-// start a new header.
 func build(from *netmail.Address, m Message, now time.Time) (*envelope, error) {
 	if len(m.To) == 0 {
 		return nil, errors.New("mail: a message needs a recipient")
@@ -64,8 +55,6 @@ func build(from *netmail.Address, m Message, now time.Time) (*envelope, error) {
 	var buf bytes.Buffer
 	header := func(name, value string) { buf.WriteString(name + ": " + value + "\r\n") }
 	header("From", from.String())
-	// A line is at most 998 characters, and 50 recipients with names make more: fold between
-	// addresses (a continuation line starts with a space).
 	header("To", strings.Join(to, ",\r\n "))
 	header("Subject", mime.QEncoding.Encode("utf-8", strings.TrimSpace(m.Subject)))
 	header("Date", now.Format(time.RFC1123Z))
@@ -75,7 +64,6 @@ func build(from *netmail.Address, m Message, now time.Time) (*envelope, error) {
 	}
 	header("Message-ID", id)
 	header("MIME-Version", "1.0")
-	// Not a person writing: auto-replies (out of office) shouldn't answer these.
 	header("Auto-Submitted", "auto-generated")
 	header("X-Auto-Response-Suppress", "All")
 
@@ -93,7 +81,6 @@ func build(from *netmail.Address, m Message, now time.Time) (*envelope, error) {
 	mw := multipart.NewWriter(&buf)
 	header("Content-Type", `multipart/alternative; boundary="`+mw.Boundary()+`"`)
 	buf.WriteString("\r\n")
-	// The plain text first: the last part is the one a client prefers.
 	for _, part := range []struct{ typ, body string }{{"text/plain", m.Text}, {"text/html", m.HTML}} {
 		w, err := mw.CreatePart(textproto.MIMEHeader{
 			"Content-Type":              {part.typ + `; charset="utf-8"`},
@@ -113,7 +100,6 @@ func build(from *netmail.Address, m Message, now time.Time) (*envelope, error) {
 	return env, nil
 }
 
-// writeQP writes text quoted-printable, with CRLF line ends.
 func writeQP(w interface{ Write([]byte) (int, error) }, text string) error {
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	text = strings.ReplaceAll(text, "\n", "\r\n")
@@ -124,10 +110,8 @@ func writeQP(w interface{ Write([]byte) (int, error) }, text string) error {
 	return qp.Close()
 }
 
-// messageID makes a unique Message-ID in the sender's domain.
 func messageID(from string) (string, error) {
 	domain := "localhost"
-	// The domain follows the last "@": a quoted local part may hold one.
 	if i := strings.LastIndex(from, "@"); i >= 0 && i < len(from)-1 {
 		domain = from[i+1:]
 	}

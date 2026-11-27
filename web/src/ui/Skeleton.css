@@ -19,7 +19,6 @@
     border-radius: var(--radius-md);
   }
 
-  /* Without motion it is a still shape. */
   @media (prefers-reduced-motion: reduce) {
     .ui-skeleton {
       animation: none;

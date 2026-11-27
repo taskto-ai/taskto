@@ -11,13 +11,11 @@ import (
 	"taskto.ai/taskto/internal/privcheck"
 )
 
-// fakeEscalator puts an executable called name in a new directory, exiting with code, and
-// returns the directory.
 func fakeEscalator(t *testing.T, name string, code int) string {
 	t.Helper()
 	dir := t.TempDir()
 	script := "#!/bin/sh\nexit " + strconv.Itoa(code) + "\n"
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil { //nolint:gosec // G306: an executable
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -31,7 +29,7 @@ func TestProblems(t *testing.T) {
 	cases := []struct {
 		name string
 		p    privcheck.Process
-		want []string // substrings, one per problem
+		want []string
 	}{
 		{"a plain user", privcheck.Process{UID: user(1000), EUID: user(1000), Path: empty}, nil},
 		{"root", privcheck.Process{UID: user(0), EUID: user(0), Path: empty}, []string{"runs as root"}},
@@ -71,12 +69,12 @@ func TestSetuidFiles(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(f, []byte("x"), 0o755); err != nil { //nolint:gosec // G306: an executable
+		if err := os.WriteFile(f, []byte("x"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, f := range []string{setuid, skipped} {
-		if err := os.Chmod(f, 0o4755); err != nil { //nolint:gosec // G302: the setuid file under test
+		if err := os.Chmod(f, 0o4755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -90,24 +88,22 @@ func TestSetuidFiles(t *testing.T) {
 	if len(got) != 1 || got[0] != setuid || len(unreadable) != 0 || more {
 		t.Errorf("setuid files = %q (unreadable %q, more %t), want only %s", got, unreadable, more, setuid)
 	}
-	// A limit says there were more.
 	if got, _, more, _ := privcheck.SetuidFiles(root, 1, filepath.Join(root, "homes")); len(got) != 1 || more {
 		t.Errorf("limit 1 with one file: %q, more %t", got, more)
 	}
-	if err := os.Chmod(setuid, 0o755); err != nil { //nolint:gosec // G302: an executable
+	if err := os.Chmod(setuid, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if got, _, _, err := privcheck.SetuidFiles(root, 0, filepath.Join(root, "homes")); err != nil || len(got) != 0 {
 		t.Errorf("after chmod: %q, %v", got, err)
 	}
 
-	// A directory it can't read is reported: it could hide one.
 	if os.Geteuid() != 0 {
 		locked := filepath.Join(root, "locked")
 		if err := os.Mkdir(locked, 0o000); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // G302: a directory
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
 		if _, unreadable, _, err := privcheck.SetuidFiles(root, 0); err != nil || len(unreadable) != 1 || unreadable[0] != locked {
 			t.Errorf("unreadable = %q, %v", unreadable, err)
 		}
@@ -127,7 +123,6 @@ func TestEnforce(t *testing.T) {
 	}
 }
 
-// sudo outside PATH, where an agent's command could still run it by its full path, counts.
 func TestProblemsLookOutsidePath(t *testing.T) {
 	privcheck.SetStandardDirsForTest(t, []string{fakeEscalator(t, "sudo", 0)})
 	got := privcheck.Process{UID: user(1000), EUID: user(1000), Path: t.TempDir()}.Problems(context.Background())
@@ -136,13 +131,11 @@ func TestProblemsLookOutsidePath(t *testing.T) {
 	}
 }
 
-// fakeSudoListing is a sudo that refuses `-n true` but lists the user's rules without a
-// password: a NOPASSWD rule for some commands only.
 func fakeSudoListing(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	script := "#!/bin/sh\n[ \"$2\" = -l ] && exit 0\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(script), 0o755); err != nil { //nolint:gosec // G306: an executable
+	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return dir

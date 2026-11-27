@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-//
-// The app's own use of the offline machinery: signing in claims the account's database, signing
-// out asks about records not sent and deletes what the device kept, and with no server the
-// downloaded apps open.
 
 import 'fake-indexeddb/auto'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -102,7 +98,6 @@ const queued = (): Omit<OutboxItem, 'seq' | 'version'> => ({
   updatedAt: '2026-11-02T10:00:00.000Z',
 })
 
-// Log out, from the account menu at the sidebar's foot.
 function logOut() {
   fireEvent.click(screen.getByRole('button', { name: /^Account: / }))
   fireEvent.click(screen.getByRole('menuitem', { name: 'Log out' }))
@@ -140,12 +135,10 @@ test('signing out with records not sent asks first: cancel keeps everything, dis
   logOut()
   const dialog = await screen.findByRole('alertdialog')
   expect(dialog.textContent).toMatch(/1 record on this device hasn’t reached the server/)
-  // Nothing was signed out yet.
   expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   expect(screen.queryByRole('alertdialog')).toBeNull()
   expect(await runtime.store.listItems()).toHaveLength(1)
-  // Discard and sign out: the record and the database go.
   logOut()
   await screen.findByRole('alertdialog')
   fireEvent.click(screen.getByRole('button', { name: 'Discard and sign out' }))
@@ -154,10 +147,6 @@ test('signing out with records not sent asks first: cancel keeps everything, dis
   expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7')
 })
 
-// The person deletes their account in the settings, with an unsent record, a draft and an offline
-// database on this device. `refusedFirst`: another request of the app, made while the server was
-// ending the session, is answered 401 before the answer to the deletion arrives, so the app is on
-// the sign-in screen, no longer listening for the session to end, when it does.
 async function deleteAccountHere(refusedFirst: boolean) {
   sessionStorage.clear()
   window.history.replaceState(null, '', '/w/1/settings/data')
@@ -199,7 +188,6 @@ test('deleting the account here clears what the device kept of it: the offline d
 test('the end of another account’s session, heard after this one signed in, leaves it signed in', async () => {
   fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
   await signedInAs()
-  // A deleted account's answer arriving late says its own account's session ended: not this one's.
   act(() => {
     window.dispatchEvent(sessionLostFor(99))
   })
@@ -207,7 +195,6 @@ test('the end of another account’s session, heard after this one signed in, le
   expect(screen.queryByRole('heading', { name: /sign in|log in/i })).toBeNull()
   expect(screen.getByRole('banner')).toBeTruthy()
   expect(runtimeState().runtime?.engine.status().paused).not.toBe('session')
-  // The same event for this account (7) takes it to the sign-in screen.
   act(() => {
     window.dispatchEvent(sessionLostFor(7))
   })
@@ -220,7 +207,6 @@ test('a request made for another account that is refused as signed out, answered
     'POST /api/me/deletion': { status: 401, body: { error: 'log in first', code: 'not_logged_in' } },
   })
   await signedInAs()
-  // The second tab's deletion of account 99, whose session the first tab's deletion ended, is refused.
   await expect(api('/api/me/deletion', { method: 'POST', body: {}, headers: forAccount(99) })).rejects.toBeInstanceOf(
     ApiError,
   )
@@ -228,7 +214,6 @@ test('a request made for another account that is refused as signed out, answered
   expect(screen.queryByRole('heading', { name: /sign in|log in/i })).toBeNull()
   expect(screen.getByRole('banner')).toBeTruthy()
   expect(runtimeState().runtime?.engine.status().paused).not.toBe('session')
-  // The same refusal for this account (7) is a real session loss.
   await expect(api('/api/me/deletion', { method: 'POST', body: {}, headers: forAccount(7) })).rejects.toBeInstanceOf(
     ApiError,
   )
@@ -257,13 +242,11 @@ test('an ended session leaves the queue where it is, and signing in again sends 
   runtime.engine.pause('manual')
   await runtime.store.enqueue(queued(), [])
   runtime.engine.resume()
-  // The server says the session is over: the app goes to the sign-in, sending is paused, the record waits.
   await screen.findByRole('heading', { name: /sign in|log in/i })
   expect(runtime.engine.status().paused).toBe('session')
   expect((await runtime.store.listItems())[0]).toMatchObject({ state: 'queued', attempts: 0 })
   const posts = calls.filter((c) => c.method === 'POST' && c.path === `${base}/actions`).length
   expect(posts).toBe(1)
-  // Signing in again (the same person) sends it, once.
   session = true
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'pat@example.com' } })
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-test-password' } })
@@ -273,7 +256,6 @@ test('an ended session leaves the queue where it is, and signing in again sends 
 })
 
 test('with no server, the apps downloaded here open, and a record made there is kept for later', async () => {
-  // Pat signed in here before, and downloaded an app.
   rememberUser({ id: 7, name: 'Pat' })
   const store = await OfflineStore.open(7)
   await store.putDownload(download as never)
@@ -298,7 +280,6 @@ test('with no server, the apps downloaded here open, and a record made there is 
   fireEvent.click(screen.getByRole('button', { name: 'Add' }))
   expect((await screen.findByText(/Saved on this device/)).textContent).toBeTruthy()
   await waitFor(async () => expect(await runtimeState().runtime?.store.listItems()).toHaveLength(1))
-  // It is listed with its state, and it is the only thing that was kept.
   expect((await screen.findAllByText('Saved on this device, waiting to sync')).length).toBeGreaterThan(0)
 })
 
@@ -311,8 +292,6 @@ test('with no server and nobody known here, the app says it can’t reach it', a
   expect((await screen.findByRole('alert')).textContent).toMatch(/Can't reach the server/)
 })
 
-// Another account's unsent records are on this browser: nothing of them is shown, nothing else is
-// either, until the person signing in chooses.
 async function sealedUnsentOf(user: number) {
   const store = await OfflineStore.open(user)
   await store.putDownload({ ...download, user } as never)
@@ -327,7 +306,6 @@ test('another account’s unsent records block the person signing in until they 
   render(<App />)
   const dialog = await screen.findByRole('alertdialog')
   expect(dialog.textContent).toMatch(/1 unsent record of another account/)
-  // Nothing of the app is drawn behind it, and nothing of the other account is readable.
   expect(screen.queryByRole('banner')).toBeNull()
   expect(document.body.textContent).not.toContain('Lunch')
   expect((await runtimeStateItems()).length).toBe(0)
@@ -344,7 +322,6 @@ test('…or sign out, to sign in as that account and send them', async () => {
   await screen.findByRole('alertdialog')
   fireEvent.click(screen.getByRole('button', { name: 'Sign out to sign in as that account' }))
   await screen.findByRole('heading', { name: /sign in|log in/i })
-  // Hers are kept for her; this account's own database is gone.
   const names = (await indexedDB.databases()).map((d) => d.name)
   expect(names).toContain('taskto-offline-1')
   expect(names).not.toContain('taskto-offline-7')
@@ -363,7 +340,6 @@ test('signing out from an invite page asks about unsent records and deletes the 
   const calls = fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: /^Log out, to use another account/ }))
-  // The same warning as anywhere else, and nothing was signed out yet.
   const dialog = await screen.findByRole('alertdialog')
   expect(dialog.textContent).toMatch(/1 record on this device hasn’t reached the server/)
   expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
@@ -388,8 +364,6 @@ test('signing out from an invite page with nothing unsent leaves nothing of the 
   expect(lastUser()).toBeNull()
 })
 
-// --- Third round of review.
-
 const LAST_KEY = 'taskto:offline-last'
 
 test('a tab that learns another account signed in shows only that, and nothing of the account’s records', async () => {
@@ -399,7 +373,6 @@ test('a tab that learns another account signed in shows only that, and nothing o
   if (!runtime) throw new Error('no runtime')
   runtime.engine.pause('manual')
   await runtime.store.enqueue(queued(), [])
-  // Another tab signs in as someone else.
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
   fireEvent(window, new StorageEvent('storage', { key: LAST_KEY }))
   const dialog = await screen.findByRole('alertdialog')
@@ -407,7 +380,6 @@ test('a tab that learns another account signed in shows only that, and nothing o
   expect(screen.queryByRole('banner')).toBeNull()
   expect(document.body.textContent).not.toContain('Lunch')
   expect(runtimeState().runtime).toBeNull()
-  // Its connection to the database is closed: nothing more can be read through it.
   await waitFor(() => expect(runtime.store.listItems()).rejects.toThrow())
   expect(screen.getByRole('button', { name: 'Reload this page' })).toBeTruthy()
 })
@@ -438,13 +410,11 @@ test('a send refused because the session is another account’s shows the same, 
   runtime.engine.resume()
   await screen.findByRole('alertdialog')
   expect(screen.queryByRole('banner')).toBeNull()
-  // The record is still on the device, for its owner.
   const reopened = await OfflineStore.open(7)
   expect((await reopened.listItems()).map((i) => i.state)).toEqual(['queued'])
   reopened.close()
 })
 
-// A database written by a newer version than this page.
 async function newerDatabase(user: number) {
   await new Promise<void>((resolve, reject) => {
     const open = indexedDB.open(`taskto-offline-${user}`, 99)
@@ -464,7 +434,6 @@ test('signing out when the outbox can’t be read warns that unsent records may 
   render(<App />)
   await screen.findByRole('banner')
   logOut()
-  // Not zero: nobody can say. The person is told, and nothing was signed out yet.
   const dialog = await screen.findByRole('alertdialog')
   expect(dialog.textContent).toMatch(/may not have reached the server/)
   expect(dialog.textContent).toMatch(/newer version/)
@@ -472,7 +441,6 @@ test('signing out when the outbox can’t be read warns that unsent records may 
   fireEvent.click(screen.getByRole('button', { name: 'Keep them and sign out' }))
   await screen.findByRole('heading', { name: /sign in|log in/i })
   expect(calls.some((c) => c.path === '/api/logout')).toBe(true)
-  // Kept, and listed, for the next version to read: nothing was deleted.
   expect((await indexedDB.databases()).map((d) => d.name)).toContain('taskto-offline-7')
   expect(JSON.parse(window.localStorage.getItem('taskto:offline-users') ?? '[]')).toContain(7)
   expect(lastUser()).toBeNull()
@@ -485,7 +453,6 @@ test('…and discards it only when the person says so, after being asked', async
   await screen.findByRole('banner')
   logOut()
   await screen.findByRole('alertdialog')
-  // Cancelling keeps everything.
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   expect(screen.queryByRole('alertdialog')).toBeNull()
   expect((await indexedDB.databases()).map((d) => d.name)).toContain('taskto-offline-7')
@@ -496,8 +463,6 @@ test('…and discards it only when the person says so, after being asked', async
   await screen.findByRole('heading', { name: /sign in|log in/i })
   expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7')
 })
-
-// --- Fourth round of review.
 
 test('signing out names the account it is for, and a stale tab’s sign-out leaves the session that is there now alone', async () => {
   const calls = fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
@@ -515,7 +480,6 @@ test('…and when the server says the session is another account’s, nobody is 
   })
   await signedInAs()
   logOut()
-  // This tab learns it is stale: nothing of the account is shown, and the sign-out went no further.
   await screen.findByRole('alertdialog')
   expect(calls.some((c) => c.path === '/api/logout')).toBe(true)
   expect(screen.queryByRole('heading', { name: /sign in|log in/i })).toBeNull()
@@ -527,7 +491,6 @@ test('a record that appears after the person was asked is never deleted by the s
   const runtime = runtimeState().runtime
   if (!runtime) throw new Error('no runtime')
   runtime.engine.pause('manual')
-  // Nothing unsent when the person is asked; another tab of the account commits a record right after.
   const stale = await OfflineStore.open(7)
   const unsynced = runtime.store.unsynced.bind(runtime.store)
   runtime.store.unsynced = async () => {
@@ -552,12 +515,10 @@ test('another account signing in while this tab checks for unsent records before
   runtime.engine.pause('manual')
   await runtime.store.enqueue(queued(), [])
   logOut()
-  // While the tab looks for unsent records, another tab signs in as someone else.
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
   fireEvent(window, new StorageEvent('storage', { key: LAST_KEY }))
   expect((await screen.findByRole('alertdialog')).textContent).toMatch(/The account changed/)
   await new Promise((r) => setTimeout(r, 50))
-  // The records found don't bring this account's session back.
   expect(sessionUser()).toBeNull()
 })
 
@@ -576,8 +537,6 @@ test('Log out, asked about unsent records, Cancel: nothing ended, and a language
   if (!runtime) throw new Error('no runtime')
   runtime.engine.pause('manual')
   await runtime.store.enqueue(queued(), [])
-  // Work started before Log out: a language pick, its save on its way; and anything else that
-  // checks its session (a build, say).
   fireEvent.click(screen.getByRole('button', { name: /^Account: / }))
   fireEvent.click(screen.getByRole('menuitemradio', { name: 'Português (Brasil)' }))
   await vi.waitFor(() => expect(saved).not.toBeNull())
@@ -586,7 +545,6 @@ test('Log out, asked about unsent records, Cancel: nothing ended, and a language
   fireEvent.click(screen.getByRole('menuitem', { name: 'Sair' }))
   await screen.findByRole('alertdialog')
   fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
-  // Nothing ended: the same session, so what was on its way goes on.
   expect(started()).toBe(true)
   expect(sessionUser()).toBe(7)
   await act(async () => saved?.())
@@ -600,7 +558,6 @@ test('Log out, asked about unsent records, Cancel: nothing ended, and a language
   await act(() => setPreferences({ user: null }))
 })
 
-// A page holding a draft: its question when the person would leave.
 function Draft({ ask }: { ask: BeforeLeave }) {
   useBeforeLeave(ask)
   return null
@@ -629,7 +586,6 @@ test('signing out over a draft and records not sent asks about the draft first, 
   runtime.engine.pause('manual')
   await runtime.store.enqueue(queued(), [])
   logOut()
-  // The draft's question, alone: the device's comes only once the person means to go.
   expect(ask).toHaveBeenCalledTimes(1)
   await act(async () => {})
   expect(screen.queryByRole('alertdialog')).toBeNull()
@@ -665,15 +621,12 @@ test('one sign-out asks about a draft and then the records, each once; Cancel at
   const started = sameSession()
   const records = () => screen.queryAllByRole('alertdialog').length
 
-  // Cancel at the draft's question (it never says go): nothing else is asked, nothing has ended.
   logOut()
   await act(async () => {})
   expect(ask).toHaveBeenCalledTimes(1)
   expect(records()).toBe(0)
   expect(started()).toBe(true)
 
-  // Again, and this time the draft may go: the records' question comes, once, and the draft's
-  // question isn't asked a second time for it.
   logOut()
   expect(ask).toHaveBeenCalledTimes(2)
   act(() => leave?.())
@@ -682,7 +635,6 @@ test('one sign-out asks about a draft and then the records, each once; Cancel at
   expect(records()).toBe(1)
   expect(ask).toHaveBeenCalledTimes(2)
 
-  // Cancel at the records' question: the same session, the draft's page still asks, nothing sent.
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   expect(records()).toBe(0)
   expect(started()).toBe(true)
@@ -708,7 +660,6 @@ test('"Discard and sign out" with a logout the server refuses discards nothing: 
   fireEvent.click(screen.getByRole('button', { name: 'Discard and sign out' }))
   fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
   await screen.findByRole('heading', { name: "Couldn't sign out" })
-  // Nothing of this device was touched before the server confirmed: the record waits as it was.
   expect(await runtime.store.listItems()).toHaveLength(1)
   expect(lastUser()).toEqual({ id: 7, name: 'Pat' })
 })
@@ -726,7 +677,6 @@ test('while signing out waits for the server, the queue starts no send, even whe
   await signedInAs()
   const runtime = runtimeState().runtime
   if (!runtime) throw new Error('no runtime')
-  // The device has no connection: the record made waits, unsent.
   Object.defineProperty(navigator, 'onLine', { configurable: true, value: false })
   await runtime.store.enqueue(queued(), [])
   const sends = () => calls.filter((c) => c.method === 'POST' && c.path === `${base}/actions`).length
@@ -735,8 +685,6 @@ test('while signing out waits for the server, the queue starts no send, even whe
   fireEvent.click(screen.getByRole('button', { name: 'Discard and sign out' }))
   fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
   await waitFor(() => expect(confirm).not.toBeNull())
-  // The connection comes back while the server hasn't answered the sign-out yet: the record the
-  // person chose to discard is not sent.
   Object.defineProperty(navigator, 'onLine', { configurable: true, value: true })
   act(() => {
     window.dispatchEvent(new Event('online'))
@@ -744,7 +692,6 @@ test('while signing out waits for the server, the queue starts no send, even whe
   await new Promise((r) => setTimeout(r, 50))
   expect(sends()).toBe(0)
   await act(async () => confirm?.())
-  // The sign-out finishes before the test does.
   await screen.findByRole('heading', { name: /sign in|log in/i })
   Reflect.deleteProperty(navigator, 'onLine')
 })
@@ -761,7 +708,6 @@ test('a sign-out cut short by the tab closing leaves nothing an offline start wo
   await signedInAs()
   logOut()
   await waitFor(() => expect(confirm).not.toBeNull())
-  // The tab closes while the sign-out is on its way; the next start has no server.
   cleanup()
   vi.stubGlobal(
     'fetch',

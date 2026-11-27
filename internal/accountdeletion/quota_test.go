@@ -9,9 +9,6 @@ import (
 	"taskto.ai/taskto/internal/schedule"
 )
 
-// A person with as many scheduled jobs as they may have can still delete their account, and a
-// purge whose tries ran out is scheduled again: the purge doesn't depend on room among the
-// person's own jobs (which, the account being disabled, are held and never drain).
 func TestAPersonAtTheJobBoundCanStillBePurged(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -28,7 +25,6 @@ func TestAPersonAtTheJobBoundCanStillBePurged(t *testing.T) {
 		SELECT ?, ?, ?, 'r' || i, '2026-02-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z' FROM n`,
 		schedule.MaxPerUser, string(theirs), w.leaver, w.ws)
 
-	// The deletion request schedules the purge in its own transaction (auth.Service).
 	err := w.svc.write(ctx, func(tx *sql.Tx) error {
 		return w.svc.SchedulePurge(ctx, tx, w.leaver, w.ws, time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC))
 	})
@@ -36,7 +32,6 @@ func TestAPersonAtTheJobBoundCanStillBePurged(t *testing.T) {
 		t.Fatalf("scheduling the purge of a person at the bound: %v", err)
 	}
 
-	// The purge's tries ran out: Maintain's Reconcile makes it pending again.
 	w.deleteAccount()
 	exec(t, w.db, `UPDATE scheduled_jobs SET state = 'failed' WHERE kind = ?`, string(Kind))
 	if err := w.svc.Reconcile(ctx); err != nil {

@@ -1,10 +1,3 @@
-// Starting an app from a template, and copying one. A template (or a copy) is only a definition: the
-// server makes a new, independent app from it in the space the person picks (their private space
-// unless they choose a shared one), as a draft, with no records, photos, history or roles of anyone
-// else's. The person then tries the draft and publishes it in the ordinary way, with the panel that
-// says who will be able to use it. A template whose effects make cards needs a board the person may
-// write, chosen here; the server checks it again, and so it does at publishing.
-
 import { type FormEvent, useId, useState } from 'react'
 import { type App, type AppRole, type AppTemplate, api, type Board, errorText, type Space, ws } from '../api'
 import { has, type Key, useT } from '../i18n'
@@ -31,38 +24,29 @@ import { appPath, installedPath } from './route'
 import { type Where, WhereChoice, writableSpaces } from './WhereChoice'
 import './Apps.css'
 
-// The template's own name and description in the user's language, when we have them; the server's
-// English text otherwise (a template added later still shows).
 function templateText(tpl: AppTemplate, part: 'name' | 'description', t: (k: Key) => string): string {
   const key = `apps.templates.items.${tpl.id.replaceAll('-', '_')}.${part}`
   return has(key) ? t(key as Key) : tpl[part]
 }
 
-// A board somebody may write, with where it is: the choices of an effect's target.
 export type BoardChoice = { space: Space; board: Board }
 
-// The boards of every space the user may write (the server answers only for those it lets them see,
-// and checks the one chosen again).
 export function useWritableBoards(workspace: number, spaces: Space[] | undefined) {
   const writable = (spaces ?? []).filter((s) => s.access === 'write' && !s.archived_at)
   const key = writable.map((s) => s.id).join(',')
-  return useLoad<BoardChoice[]>(
-    async () => {
-      const all = await Promise.all(
-        writable.map(async (space) => {
-          const r = await api<{ boards: Board[] }>(`${ws(workspace)}/spaces/${space.id}/boards`).catch(() => ({
-            boards: [] as Board[],
-          }))
-          return r.boards.filter((b) => !b.archived_at).map((board) => ({ space, board }))
-        }),
-      )
-      return all.flat()
-    },
-    [workspace, key], // key stands for the writable spaces
-  )
+  return useLoad<BoardChoice[]>(async () => {
+    const all = await Promise.all(
+      writable.map(async (space) => {
+        const r = await api<{ boards: Board[] }>(`${ws(workspace)}/spaces/${space.id}/boards`).catch(() => ({
+          boards: [] as Board[],
+        }))
+        return r.boards.filter((b) => !b.archived_at).map((board) => ({ space, board }))
+      }),
+    )
+    return all.flat()
+  }, [workspace, key])
 }
 
-// The board for the cards an app makes, as a field.
 function BoardField({
   choices,
   value,
@@ -98,7 +82,6 @@ function parseChoice(v: string): { space_id: number; board_id: number } | null {
   return s && b ? { space_id: s, board_id: b } : null
 }
 
-// What a template is made for and what it needs, in a few words each.
 function TemplateFacts({ template }: { template: AppTemplate }) {
   const t = useT()
   return (
@@ -179,7 +162,6 @@ export function TemplatesPage({ workspace }: { workspace: number }) {
   )
 }
 
-// The way back to the list of apps, above a page's title.
 export function BackToApps({ workspace }: { workspace: number }) {
   const t = useT()
   return (
@@ -189,8 +171,6 @@ export function BackToApps({ workspace }: { workspace: number }) {
   )
 }
 
-// Pick where it goes (private by default, a shared space only when asked for), and a board when the
-// template needs one; installing makes the draft and opens it.
 function InstallDialog({
   workspace,
   template,
@@ -210,7 +190,6 @@ function InstallDialog({
   const [shared, setShared] = useState('')
   const [board, setBoard] = useState('')
   const [busy, setBusy] = useState(false)
-  // An app made after the dialog went, or its session ended, isn't opened.
   const mounted = useMounted()
   const [error, setError] = useState<string | null>(null)
   const boards = useWritableBoards(workspace, template.needs_board ? spaces : undefined)
@@ -233,7 +212,6 @@ function InstallDialog({
     } catch (err) {
       if (s.ok()) setError(appError(err))
     }
-    // The button is this dialog's: ready again while it is here, whatever became of the session.
     if (mounted.current) setBusy(false)
   }
 
@@ -241,7 +219,6 @@ function InstallDialog({
     <Dialog
       open
       onClose={onClose}
-      // While it saves, Escape and the close button do nothing (the library's guard).
       dismissible={!busy}
       title={t('apps.templates.useNamed', { name: templateText(template, 'name', t) })}
       description={t('apps.templates.draftNote')}
@@ -281,7 +258,6 @@ function InstallDialog({
   )
 }
 
-// What an install in a shared space gives people: the installer's roles, and the other members'.
 function RolesNote({ roles }: { roles: NonNullable<AppTemplate['roles']> }) {
   const t = useT()
   const names = (list: AppRole[]) => list.map((r) => t(`apps.roles.${r}`)).join(', ')
@@ -294,8 +270,6 @@ function RolesNote({ roles }: { roles: NonNullable<AppTemplate['roles']> }) {
   )
 }
 
-// Choose the board for effects that have none (a template's, a copy's whose boards its copier can't
-// write): until then the draft can't be published.
 export function BoardChooser({
   workspace,
   base,
@@ -346,8 +320,6 @@ export function BoardChooser({
   )
 }
 
-// The draft a template or a copy made: tried on sample data, given its board if it needs one, and
-// published with the panel that says who will use it.
 export function InstalledApp({ workspace, space, app }: { workspace: number; space: number; app: number }) {
   const t = useT()
   const base = `${ws(workspace)}/spaces/${space}/apps/${app}`
@@ -404,8 +376,6 @@ export function InstalledApp({ workspace, space, app }: { workspace: number; spa
   )
 }
 
-// Duplicate as template: the app's definition, and nothing of its data, into a new app of a space
-// the person may write (their private one by default).
 export function DuplicateDialog({
   workspace,
   space,
@@ -416,7 +386,6 @@ export function DuplicateDialog({
   workspace: number
   space: Space
   app: App
-  // The spaces the copy may go to: every one the user may write.
   spaces: Space[]
   onClose: () => void
 }) {
@@ -426,7 +395,6 @@ export function DuplicateDialog({
   const [name, setName] = useState(t('apps.duplicate.defaultName', { name: app.name }))
   const [to, setTo] = useState(String((mine ?? spaces[0])?.id ?? space.id))
   const [busy, setBusy] = useState(false)
-  // An app made after the dialog went, or its session ended, isn't opened.
   const mounted = useMounted()
   const [error, setError] = useState<string | null>(null)
 
@@ -452,7 +420,6 @@ export function DuplicateDialog({
     <Dialog
       open
       onClose={onClose}
-      // While it saves, Escape and the close button do nothing (the library's guard).
       dismissible={!busy}
       title={t('apps.duplicate.title', { name: app.name })}
       description={t('apps.duplicate.note')}

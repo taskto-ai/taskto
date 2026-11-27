@@ -1,24 +1,3 @@
-// Package egress decides which addresses the server may connect to when it calls a model
-// provider's endpoint, and enforces it on every connection.
-//
-// Provider accounts name any base URL, and the server then calls it with the account's key:
-// for an account test, for embeddings, and (through the agent runtime) for conversations. On
-// a company network that lets a member make the server reach internal addresses, such as a
-// cloud's metadata service or an admin interface. A Policy limits it:
-//
-//   - "any" (the default): no limit, for a single-user install or a trusted team;
-//   - "public": public addresses only, no loopback, private, link-local, unique-local, CGNAT,
-//     metadata or other special-purpose ranges, IPv4 and IPv6;
-//   - a comma-separated allowlist of host names, IP addresses and CIDR prefixes, which may
-//     include "public" as well: "public, ollama.internal, 10.1.2.0/24".
-//
-// Addresses are checked after DNS resolution, on every connection: the dialer resolves the
-// name itself, checks each address and connects only to one it checked, so a name that
-// resolves to a public address first and a private one later (DNS rebinding) gets nowhere.
-// A refusal happens before connecting, so a key is never sent to a refused address.
-//
-// The agent runtime (agent/src/egress.ts) enforces the same rules, from the policy the
-// server writes into its providers file.
 package egress
 
 import (
@@ -36,19 +15,15 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// Policy says which addresses provider calls may connect to. The zero Policy allows any.
 type Policy struct {
 	restricted bool
 	public     bool
-	hosts      []string // lower case, without a trailing dot
+	hosts      []string
 	prefixes   []netip.Prefix
 }
 
-// Any is the policy that allows every address.
 var Any = Policy{}
 
-// Parse reads a policy: "any" (or ""), or a comma-separated list of "public", host names, IP
-// addresses and CIDR prefixes.
 func Parse(text string) (Policy, error) {
 	text = strings.TrimSpace(text)
 	if text == "" || strings.EqualFold(text, "any") {
@@ -69,9 +44,6 @@ func Parse(text string) (Policy, error) {
 			if err != nil {
 				return Policy{}, fmt.Errorf("%q isn't a CIDR prefix", item)
 			}
-			// An IPv4-mapped prefix of at least /96 is that IPv4 prefix. A shorter one reaches
-			// past ::ffff:0:0/96 into IPv6 space: it stays an IPv6 prefix, which matches no IPv4
-			// address (they are compared unmapped), rather than widening to all of IPv4.
 			prefix = prefix.Masked()
 			if prefix.Addr().Is4In6() && prefix.Bits() >= 96 {
 				prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
@@ -99,7 +71,6 @@ func Parse(text string) (Policy, error) {
 	return p, nil
 }
 
-// MustParse is Parse for tests and constants; it panics on an error.
 func MustParse(text string) Policy {
 	p, err := Parse(text)
 	if err != nil {
@@ -108,10 +79,8 @@ func MustParse(text string) Policy {
 	return p
 }
 
-// IsAny reports whether p allows every address.
 func (p Policy) IsAny() bool { return !p.restricted }
 
-// String is p in the form Parse reads.
 func (p Policy) String() string {
 	if !p.restricted {
 		return "any"
@@ -119,8 +88,6 @@ func (p Policy) String() string {
 	return strings.Join(p.Entries(), ",")
 }
 
-// Entries is p as a list of entries ("public", hosts, prefixes), or nil for any: what the
-// agent runtime's providers file carries.
 func (p Policy) Entries() []string {
 	if !p.restricted {
 		return nil
@@ -140,8 +107,6 @@ func (p Policy) Entries() []string {
 	return out
 }
 
-// AllowsHost reports whether host is on p's list by name: every address it resolves to is
-// then allowed, so list only names whose DNS you trust.
 func (p Policy) AllowsHost(host string) bool {
 	if !p.restricted {
 		return true
@@ -155,8 +120,6 @@ func (p Policy) AllowsHost(host string) bool {
 	return false
 }
 
-// CheckAddr returns nil if p allows connecting to addr, or a *RefusedError saying why not.
-// host is the name it was resolved from, for the error.
 func (p Policy) CheckAddr(host string, addr netip.Addr) error {
 	if !p.restricted {
 		return nil
@@ -178,14 +141,11 @@ func (p Policy) CheckAddr(host string, addr netip.Addr) error {
 	return &RefusedError{Host: host, Addr: addr, Reason: reason}
 }
 
-// ErrRefused is wrapped by every refusal.
 var ErrRefused = errors.New("the server's egress policy doesn't allow this endpoint")
 
-// RefusedError is a connection p refused. Its message names the host and the address, which
-// are the account's own, never a key.
 type RefusedError struct {
 	Host   string
-	Addr   netip.Addr // invalid when the host is refused by name, before any resolution
+	Addr   netip.Addr
 	Reason string
 }
 
@@ -201,8 +161,6 @@ func (e *RefusedError) Error() string {
 
 func (e *RefusedError) Unwrap() error { return ErrRefused }
 
-// APIError is the refusal as the API answers it: 400, egress_refused, with the host. field,
-// if not empty, names the setting in the English message ("base_url: the server's…").
 func (e *RefusedError) APIError(field string) *apierr.Error {
 	msg := e.Error()
 	if field != "" {
@@ -211,12 +169,8 @@ func (e *RefusedError) APIError(field string) *apierr.Error {
 	return apierr.New(http.StatusBadRequest, apierr.CodeEgressRefused, msg, apierr.Params{"host": e.Host})
 }
 
-// Resolver looks up a host's addresses. net.DefaultResolver.LookupNetIP is one.
 type Resolver func(ctx context.Context, network, host string) ([]netip.Addr, error)
 
-// Check resolves host and returns a *RefusedError if p allows none of its addresses:
-// what saving an account checks, so a forbidden endpoint is refused there and then. A host
-// that can't be resolved now isn't refused here; every connection is checked anyway.
 func (p Policy) Check(ctx context.Context, host string, resolve Resolver) error {
 	if !p.restricted || p.AllowsHost(host) {
 		return nil
@@ -230,7 +184,7 @@ func (p Policy) Check(ctx context.Context, host string, resolve Resolver) error 
 	}
 	addrs, err := resolve(ctx, "ip", host)
 	if err != nil {
-		return nil //nolint:nilerr // not refused: the connection's own check will be the judge
+		addrs = nil
 	}
 	var refused error
 	for _, addr := range addrs {
@@ -243,19 +197,13 @@ func (p Policy) Check(ctx context.Context, host string, resolve Resolver) error 
 	return refused
 }
 
-// Dialer connects only to addresses its policy allows.
 type Dialer struct {
-	Policy Policy
-	// Resolve defaults to net.DefaultResolver.LookupNetIP; tests give their own.
+	Policy  Policy
 	Resolve Resolver
-	// Timeout bounds each connection attempt; zero means 30 seconds.
 	Timeout time.Duration
-	// dial connects to a checked address; tests replace it.
-	dial func(ctx context.Context, network, address string) (net.Conn, error)
+	dial    func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
-// DialContext resolves address's host, and connects to the first of its addresses the policy
-// allows; it refuses with a *RefusedError if there is none.
 func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	if !d.Policy.restricted {
 		return d.connect(ctx, network, address, false)
@@ -265,7 +213,6 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 		return nil, err
 	}
 	if d.Policy.AllowsHost(host) {
-		// Listed by name: wherever it resolves to.
 		return d.connect(ctx, network, address, false)
 	}
 	var addrs []netip.Addr
@@ -311,7 +258,6 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 	return nil, fmt.Errorf("egress: no addresses for %s", host)
 }
 
-// connect dials address; checked adds the socket-level check of control.
 func (d *Dialer) connect(ctx context.Context, network, address string, checked bool) (net.Conn, error) {
 	if d.dial != nil {
 		return d.dial(ctx, network, address)
@@ -323,8 +269,6 @@ func (d *Dialer) connect(ctx context.Context, network, address string, checked b
 	return nd.DialContext(ctx, network, address)
 }
 
-// control checks the address the socket is about to connect to, once more: the last word,
-// whatever resolved it.
 func (d *Dialer) control(_, address string, _ syscall.RawConn) error {
 	ap, err := netip.ParseAddrPort(address)
 	if err != nil {
@@ -333,10 +277,6 @@ func (d *Dialer) control(_, address string, _ syscall.RawConn) error {
 	return d.Policy.CheckAddr(ap.Addr().String(), ap.Addr())
 }
 
-// Client returns an HTTP client for calls to provider endpoints under p. It doesn't follow
-// redirects, which would send the key on to wherever they point; a redirect is the answer.
-// It uses no proxy from the environment when p is restricted, since a proxy would make the
-// connection, not this client, and the check would be of the proxy's address.
 func (p Policy) Client(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout:       timeout,
@@ -345,7 +285,6 @@ func (p Policy) Client(timeout time.Duration) *http.Client {
 	}
 }
 
-// Transport is the transport of Client; resolve is nil for the system's resolver.
 func (p Policy) Transport(resolve Resolver) *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	if p.restricted {
@@ -356,7 +295,6 @@ func (p Policy) Transport(resolve Resolver) *http.Transport {
 	return t
 }
 
-// Refusal returns the refusal in err's chain, or nil.
 func Refusal(err error) *RefusedError {
 	var r *RefusedError
 	if errors.As(err, &r) {

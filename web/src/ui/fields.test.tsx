@@ -28,7 +28,6 @@ describe('Field', () => {
       'Where invites are sent.',
       'Enter a full email address.',
     ])
-    // The required mark is for the eye; the control's `required` is what a screen reader says.
     expect(screen.getByText('*').getAttribute('aria-hidden')).toBe('true')
   })
 
@@ -38,12 +37,10 @@ describe('Field', () => {
         <Input type="email" />
       </Field>,
     )
-    // Found by its label's exact text, as a person's words or a test would name it.
     const input = screen.getByLabelText('Email')
     expect((input as HTMLInputElement).required).toBe(true)
     const label = document.querySelector('label') as HTMLLabelElement
     expect(label.textContent).toBe('Email')
-    // The mark is drawn, hidden from a screen reader, outside the label.
     const mark = screen.getByText('*')
     expect(mark.getAttribute('aria-hidden')).toBe('true')
     expect(label.contains(mark)).toBe(false)
@@ -180,7 +177,6 @@ describe('SegmentedControl', () => {
     const [write, preview] = screen.getAllByRole('radio') as HTMLInputElement[]
     expect(write.checked).toBe(true)
     expect(preview.checked).toBe(false)
-    // One name: the browser moves the choice with the arrow keys and makes the group one Tab stop.
     expect(write.name).toBe(preview.name)
     fireEvent.click(screen.getByText('Preview'))
     expect(preview.checked).toBe(true)
@@ -216,7 +212,6 @@ describe('Checkbox, controlled', () => {
     expect(seen[0]?.tagName).toBe('INPUT')
     unmount()
     expect(cleanup).toHaveBeenCalledTimes(1)
-    // A callback that returns a cleanup is not also called with null.
     expect(seen).not.toContain(null)
   })
 
@@ -272,11 +267,9 @@ describe('Field error', () => {
         <Input />
       </Field>,
     )
-    // The same region, now with the error, which the control is still described by.
     expect(input.closest('.ui-field')?.querySelector('[aria-live="polite"]')).toBe(live)
     expect(live?.textContent).toBe('Enter a full email address.')
     expect(input.getAttribute('aria-describedby')).toContain(live?.firstElementChild?.id)
-    // Not an alert as well: it is said once.
     expect(document.querySelector('[role="alert"]')).toBeNull()
   })
 })

@@ -1,9 +1,3 @@
-// Your own two-factor login (docs/api.md#two-factor-login): turn it on with the password, a QR
-// code (or the secret as text) for an authenticator app, and a code from it; then ten recovery
-// codes, shown once; turn it off or make new recovery codes with the password and a code. The
-// secret and the recovery codes live in this panel's state while they are on screen, and nowhere
-// else (no storage, no log).
-
 import { type FormEvent, useEffect, useState } from 'react'
 import { api } from '../api'
 import { useT } from '../i18n'
@@ -68,7 +62,6 @@ export function TwoFactorPanel() {
           onCodes={(c) => {
             setSetup(null)
             setCodes(c)
-            // It is on now: the badge says so while the codes are on screen.
             status.reload()
           }}
         />
@@ -141,8 +134,6 @@ function Confirm({
       })
     })
     if (ok && got) onCodes(got.recovery_codes)
-    // A confirmation whose answer was lost may have turned it on: the status says, and a panel that
-    // finds it on shows that instead of this form.
     else onFailed()
   }
   return (
@@ -179,8 +170,6 @@ function Confirm({
   )
 }
 
-// The QR code, drawn in the browser. Where it can't be (the writer fails to load), the secret as
-// text, which is always shown beside it, is the way.
 function Qr({ text }: { text: string }) {
   const t = useT()
   const [src, setSrc] = useState<string | null>(null)

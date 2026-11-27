@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
 
-// The old stylesheets (those src/styles.css lists) is in no cascade layer, so a rule of it that matched
-// an element a component draws would beat the component's own style. This draws the components
-// and checks two things: every element a component draws has a ui- class (what the old rules
-// leave out), and no rule of that stylesheet that can match anywhere reaches any of them, except
-// the ones css-check's EVERYWHERE allows on purpose. css-check guards how the rules are written;
-// this guards what they match.
-
 import { join } from 'node:path'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import type { ComponentType } from 'react'
@@ -41,8 +34,6 @@ import { Toolbar, ToolbarSpacer } from './Toolbar'
 afterEach(() => {
   act(() => resetToasts())
   cleanup()
-  // One test writes the page's elements itself, which cleanup() doesn't know of: the next test,
-  // in whatever order they run, starts from an empty page.
   document.body.innerHTML = ''
 })
 
@@ -52,18 +43,13 @@ interface Rule {
   line: number
 }
 
-// Every old stylesheet the app loads (src/styles.css lists them, ui/base.css first), not the list,
-// which holds no rule.
 const sheets = oldStylesheets(join(__dirname, '../..'))
 const css = sheets.map((s) => s.css).join('\n')
-// Every rule that can match anywhere and is not allowed to reach everything.
 const guarded: Rule[] = allRules(css).filter(
   (r: Rule) =>
     reachesAnywhere(r.selector) && !(EVERYWHERE.has(r.selector) && allowedEverywhere({ ...r, selector: r.selector })),
 )
 
-// What a selector can match, as Element.matches() can test it: a pseudo-element is tested on the
-// element it belongs to, and a state (focus, hover …) as if the element were in it.
 const STATES =
   /:(focus-visible|focus-within|focus|hover|active|checked|disabled|enabled|invalid|placeholder-shown|popover-open|open|modal)\b/g
 function matchable(selector: string): string {
@@ -81,8 +67,6 @@ function reaches(el: Element, rule: Rule): boolean {
 
 const hasUi = (el: Element) => /(^|\s)ui-/.test(el.getAttribute('class') ?? '')
 
-// Every component in every state that draws something, with nothing but words of the screen's
-// inside, so whatever element is in the page is the component's own.
 function Everything() {
   return (
     <>
@@ -181,7 +165,6 @@ test("it reads the old stylesheets themselves: the base and every screen's file"
 test('every element a component draws has a ui- class', () => {
   const container = drawEverything()
   const drawn = [...document.body.querySelectorAll('*')].filter(
-    // Not the test's own box, and not the inside of an icon (its <svg> has a ui- class).
     (el) => el !== container && !el.closest('svg:not(:scope)') && el.tagName.toLowerCase() !== 'path',
   )
   expect(drawn.length).toBeGreaterThan(100)
@@ -200,7 +183,6 @@ test('the old stylesheet has rules to check, and they still reach the screens’
       el.outerHTML,
     ).toBe(true)
   }
-  // The focus ring and the placeholder, through their states and pseudo-elements.
   const button = document.querySelector('button') as Element
   expect(guarded.some((r) => r.selector.startsWith(':focus-visible') && reaches(button, r))).toBe(true)
   const input = document.querySelector('input') as Element

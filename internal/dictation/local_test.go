@@ -15,7 +15,6 @@ import (
 	"time"
 )
 
-// fakeFiles serves files by path, and counts the requests for each.
 type fakeFiles struct {
 	*httptest.Server
 	mu    sync.Mutex
@@ -62,8 +61,6 @@ func readFixture(t *testing.T, name string) []byte {
 	return b
 }
 
-// sherpaSpec is a model like Parakeet's, served by f: the runtime in an archive, and the
-// model's files.
 func sherpaSpec(t *testing.T, f *fakeFiles) spec {
 	f.set("/runtime.tar.bz2", readFixture(t, "runtime.tar.bz2"))
 	for _, name := range []string{"tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx"} {
@@ -107,7 +104,6 @@ func TestLocalDownloadsVerifiesAndRuns(t *testing.T) {
 	if st := e.State(); st.State != LocalNotDownloaded {
 		t.Fatalf("state = %+v", st)
 	}
-	// Not ready: a transcription starts the download and says so.
 	_, err := e.Transcribe(ctx, tone(SampleRate, nil), Options{})
 	if u, ok := unavailable(err); !ok || !strings.Contains(u.Reason, "downloading") {
 		t.Fatalf("err = %v", err)
@@ -120,7 +116,6 @@ func TestLocalDownloadsVerifiesAndRuns(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Only the named members are extracted.
 	if _, err := os.Stat(filepath.Join(root, "include")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("include extracted: %v", err)
 	}
@@ -131,7 +126,6 @@ func TestLocalDownloadsVerifiesAndRuns(t *testing.T) {
 		t.Fatalf("a model file's mode is %v", fi.Mode())
 	}
 
-	// 70 s of audio is three pieces of at most 30 s, in one run.
 	text, err := e.Transcribe(ctx, tone(SampleRate*70, nil), Options{Terms: []string{"x"}})
 	if err != nil {
 		t.Fatal(err)
@@ -139,12 +133,10 @@ func TestLocalDownloadsVerifiesAndRuns(t *testing.T) {
 	if text != "piece 1 piece 2 piece 3" {
 		t.Fatalf("text = %q", text)
 	}
-	// Each job's folder is gone afterwards.
 	if jobs, _ := filepath.Glob(filepath.Join(dir, "job-*")); len(jobs) != 0 {
 		t.Fatalf("left behind: %v", jobs)
 	}
 
-	// Another engine on the same folder (a restart) is ready without downloading again.
 	hits := f.hits["/encoder.int8.onnx"]
 	if e2 := newLocal(s, dir, testPlatform, f.Client()); e2.State().State != LocalReady || f.hits["/encoder.int8.onnx"] != hits {
 		t.Fatalf("after a restart: %+v", e2.State())
@@ -160,7 +152,7 @@ func TestLocalRefusesAFileWithTheWrongHash(t *testing.T) {
 	}
 	f := newFakeFiles(t, map[string][]byte{})
 	s := sherpaSpec(t, f)
-	f.set("/encoder.int8.onnx", []byte("fake encoder.int8.onnx, but changed")) // same name, other bytes
+	f.set("/encoder.int8.onnx", []byte("fake encoder.int8.onnx, but changed"))
 	dir := t.TempDir()
 	e := newLocal(s, dir, testPlatform, f.Client())
 	e.Warm()
@@ -171,8 +163,6 @@ func TestLocalRefusesAFileWithTheWrongHash(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, s.id)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a failed download left the model's folder: %v", err)
 	}
-	// The right file comes back: the next Warm tries again, and keeps what the failed one
-	// had already verified.
 	tokens := f.hits["/tokens.txt"]
 	f.set("/encoder.int8.onnx", []byte("fake encoder.int8.onnx"))
 	e.Warm()
@@ -194,7 +184,6 @@ func TestLocalReusesFilesAlreadyThere(t *testing.T) {
 	f := newFakeFiles(t, map[string][]byte{})
 	s := sherpaSpec(t, f)
 	dir := t.TempDir()
-	// The operator copied the big model file in by hand; the server didn't download it.
 	root := filepath.Join(dir, s.id)
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
@@ -232,7 +221,6 @@ func TestLocalWithoutABuildForThisPlatform(t *testing.T) {
 	}
 }
 
-// cactusScript is a fake cactus: it answers its arguments, so the test sees them.
 const cactusScript = `#!/bin/sh
 args="$*"
 kw=""
@@ -257,7 +245,6 @@ func TestLocalCactus(t *testing.T) {
 	e.Warm()
 	waitState(t, e, LocalReady)
 
-	// A known language goes through, with the glossary as keywords.
 	text, err := e.Transcribe(ctx, tone(SampleRate, nil), Options{Language: "de", Terms: []string{"Wurst", "taskto"}})
 	if err != nil {
 		t.Fatal(err)
@@ -265,7 +252,6 @@ func TestLocalCactus(t *testing.T) {
 	if want := "--model whistle.cact --language de --keywords keywords.txt --audio piece-000.wav kw=Wurst,taskto,"; text != want {
 		t.Fatalf("text = %q, want %q", text, want)
 	}
-	// One Whistle doesn't know is left to detect; 40 s is two runs.
 	text, err = e.Transcribe(ctx, tone(SampleRate*40, nil), Options{Language: "pt"})
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +267,6 @@ func TestRunStopsTheWholeGroupOnTimeout(t *testing.T) {
 	}
 	dir := t.TempDir()
 	script := filepath.Join(dir, "slow")
-	// A child that would outlive its parent, if the group weren't killed.
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 30 &\nsleep 30\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}

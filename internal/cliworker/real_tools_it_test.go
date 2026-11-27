@@ -19,17 +19,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// TestRealCLIsCallTaskToTools runs the installed Claude Code and Codex through the worker with
-// taskto's tools (docs/cli-tools.md): a scripted model (a stand-in for Anthropic's Messages API
-// and OpenAI's Responses API, on this machine) makes each CLI call one tool of a stand-in for
-// the server's endpoint. No account, key or network is involved; it checks what the fakes
-// can't, that the real CLIs read the settings the worker writes, ask their permission hook
-// under the names the policy expects, and send the turn's token. It needs
-//
-//	TASKTO_CLI_REAL_TOOLS=1
-//
-// and the CLIs on the PATH, and is skipped otherwise. Grok Build can't run against a stand-in
-// without its own sign-in.
 func TestRealCLIsCallTaskToTools(t *testing.T) {
 	if os.Getenv("TASKTO_CLI_REAL_TOOLS") != "1" {
 		t.Skip("set TASKTO_CLI_REAL_TOOLS=1 to run the installed CLIs with taskto's tools against a scripted model")
@@ -76,9 +65,7 @@ func TestRealCLIsCallTaskToTools(t *testing.T) {
 
 	for cli := range bins {
 		t.Run(string(cli), func(t *testing.T) {
-			// Each CLI's own endpoint: what it saw is this CLI's calls alone.
 			stub := newToolsStub(t)
-			// A read-only tool runs without a question.
 			s := spec("real-tools-read-"+string(cli), 1, cli, "Please call list_spaces.")
 			s.Tools = stub.tools(tokenA)
 			events := runLong(t, w, s)
@@ -89,7 +76,6 @@ func TestRealCLIsCallTaskToTools(t *testing.T) {
 				t.Fatalf("the endpoint didn't get the call with the turn's token: %q; events %+v", stub.called(), events)
 			}
 
-			// A write asks the owner, under the name the policy reads, and runs once allowed.
 			s = spec("real-tools-write-"+string(cli), 1, cli, "Please call write_doc.")
 			s.Tools = stub.tools(tokenA)
 			turn, _, err := w.Start(s)
@@ -123,9 +109,6 @@ func (s *toolsStub) saw(call string) bool {
 	return false
 }
 
-// scriptedModel answers Anthropic's Messages API and OpenAI's Responses API, streaming: the
-// first answer of a turn calls the taskto tool its prompt names ("Please call <tool>."), and
-// the next, once the tool's result is in the request, says "done".
 type scriptedModel struct{}
 
 var pleaseCall = regexp.MustCompile(`Please call ([a-z_]+)\.`)
@@ -168,7 +151,6 @@ func (scriptedModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sse("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop}, "usage": map[string]any{"output_tokens": 1}})
 		sse("message_stop", map[string]any{"type": "message_stop"})
 	case "/v1/responses":
-		// Codex offers an MCP server's tools as a namespace, mcp__<server>.
 		call := tool != "" && !strings.Contains(string(body), "function_call_output")
 		item := map[string]any{"type": "message", "role": "assistant", "id": "msg_1", "content": []any{map[string]any{"type": "output_text", "text": "done"}}}
 		if call {

@@ -18,10 +18,8 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// setupToken is the first-run setup token the tests' server is given.
 var setupToken = auth.NewSetupToken()
 
-// Test passwords: obviously fake, and long enough for the account rules.
 const fakePassword = "fake-test-password"
 
 type env struct {
@@ -31,8 +29,6 @@ type env struct {
 	h  http.Handler
 }
 
-// newEnv serves the account and space routes, and two probe routes standing in for a
-// space's content: GET needs Read, POST needs Write.
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
@@ -61,7 +57,6 @@ func newEnv(t *testing.T) *env {
 	return &env{t: t, db: sqlDB, c: c, h: auth.CSRF(mux)}
 }
 
-// user is a logged-in browser.
 type user struct {
 	e      *env
 	id     int64
@@ -116,7 +111,6 @@ type meReply struct {
 	Workspaces []auth.Membership
 }
 
-// setup creates the owner and their workspace.
 func (e *env) setup() (*user, int64) {
 	e.t.Helper()
 	owner := &user{e: e}
@@ -129,7 +123,6 @@ func (e *env) setup() (*user, int64) {
 	return owner, me.Workspaces[0].WorkspaceID
 }
 
-// join invites a new person to workspace, as admin, and returns them logged in.
 func (e *env) join(admin *user, workspace int64, name string, role auth.Role) *user {
 	e.t.Helper()
 	email := strings.ToLower(name) + "@example.com"
@@ -144,8 +137,6 @@ func (e *env) join(admin *user, workspace int64, name string, role auth.Role) *u
 	return u
 }
 
-// addWorkspace makes a workspace with admin as its admin, as a later card's "create
-// workspace" would.
 func (e *env) addWorkspace(admin *user, name string) int64 {
 	e.t.Helper()
 	res, err := e.db.Exec(`INSERT INTO workspaces (name) VALUES (?)`, name)
@@ -173,7 +164,6 @@ func (e *env) addMember(admin *user, s Space, u *user, role Role) {
 	expect(e.t, rec, http.StatusNoContent)
 }
 
-// spaces lists u's spaces in workspace.
 func (e *env) spaces(u *user, workspace int64) []Space {
 	e.t.Helper()
 	rec := u.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces", workspace), nil)
@@ -192,15 +182,6 @@ func (e *env) private(u *user, workspace int64) Space {
 	return Space{}
 }
 
-// world is a workspace with people in every relation to its spaces:
-//
-//   - owner: admin, editor of shared and archived;
-//   - admin2: admin, member of no shared space;
-//   - alice: editor of shared and archived;
-//   - bob: viewer of shared;
-//   - mallory: a member of the workspace, of no shared space;
-//   - gone: was an editor of shared, then removed from the workspace;
-//   - stranger: admin of another workspace, other, with its own shared space.
 type world struct {
 	e                                           *env
 	ws, other                                   int64
@@ -252,7 +233,6 @@ func spacePath(s Space, rest string) string {
 	return fmt.Sprintf("/api/workspaces/%d/spaces/%d%s", s.WorkspaceID, s.ID, rest)
 }
 
-// in returns s as addressed through workspace ws, which may not be its own.
 func in(ws int64, s Space) Space {
 	s.WorkspaceID = ws
 	return s
@@ -266,12 +246,10 @@ func TestEveryMemberHasAPrivateSpace(t *testing.T) {
 			t.Errorf("%s: private space = %+v", name, got)
 		}
 	}
-	// Created when the stranger's other workspace was, by whatever code adds members.
 	if w.otherPrivate.Role != RoleOwner {
 		t.Errorf("private space of a new workspace = %+v", w.otherPrivate)
 	}
 
-	// An existing user accepting an invite to another workspace gets one there too.
 	rec := w.stranger.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", w.other),
 		map[string]string{"email": "alice@example.com"})
 	expect(t, rec, http.StatusCreated)
@@ -315,7 +293,6 @@ func TestListShowsOnlyMySpaces(t *testing.T) {
 		}
 	}
 
-	// Admins can ask for every shared space, to manage them; they still don't get access.
 	rec := w.admin2.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces?all=true", w.ws), nil)
 	expect(t, rec, http.StatusOK)
 	all := decode[struct{ Spaces []Space }](t, rec).Spaces
@@ -330,13 +307,11 @@ func TestListShowsOnlyMySpaces(t *testing.T) {
 	expect(t, w.mallory.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces?all=true", w.ws), nil), http.StatusForbidden)
 	expect(t, w.owner.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces?all=yes", w.ws), nil), http.StatusBadRequest)
 
-	// Outsiders: the removed member and another workspace's admin.
 	for _, u := range []*user{w.gone, w.stranger} {
 		expect(t, u.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces", w.ws), nil), http.StatusNotFound)
 	}
 }
 
-// TestAccessFunctions is the matrix for the functions code without a request uses.
 func TestAccessFunctions(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -397,7 +372,6 @@ func TestAccessFunctions(t *testing.T) {
 	}
 }
 
-// TestRequireSpace is the matrix for the middleware every space content route uses.
 func TestRequireSpace(t *testing.T) {
 	w := newWorld(t)
 	cases := []struct {
@@ -442,7 +416,6 @@ func TestRequireSpace(t *testing.T) {
 	expect(t, anon.do(http.MethodGet, spacePath(w.shared, "/probe"), nil), http.StatusUnauthorized)
 }
 
-// TestSpaceRoutes is the cross-user matrix for the space API itself.
 func TestSpaceRoutes(t *testing.T) {
 	w := newWorld(t)
 	editor := map[string]any{"role": "editor"}
@@ -454,14 +427,12 @@ func TestSpaceRoutes(t *testing.T) {
 		body   any
 		want   int
 	}{
-		// Create.
 		{"member creates a shared space", w.alice, "POST", fmt.Sprintf("/api/workspaces/%d/spaces", w.ws), map[string]string{"name": "x"}, 403},
 		{"outsider creates a shared space", w.stranger, "POST", fmt.Sprintf("/api/workspaces/%d/spaces", w.ws), map[string]string{"name": "x"}, 404},
 		{"removed member creates a shared space", w.gone, "POST", fmt.Sprintf("/api/workspaces/%d/spaces", w.ws), map[string]string{"name": "x"}, 404},
 		{"admin, empty name", w.owner, "POST", fmt.Sprintf("/api/workspaces/%d/spaces", w.ws), map[string]string{"name": "  "}, 400},
 		{"admin, unknown field", w.owner, "POST", fmt.Sprintf("/api/workspaces/%d/spaces", w.ws), map[string]string{"name": "x", "kind": "private"}, 400},
 
-		// Read one.
 		{"editor reads the space", w.alice, "GET", spacePath(w.shared, ""), nil, 200},
 		{"viewer reads the space", w.bob, "GET", spacePath(w.shared, ""), nil, 200},
 		{"admin outside reads the shared space's details", w.admin2, "GET", spacePath(w.shared, ""), nil, 200},
@@ -473,7 +444,6 @@ func TestSpaceRoutes(t *testing.T) {
 		{"another workspace's space through this one", w.owner, "GET", spacePath(in(w.ws, w.otherShared), ""), nil, 404},
 		{"another workspace's space", w.alice, "GET", spacePath(w.otherShared, ""), nil, 404},
 
-		// Rename and archive.
 		{"editor renames", w.alice, "PATCH", spacePath(w.shared, ""), map[string]string{"name": "x"}, 403},
 		{"viewer archives", w.bob, "PATCH", spacePath(w.shared, ""), map[string]bool{"archived": true}, 403},
 		{"admin renames another's private space", w.owner, "PATCH", spacePath(w.alicePrivate, ""), map[string]string{"name": "x"}, 404},
@@ -481,7 +451,6 @@ func TestSpaceRoutes(t *testing.T) {
 		{"admin renames another workspace's space", w.owner, "PATCH", spacePath(in(w.ws, w.otherShared), ""), map[string]string{"name": "x"}, 404},
 		{"admin, empty change", w.owner, "PATCH", spacePath(w.shared, ""), map[string]string{}, 400},
 
-		// Members: list.
 		{"viewer lists members", w.bob, "GET", spacePath(w.shared, "/members"), nil, 200},
 		{"admin outside lists members", w.admin2, "GET", spacePath(w.shared, "/members"), nil, 200},
 		{"member outside lists members", w.mallory, "GET", spacePath(w.shared, "/members"), nil, 404},
@@ -490,7 +459,6 @@ func TestSpaceRoutes(t *testing.T) {
 		{"admin lists another's private space's members", w.owner, "GET", spacePath(w.alicePrivate, "/members"), nil, 404},
 		{"another workspace's space's members", w.owner, "GET", spacePath(in(w.ws, w.otherShared), "/members"), nil, 404},
 
-		// Members: add, change, remove.
 		{"editor adds a member", w.alice, "POST", spacePath(w.shared, "/members"), map[string]any{"user_id": w.mallory.id, "role": "viewer"}, 403},
 		{"member outside adds themselves", w.mallory, "POST", spacePath(w.shared, "/members"), map[string]any{"user_id": w.mallory.id, "role": "editor"}, 403},
 		{"admin adds someone to another's private space", w.owner, "POST", spacePath(w.alicePrivate, "/members"), map[string]any{"user_id": w.owner.id, "role": "editor"}, 404},
@@ -516,7 +484,6 @@ func TestSpaceRoutes(t *testing.T) {
 		})
 	}
 
-	// Nothing above changed anything.
 	got := decode[struct{ Members []Member }](t, w.owner.do(http.MethodGet, spacePath(w.shared, "/members"), nil)).Members
 	var summary []string
 	for _, m := range got {
@@ -538,14 +505,12 @@ func TestManagingASharedSpace(t *testing.T) {
 		t.Fatalf("created %+v, want a shared space with its creator as an editor", s)
 	}
 
-	// Mallory joins as a viewer: she reads, can't write; then she becomes an editor.
 	e.addMember(w.owner, s, w.mallory, RoleViewer)
 	expect(t, w.mallory.do(http.MethodGet, spacePath(s, "/probe"), nil), http.StatusOK)
 	expect(t, w.mallory.do(http.MethodPost, spacePath(s, "/probe"), map[string]string{}), http.StatusForbidden)
 	expect(t, w.owner.do(http.MethodPatch, spacePath(s, memberPath(w.mallory)), map[string]string{"role": "editor"}), http.StatusNoContent)
 	expect(t, w.mallory.do(http.MethodPost, spacePath(s, "/probe"), map[string]string{}), http.StatusOK)
 
-	// Rename, then archive: read-only for everyone, editors included; then unarchive.
 	rec := w.admin2.do(http.MethodPatch, spacePath(s, ""), map[string]string{"name": "Launch 2"})
 	expect(t, rec, http.StatusOK)
 	if got := decode[Space](t, rec); got.Name != "Launch 2" || got.Access != None {
@@ -566,7 +531,6 @@ func TestManagingASharedSpace(t *testing.T) {
 	expect(t, w.owner.do(http.MethodPatch, spacePath(s, ""), map[string]bool{"archived": false}), http.StatusOK)
 	expect(t, w.mallory.do(http.MethodPost, spacePath(s, "/probe"), map[string]string{}), http.StatusOK)
 
-	// An admin can add themselves; every member sees it in the list.
 	e.addMember(w.admin2, s, w.admin2, RoleViewer)
 	expect(t, w.admin2.do(http.MethodGet, spacePath(s, "/probe"), nil), http.StatusOK)
 	members := decode[struct{ Members []Member }](t, w.mallory.do(http.MethodGet, spacePath(s, "/members"), nil)).Members
@@ -574,14 +538,11 @@ func TestManagingASharedSpace(t *testing.T) {
 		t.Errorf("members = %+v, want admin2 listed", members)
 	}
 
-	// Removing a member ends their access at once.
 	expect(t, w.owner.do(http.MethodDelete, spacePath(s, memberPath(w.mallory)), nil), http.StatusNoContent)
 	expect(t, w.mallory.do(http.MethodGet, spacePath(s, "/probe"), nil), http.StatusNotFound)
 	expect(t, w.mallory.do(http.MethodGet, spacePath(s, ""), nil), http.StatusNotFound)
 }
 
-// A disabled account has no access to any space, which its person, its agents and anything
-// scheduled for it ask through the checker; its spaces and seats are kept, and come back with it.
 func TestDisabledAccountHasNoAccess(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -609,7 +570,6 @@ func TestDisabledAccountHasNoAccess(t *testing.T) {
 	} else if _, err := w.e.c.Check(ctx, w.alice.id, w.shared.ID); !errors.Is(err, ErrDisabled) {
 		t.Fatalf("Check while disabled = %v, want ErrDisabled, so that queued work can wait", err)
 	}
-	// Someone who simply can't open the space is not disabled.
 	if _, err := w.e.c.Check(ctx, w.mallory.id, w.shared.ID); !errors.Is(err, ErrNotFound) || errors.Is(err, ErrDisabled) {
 		t.Fatalf("Check by an outsider = %v, want ErrNotFound and not ErrDisabled", err)
 	}
@@ -622,7 +582,6 @@ func TestDisabledAccountHasNoAccess(t *testing.T) {
 	if n := spaces(); n != 0 {
 		t.Fatalf("a disabled account has %d readable spaces", n)
 	}
-	// Others are untouched.
 	if ok, err := w.e.c.CanRead(ctx, w.bob.id, w.shared.ID); err != nil || !ok {
 		t.Fatalf("bob while alice is disabled: %v, %v", ok, err)
 	}
@@ -641,12 +600,10 @@ func TestLeavingTheWorkspace(t *testing.T) {
 	if n != 0 {
 		t.Errorf("the removed member keeps %d shared-space memberships", n)
 	}
-	// The private space is kept, for when they come back.
 	if err := w.e.db.QueryRow(`SELECT count(*) FROM spaces WHERE id = ?`, w.gonePrivate.ID).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("the removed member's private space: %d rows, %v", n, err)
 	}
 
-	// Rejoining gives back the same private space, but no shared space.
 	rec := w.owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", w.ws), map[string]string{"email": "gone@example.com"})
 	expect(t, rec, http.StatusCreated)
 	expect(t, w.gone.do(http.MethodPost, "/api/invites/accept",
@@ -658,7 +615,6 @@ func TestLeavingTheWorkspace(t *testing.T) {
 	expect(t, w.gone.do(http.MethodGet, spacePath(w.shared, "/probe"), nil), http.StatusNotFound)
 }
 
-// TestTheSchemaHoldsTheRules checks the rules the database keeps whatever code writes it.
 func TestTheSchemaHoldsTheRules(t *testing.T) {
 	w := newWorld(t)
 	refused := []struct {

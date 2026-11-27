@@ -6,10 +6,6 @@ import { Icon } from '../ui/Icon'
 import { Menu, MenuButton, MenuItem, MenuList, MenuSeparator, MoreMenu } from '../ui/Menu'
 import { PageHeader } from '../ui/PageHeader'
 
-// The page's head: where it is (the space, a menu of the others when there are several, and
-// "Boards"), the board's name as the title with a menu of the space's other boards, and the
-// actions: the board's filters, the board's own menu and Add a card, the page's one primary
-// action (the filters and Add a card come from the board).
 export function BoardsHeader({
   spaces,
   space,
@@ -64,7 +60,6 @@ export function BoardsHeader({
       title={board?.name ?? t('shell.sections.boards')}
       titleAction={
         boards &&
-        // Several boards, or one that isn't the one shown (a link named a board that is gone).
         (boards.length > 1 || (boards.length > 0 && !board)) && (
           <Menu align="start">
             <MenuButton label={t('boards.switchBoard')} icon="chevron-updown" />
@@ -95,9 +90,6 @@ export function BoardsHeader({
   )
 }
 
-// The board's own menu: renaming it, a new board, whether archived boards are listed, and
-// archiving or unarchiving it. A private space has only its personal board, which can't be
-// archived, and no other boards.
 export function BoardMenu({
   board,
   space,

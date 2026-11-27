@@ -1,12 +1,3 @@
-/* What is left of the rules several screens shared before the component library: the logo's.
-   Nothing new goes in this file; it goes when the logo's rules move to a stylesheet of its own.
-
-   These rules are in no layer yet, as they were in the one stylesheet: they win over every layer,
-   and their order with the other files is styles.css's (docs/design.md, "Where styles live").
-   Moving a rule into @layer screens, or into a component, is that screen's rebuild. */
-
-/* The website's logo (BrandLogo.tsx): the arrow and the name in the page's ink, the dot and
-   ".ai" in the logo's own green. Its height is set; the width follows the drawing (238 by 64). */
 .tt-logo {
   display: block;
   height: 1.5rem;

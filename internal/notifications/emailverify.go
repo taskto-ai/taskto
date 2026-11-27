@@ -16,54 +16,27 @@ import (
 	"taskto.ai/taskto/internal/mail"
 )
 
-// Nothing is mailed to an address until its owner has proved it is theirs. A person who turns on
-// any email choice (and has not done so for the address they have now) is sent one link; opening
-// it, signed in as themselves, confirms the address, and until then every mail the choices would
-// make is dropped (the inbox and push have it) and no summary is sent. The link:
-//
-//   - holds a random token of 256 bits that is stored only as its SHA-256, so the database can't
-//     make a working link, and is never logged or put in an error;
-//   - works once and expires after verifyTTL;
-//   - names no one: it only leads to the app, which asks the signed-in person's own account to
-//     confirm it (a link followed by someone else, or signed in as someone else, confirms nothing);
-//   - is sent at most once every verifyInterval to a person, whatever they ask.
-//
-// What is confirmed is the address itself, as it is when the mail is sent: if the person's address
-// changes, it is unconfirmed again, and a new link is sent when they next turn a choice on or ask
-// for one.
-
-// The bounds of a verification.
 const (
 	verifyTTL      = 24 * time.Hour
 	verifyInterval = 5 * time.Minute
 )
 
-// The states of a person's address, as the settings say them.
 const (
-	// AddressVerified: mail may be sent to it.
-	AddressVerified = "verified"
-	// AddressPending: a link was sent and may still be opened.
-	AddressPending = "pending"
-	// AddressUnverified: no link is waiting.
+	AddressVerified   = "verified"
+	AddressPending    = "pending"
 	AddressUnverified = "unverified"
 )
 
-// EmailAddress is the person's address and whether notifications may be mailed to it.
 type EmailAddress struct {
 	Email string `json:"email"`
 	State string `json:"state"`
 }
 
-// Errors of the verification.
 var (
-	// ErrVerifyInvalid is a token that is unknown, used, expired, or for an address the person no
-	// longer has.
 	ErrVerifyInvalid = errors.New("notifications: the confirmation link is unknown, used or expired")
-	// ErrVerifyNotSent is a link that could not be mailed.
 	ErrVerifyNotSent = errors.New("notifications: the confirmation email couldn't be sent")
 )
 
-// TooSoonError is a link asked for too soon after the last.
 type TooSoonError struct{ Wait time.Duration }
 
 func (e *TooSoonError) Error() string {
@@ -74,7 +47,6 @@ type queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// addressOf says whether userID's address is confirmed, and its state for the settings.
 func (s *Service) addressOf(ctx context.Context, q queryer, userID int64) (EmailAddress, error) {
 	var a EmailAddress
 	var verified, pending bool
@@ -97,7 +69,6 @@ func (s *Service) addressOf(ctx context.Context, q queryer, userID int64) (Email
 	return a, nil
 }
 
-// verified says whether mail may go to userID's address now.
 func (s *Service) verified(ctx context.Context, q queryer, userID int64) (bool, error) {
 	a, err := s.addressOf(ctx, q, userID)
 	return a.State == AddressVerified, err
@@ -108,10 +79,6 @@ func hashVerifyToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// SendVerification mails userID a link that confirms their address, unless it is confirmed already
-// (then nothing is sent). workspaceID is where the language falls back to. It returns a
-// *TooSoonError for a link sent within verifyInterval, ErrEmailUnavailable where the server can't
-// send mail, and ErrVerifyNotSent when the mail didn't go (and then another may be asked for at once).
 func (s *Service) SendVerification(ctx context.Context, userID, workspaceID int64) error {
 	if !s.emailReady() {
 		return ErrEmailUnavailable
@@ -174,12 +141,8 @@ func (s *Service) SendVerification(ctx context.Context, userID, workspaceID int6
 			slog.Warn("notifications: a confirmation email couldn't be made", "err", err)
 		}
 		if se != nil && se.Ambiguous {
-			// The relay may have taken it: the link stays valid, and the wait stands.
 			return nil
 		}
-		// The link was not sent: it is withdrawn, and another may be asked for now.
-		// (The token_hash condition keeps this from clearing a newer link.) If it can't be written,
-		// the link stays pending until it expires, which the caller is told by the error all the same.
 		for attempt := 0; attempt < 2; attempt++ {
 			_, werr := s.db.ExecContext(context.WithoutCancel(ctx), `
 				UPDATE notification_email_verification SET token_hash = NULL, expires_at = NULL, sent_at = NULL
@@ -194,7 +157,6 @@ func (s *Service) SendVerification(ctx context.Context, userID, workspaceID int6
 	return nil
 }
 
-// ConfirmAddress uses a link's token for userID: their address is confirmed, once.
 func (s *Service) ConfirmAddress(ctx context.Context, userID int64, token string) error {
 	if token == "" || len(token) > 200 {
 		return ErrVerifyInvalid

@@ -94,8 +94,6 @@ func TestHealthzWithTheDatabaseDown(t *testing.T) {
 	}
 }
 
-// The agent runtime's state is reported, and never changes the status code: the server
-// works without it.
 func TestHealthzReportsTheAgentRuntime(t *testing.T) {
 	sqlDB := openDB(t)
 	if body := healthBody(t, get(newHandler(t, sqlDB, Options{}), "/healthz")); body["agent"] != "off" {
@@ -137,7 +135,6 @@ func TestEmbeddedWebAppByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The placeholder or the built app, depending on whether `make build` copied it in.
 	if rec := get(h, "/"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "taskto.ai") {
 		t.Fatalf("GET / = %d %q", rec.Code, rec.Body.String())
 	}
@@ -163,8 +160,6 @@ func TestAccountSpaceRoutesAndCSRFAreMounted(t *testing.T) {
 		}
 	}
 
-	// The CSRF guard wraps the whole server, so every /api route has it: the account and
-	// space routes, the apps, and routes later cards add.
 	for _, p := range []string{"/api/setup", "/api/login", "/api/workspaces/1/spaces", "/api/workspaces/1/spaces/1/boards", "/api/workspaces/1/spaces/1/apps", "/api/workspaces/1/spaces/1/apps/1/actions", "/api/not-yet-written"} {
 		r := httptest.NewRequest(http.MethodPost, p, strings.NewReader(`{}`))
 		r.Header.Set("Content-Type", "application/json")
@@ -210,8 +205,6 @@ func TestSearchServesItsKnowledgeBase(t *testing.T) {
 	}
 }
 
-// TestAuditEventsCarryTheClientAddress runs a login through the whole server: the event holds the
-// address the request came from, and no one's password.
 func TestAuditEventsCarryTheClientAddress(t *testing.T) {
 	sqlDB := openDB(t)
 	if _, err := db.Migrate(context.Background(), sqlDB); err != nil {

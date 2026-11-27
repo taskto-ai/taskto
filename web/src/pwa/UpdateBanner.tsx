@@ -1,7 +1,3 @@
-// "A new version is ready": shown when the service worker has installed an update. The person
-// updates when they choose; the page is never reloaded for them (src/pwa/update.ts). It looks like
-// a toast, at the window's bottom, but unlike one it stays until it is answered.
-
 import { useT } from '../i18n'
 import { Button } from '../ui/Button'
 import { Icon } from '../ui/Icon'

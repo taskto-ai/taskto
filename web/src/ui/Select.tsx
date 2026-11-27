@@ -1,7 +1,3 @@
-// A choice from a list: the browser's own <select> underneath, so the keyboard (arrows, typing a
-// letter), a screen reader and a phone's own picker all work as they do everywhere, drawn with the
-// field's box and a chevron. Options are its children, as for a <select>.
-
 import type { ComponentPropsWithRef } from 'react'
 import { useFieldControl } from './Field'
 import { Icon } from './Icon'

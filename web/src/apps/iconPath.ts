@@ -1,19 +1,7 @@
-// An app's icon is SVG path data in its definition, A2UI's {"svgPath": "…"} form of the Icon
-// component's name, drawn on a 24 by 24 view box. The server accepts only path data
-// (internal/apps/icons.go); this is the same grammar, checked again before drawing, since a
-// definition can reach the browser another way than through that check (an offline copy, an
-// older release, a value bound from data). Kept apart from the catalog so it can be tested and
-// read without loading the renderer.
-
-// The longest path an icon may have (internal/apps MaxIconPathLen).
 export const MAX_ICON_PATH = 2000
 
-// A moveto, then only path commands, digits, signs, decimal points, exponents, commas and
-// spaces: nothing that could close an attribute, open markup or name a URL, a style or a script.
 const PATH_DATA = /^[Mm][MmLlHhVvCcSsQqTtAaZz0-9+\-.eE, ]*$/
 
-// The path to draw for an Icon's name, or null: a name (which this client has no font to draw), a
-// bound value that isn't {svgPath}, and a path outside the grammar all draw nothing.
 export function iconPath(name: unknown): string | null {
   if (typeof name !== 'object' || name === null || Array.isArray(name)) return null
   const keys = Object.keys(name)
@@ -22,17 +10,10 @@ export function iconPath(name: unknown): string | null {
   return typeof d === 'string' && d.length <= MAX_ICON_PATH && PATH_DATA.test(d) ? d : null
 }
 
-// A component of a surface as the definition gives it: its kind and its props, unresolved.
 export type SurfaceComponent = { component: string; props: Record<string, unknown> }
 
-// How deep a control's content is followed through its containers (internal/apps maxIconContentDepth).
 const MAX_CONTENT_DEPTH = 4
 
-// The icons given by a name that show their name as text: those in a control (a Button's child, a
-// Modal's trigger, followed through Row, Column and Card) that nothing else names. Before icons
-// were paths a name was drawn as the word, and a control whose only content it was kept its size
-// and its name; it still does. Elsewhere a name draws nothing. The server's label rule walks the
-// same way (internal/apps/icons.go).
 export function iconsShowingTheirName(components: ReadonlyMap<string, SurfaceComponent>): Set<string> {
   const memo = new Map<string, { named: boolean; names: string[] }>()
   const walk = (id: unknown, depth: number): { named: boolean; names: string[] } => {
@@ -60,8 +41,6 @@ export function iconsShowingTheirName(components: ReadonlyMap<string, SurfaceCom
         case 'Row':
         case 'Column':
           if (Array.isArray(p.children)) {
-            // Each child once (a fan-out of references to one child costs no more than one), and
-            // each name once, so what is kept is bounded by the distinct icons.
             const under = [...new Set(p.children)].map((ch) => walk(ch, depth + 1))
             got = { named: under.some((u) => u.named), names: [...new Set(under.flatMap((u) => u.names))] }
           }

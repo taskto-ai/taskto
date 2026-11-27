@@ -8,7 +8,7 @@ import (
 type leaf struct {
 	Tags  []string       `json:"tags" apitypes:"nonnull"`
 	Free  map[string]any `json:"free" apitypes:"json,nonnull"`
-	Loose []string       `json:"loose"` // not promised: nil is fine
+	Loose []string       `json:"loose"`
 }
 
 type holder struct {
@@ -39,7 +39,6 @@ func TestViolationsFindsNilPromisedFieldsAnywhere(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("violations = %v, want %v", got, want)
 	}
-	// A nil pointer or interface holds nothing to check; a cycle ends.
 	if got := Violations(holder{}); len(got) != 0 {
 		t.Errorf("an empty holder: %v", got)
 	}
@@ -76,8 +75,6 @@ type embedderPtr struct {
 	*promoted
 }
 
-// encoding/json writes the exported fields of an unexported embedded struct, so a promise
-// there is one the server has to keep.
 func TestViolationsLooksInsideUnexportedEmbeddedStructs(t *testing.T) {
 	if got := Violations(embedder{}); !slices.Equal(got, []string{"embedder.promoted.Tags"}) {
 		t.Errorf("an embedded struct: %v", got)

@@ -1,9 +1,5 @@
 // @vitest-environment jsdom
 
-// LazyAppView: the renderer's code loaded when an app is drawn. While it comes, the app's frame with
-// its loading shape; when it doesn't come, that is said in the app's own frame with Try again, which
-// imports anew; an app that fails while it is drawn is the boundary above's to say.
-
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { Component, type ReactNode } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
@@ -16,7 +12,6 @@ vi.mock('./AppView', () => ({
   },
 }))
 
-// A fresh module for each test: the loaded renderer (or its failure) is the module's to keep.
 async function fresh() {
   vi.resetModules()
   const mod = await import('./LazyAppView')
@@ -70,7 +65,6 @@ test('a renderer that doesn’t arrive is said in the app’s own frame, and Try
     </Above>,
   )
   const said = await screen.findByText(/This screen couldn't be loaded/)
-  // Said inside the app's own frame (the one the loading shape was drawn in, drawn anew).
   const frame = screen.getByRole('region', { name: 'Field visit' })
   expect(frame.contains(said)).toBe(true)
   expect(frame.getAttribute('data-frame')).toBe('bare')

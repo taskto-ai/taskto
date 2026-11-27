@@ -14,7 +14,6 @@ import (
 
 const leakedEmail = "someone.private@example.test"
 
-// lastErrors lists what the table keeps of why steps failed.
 func (w *world) lastErrors() []string {
 	w.t.Helper()
 	rows, err := w.db.Query(`SELECT kind || ': ' || coalesce(last_error, '') FROM purge_cleanups ORDER BY id`)
@@ -33,9 +32,6 @@ func (w *world) lastErrors() []string {
 	return out
 }
 
-// What a subsystem says in an error can hold personal text (a provider's refusal quoting an email, a
-// path with an id): the table keeps a fixed word for the kind of failure, never that text, and
-// neither does the error the purge answers.
 func TestAStepsFailureIsStoredAsAFixedReasonNeverTheUpstreamText(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
@@ -112,7 +108,6 @@ func TestAProvidersStepsFailureIsStoredAsAFixedReason(t *testing.T) {
 			if len(got) != 1 || got[0] != cleanProviders+": "+c.want {
 				t.Fatalf("purge_cleanups = %q; want only the reason %q", got, c.want)
 			}
-			// The step is kept, to be tried again, and is done when the key can be removed.
 			if n := w.count(`SELECT count(*) FROM purge_cleanups WHERE kind = ?`, cleanProviders); n != 1 {
 				t.Fatalf("%d provider steps recorded after a failure, want 1", n)
 			}

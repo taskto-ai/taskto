@@ -27,7 +27,6 @@ func open(t *testing.T, path string) *sql.DB {
 }
 
 func TestOpenCreatesTheFileWithPragmas(t *testing.T) {
-	// A '?' and '#' in the path must not be taken for the DSN's query or fragment.
 	dir := filepath.Join(t.TempDir(), "odd ?#dir")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -38,7 +37,6 @@ func TestOpenCreatesTheFileWithPragmas(t *testing.T) {
 		t.Fatalf("database file: %v", err)
 	}
 
-	// Several connections, since the pool opens more than one and each needs the pragmas.
 	sqlDB.SetMaxIdleConns(3)
 	ctx := context.Background()
 	var conns []*sql.Conn
@@ -54,7 +52,7 @@ func TestOpenCreatesTheFileWithPragmas(t *testing.T) {
 			"journal_mode": "wal",
 			"foreign_keys": "1",
 			"busy_timeout": "5000",
-			"synchronous":  "1", // NORMAL
+			"synchronous":  "1",
 		} {
 			var got string
 			if err := conn.QueryRowContext(ctx, "PRAGMA "+pragma).Scan(&got); err != nil {
@@ -126,7 +124,6 @@ func TestEmbeddedMigrationsOnAFreshDatabaseThenAgain(t *testing.T) {
 		t.Fatalf("schema_migrations = %v, want %v", got, applied)
 	}
 
-	// A re-run, here after reopening the file as a restart would, changes nothing.
 	_ = sqlDB.Close()
 	sqlDB = open(t, path)
 	before := tables(t, sqlDB)
@@ -148,7 +145,6 @@ func TestEmbeddedMigrationsOnAFreshDatabaseThenAgain(t *testing.T) {
 func TestMigrationsRunInNumberOrder(t *testing.T) {
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
 	fsys := fstest.MapFS{
-		// 0002 needs the table 0001 makes; listed out of order on purpose.
 		"0002_b.sql":  {Data: []byte(`INSERT INTO a (x) VALUES (1);`)},
 		"0001_a.sql":  {Data: []byte(`CREATE TABLE a (x INTEGER);`)},
 		"0010_ab.sql": {Data: []byte(`INSERT INTO a (x) VALUES (10);`)},
@@ -161,7 +157,6 @@ func TestMigrationsRunInNumberOrder(t *testing.T) {
 		t.Fatalf("applied = %v, want %v", applied, want)
 	}
 
-	// A new migration is applied alone on the next run.
 	fsys["0011_c.sql"] = &fstest.MapFile{Data: []byte(`INSERT INTO a (x) VALUES (11);`)}
 	applied, err = migrate(context.Background(), sqlDB, fsys)
 	if err != nil {
@@ -179,8 +174,7 @@ func TestMigrationsRunInNumberOrder(t *testing.T) {
 func TestAFailingMigrationRollsBackAndStops(t *testing.T) {
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
 	fsys := fstest.MapFS{
-		"0001_ok.sql": {Data: []byte(`CREATE TABLE ok (x INTEGER);`)},
-		// The first statement works; the second fails, so the first must be undone.
+		"0001_ok.sql":    {Data: []byte(`CREATE TABLE ok (x INTEGER);`)},
 		"0002_bad.sql":   {Data: []byte("CREATE TABLE half (x INTEGER);\nINSERT INTO ok (x) VALUES (1);\nNOT SQL;")},
 		"0003_after.sql": {Data: []byte(`CREATE TABLE after (x INTEGER);`)},
 	}
@@ -202,7 +196,6 @@ func TestAFailingMigrationRollsBackAndStops(t *testing.T) {
 		t.Fatalf("rows in ok = %d (%v), want 0", n, err)
 	}
 
-	// Once fixed, the next start applies it and the ones after it.
 	fsys["0002_bad.sql"] = &fstest.MapFile{Data: []byte(`CREATE TABLE half (x INTEGER);`)}
 	applied, err = migrate(context.Background(), sqlDB, fsys)
 	if err != nil {
@@ -233,10 +226,6 @@ func TestMigrationFileProblems(t *testing.T) {
 	}
 }
 
-// TestEmbeddedMigrationNumbersAreUnique fails fast, before any database is opened, when two
-// pull requests that each took the next free number are both merged: every test that opens
-// a database would otherwise fail with the same opaque error. It names every clash, so the
-// later-merged file can be renumbered at once.
 func TestEmbeddedMigrationNumbersAreUnique(t *testing.T) {
 	entries, err := fs.ReadDir(migrations, "migrations")
 	if err != nil {
@@ -288,7 +277,6 @@ func TestAMigrationChangedAfterItRanIsRefused(t *testing.T) {
 			if _, err := migrate(context.Background(), sqlDB, changed); err == nil || !strings.Contains(err.Error(), "changed after it was applied") {
 				t.Fatalf("err = %v, want a refusal of the changed migration", err)
 			}
-			// The unchanged set still starts.
 			if _, err := migrate(context.Background(), sqlDB, original); err != nil {
 				t.Fatalf("unchanged migrations: %v", err)
 			}
@@ -296,8 +284,6 @@ func TestAMigrationChangedAfterItRanIsRefused(t *testing.T) {
 	}
 }
 
-// A reworded migration's comments changed and nothing else: without its comment lines, it
-// is still the file the databases ran.
 func TestRewordedMigrationsChangedOnlyComments(t *testing.T) {
 	for name, r := range reworded {
 		raw, err := fs.ReadFile(migrations, "migrations/"+name)
@@ -317,8 +303,6 @@ func TestRewordedMigrationsChangedOnlyComments(t *testing.T) {
 	}
 }
 
-// A database that ran a reworded migration as it was before still opens; any other
-// checksum is still refused.
 func TestADatabaseWithAMigrationBeforeItsRewordingOpens(t *testing.T) {
 	for name, r := range reworded {
 		t.Run(name, func(t *testing.T) {
@@ -343,8 +327,6 @@ func TestADatabaseWithAMigrationBeforeItsRewordingOpens(t *testing.T) {
 	}
 }
 
-// upTo returns the embedded migrations numbered up to version, as an older binary had
-// them.
 func upTo(t *testing.T, version int) fstest.MapFS {
 	t.Helper()
 	sub, err := fs.Sub(migrations, "migrations")
@@ -364,8 +346,6 @@ func upTo(t *testing.T, version int) fstest.MapFS {
 	return older
 }
 
-// TestSpacesBackfillPrivateSpaces upgrades a database with members from before spaces:
-// each membership gets its private space, and members joining later get theirs.
 func TestSpacesBackfillPrivateSpaces(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -409,8 +389,6 @@ func TestSpacesBackfillPrivateSpaces(t *testing.T) {
 	}
 }
 
-// TestConversationLinksAreIDs upgrades a database with card links from before 0008: links
-// that aren't a conversation ID go, the others stay, and new ones must be IDs.
 func TestConversationLinksAreIDs(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -460,9 +438,6 @@ func TestConversationLinksAreIDs(t *testing.T) {
 	}
 }
 
-// TestSearchIndexMigratesToUnspacedScripts runs migration 0011 on a database with a search
-// index made before it: the full-text index is emptied, for the server to index again from
-// git, with marks kept within words; documents and their embeddings stay.
 func TestSearchIndexMigratesToUnspacedScripts(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -519,7 +494,6 @@ func TestSearchIndexMigratesToUnspacedScripts(t *testing.T) {
 		t.Fatalf("partial %d, text_format %d, %d full-text rows, %d chunks, embedded %q", partial, format, fts, chunks, embedded)
 	}
 
-	// Marks stay within words: กิน (eat) isn't ก้น.
 	if _, err := sqlDB.ExecContext(ctx, `INSERT INTO search_fts (rowid, path, title, body) VALUES (1, '', '', 'ก้น')`); err != nil {
 		t.Fatal(err)
 	}
@@ -529,9 +503,6 @@ func TestSearchIndexMigratesToUnspacedScripts(t *testing.T) {
 	}
 }
 
-// TestDictationAutoBecomesLocal runs migration 0018 on settings from before it: auto, which
-// used the hosted API as soon as a key was set, becomes local; an admin's explicit choice and
-// the sealed key stay, and a new row defaults to local.
 func TestDictationAutoBecomesLocal(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -578,9 +549,6 @@ func TestDictationAutoBecomesLocal(t *testing.T) {
 	}
 }
 
-// TestAppRolesMigrationAddsNoAssignments upgrades a database that has apps with rows from
-// before app roles: no app gets a role assignment, which is what keeps every app as
-// unrestricted as it was, and the rows keep the creators that own-record reading needs.
 func TestAppRolesMigrationAddsNoAssignments(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -611,7 +579,6 @@ func TestAppRolesMigrationAddsNoAssignments(t *testing.T) {
 	if roles != 0 || rows != 3 || creators != 2 {
 		t.Fatalf("role assignments %d, rows %d with %d creators; want 0, 3 and 2", roles, rows, creators)
 	}
-	// A role is one of the five, and held once per user.
 	for _, bad := range []string{
 		`INSERT INTO app_roles (app_id, user_id, role) VALUES (5, 1, 'owner')`,
 	} {
@@ -628,9 +595,6 @@ func TestAppRolesMigrationAddsNoAssignments(t *testing.T) {
 	}
 }
 
-// TestAppReleasesMigrationMakesEveryAppRelease1 upgrades a database with apps from before drafts
-// and releases: each becomes release 1, live, with its definition as its draft too (and saying
-// its format version and what it needs), and no role, row, version or access changes.
 func TestAppReleasesMigrationMakesEveryAppRelease1(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -645,7 +609,6 @@ func TestAppReleasesMigrationMakesEveryAppRelease1(t *testing.T) {
 	if err := json.Unmarshal(raw, &example); err != nil {
 		t.Fatal(err)
 	}
-	// A screen that calls a function of the catalog, and one that calls a name it doesn't have.
 	called := `{"components":[{"id":"root","component":"Column","children":["when","odd"]},
 		{"id":"when","component":"Text","text":{"call":"formatDate","args":{"value":"2024-01-02","format":"yyyy"}}},
 		{"id":"odd","component":"Text","text":{"call":"notAFunction","args":{}}}],"actions":{}}`
@@ -700,14 +663,12 @@ func TestAppReleasesMigrationMakesEveryAppRelease1(t *testing.T) {
 	if err := sqlDB.QueryRowContext(ctx, `SELECT json_extract(definition, '$.definition_version'), json_extract(definition, '$.requires') FROM apps WHERE id = 5`).Scan(&v, &inDef); err != nil || v != 1 || inDef != wantReqs {
 		t.Fatalf("the definition says version %d, requires %s (%v)", v, inDef, err)
 	}
-	// Only the catalog's own functions count; an app taken offline stays so; an empty definition is fine.
 	if g := read(6); g.reqs != `["component.Column","component.Text","function.formatDate"]` || !g.archived {
 		t.Fatalf("calls = %+v", g)
 	}
 	if g := read(7); g.reqs != `[]` || g.live != 1 {
 		t.Fatalf("empty = %+v", g)
 	}
-	// No role, row or creator changed.
 	var roles, rows, creators int
 	if err := sqlDB.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM app_roles), count(*), count(created_by) FROM app_rows`).Scan(&roles, &rows, &creators); err != nil {
 		t.Fatal(err)
@@ -715,7 +676,6 @@ func TestAppReleasesMigrationMakesEveryAppRelease1(t *testing.T) {
 	if roles != 1 || rows != 2 || creators != 2 {
 		t.Fatalf("roles %d, rows %d, creators %d", roles, rows, creators)
 	}
-	// A release is immutable and numbered per app.
 	if _, err := sqlDB.ExecContext(ctx, `UPDATE app_releases SET definition = '{}' WHERE app_id = 5`); err == nil {
 		t.Fatal("a release was edited")
 	}
@@ -728,8 +688,6 @@ func TestAppReleasesMigrationMakesEveryAppRelease1(t *testing.T) {
 	if _, err := sqlDB.ExecContext(ctx, `UPDATE apps SET live_release = 3 WHERE id = 5`); err == nil {
 		t.Fatal("an app served a release it doesn't have")
 	}
-	// Its publisher can't be changed, but an account that goes leaves it unattributed
-	// (published_by ON DELETE SET NULL).
 	for _, q := range []string{
 		`INSERT INTO users (id, email, name, password_hash) VALUES (30, 'p@example.com', 'P', 'x')`,
 		`INSERT INTO app_releases (app_id, number, definition, definition_version, requires, published_by) VALUES (5, 3, '{}', 1, '[]', 30)`,
@@ -750,9 +708,6 @@ func TestAppReleasesMigrationMakesEveryAppRelease1(t *testing.T) {
 	}
 }
 
-// TestRecordRevisionsMigrationKeepsExistingRows upgrades a database whose apps have rows from
-// before revisions: each row is revision 1, live, with one synthetic history entry holding its
-// data, credited to its creator and dated at its creation; and history is append-only.
 func TestRecordRevisionsMigrationKeepsExistingRows(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -804,7 +759,6 @@ func TestRecordRevisionsMigrationKeepsExistingRows(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("rows after the upgrade:\n%q\nwant\n%q", got, want)
 	}
-	// Revisions only go forward, history is never rewritten, and a row's versions are unique.
 	for _, bad := range []string{
 		`UPDATE app_rows SET revision = 0 WHERE id = 7`,
 		`UPDATE app_row_history SET data = '{}' WHERE row_id = 7`,
@@ -817,7 +771,6 @@ func TestRecordRevisionsMigrationKeepsExistingRows(t *testing.T) {
 			t.Fatalf("%s was accepted", bad)
 		}
 	}
-	// An account that goes leaves its history, unattributed (actor ON DELETE SET NULL).
 	for _, q := range []string{
 		`INSERT INTO users (id, email, name, password_hash) VALUES (3, 'c@example.com', 'C', 'x')`,
 		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor) VALUES (5, 7, 2, 'update', '{}', 3)`,
@@ -835,9 +788,6 @@ func TestRecordRevisionsMigrationKeepsExistingRows(t *testing.T) {
 	}
 }
 
-// TestRecordSystemActorMigration upgrades a database with records and history from before the
-// system writer: nothing in it is a system change, the recreated immutability trigger protects the
-// new actor_system column like the others, and the actor is either a user or the system.
 func TestRecordSystemActorMigration(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -875,19 +825,15 @@ func TestRecordSystemActorMigration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// The history of a system change is as immutable as a user's: no column of it is rewritten,
-	// the actor_system one included, and it can't be cleared to pose as a deleted account.
 	for _, bad := range []string{
 		`UPDATE app_row_history SET actor_system = NULL WHERE revision = 3`,
 		`UPDATE app_row_history SET actor_system = 'integration:5' WHERE revision = 3`,
 		`UPDATE app_row_history SET actor_system = 'integration:4' WHERE revision = 2`,
 		`UPDATE app_row_history SET actor = 1 WHERE revision = 3`,
 		`UPDATE app_row_history SET action = 'other' WHERE revision = 3`,
-		// A change has one actor, a user or the system, and the system's has a known shape.
 		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor, actor_system) VALUES (5, 7, 4, 'update', '{}', 1, 'integration:4')`,
 		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor_system) VALUES (5, 7, 4, 'update', '{}', 'someone')`,
 		`UPDATE app_rows SET updated_system = 'a person' WHERE id = 7`,
-		// The id is only digits: a suffix after them is not an integration's.
 		`UPDATE app_rows SET updated_system = 'integration:7x' WHERE id = 7`,
 		`UPDATE app_rows SET updated_system = 'integration:7:8' WHERE id = 7`,
 		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor_system) VALUES (5, 7, 4, 'update', '{}', 'integration:7invalid')`,
@@ -896,8 +842,6 @@ func TestRecordSystemActorMigration(t *testing.T) {
 			t.Fatalf("%s was accepted", bad)
 		}
 	}
-	// An account that goes still leaves its history unattributed, and a system change's history
-	// is not touched by it.
 	for _, q := range []string{
 		`INSERT INTO users (id, email, name, password_hash) VALUES (3, 'c@example.com', 'C', 'x')`,
 		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor) VALUES (5, 7, 5, 'update', '{}', 3)`,
@@ -927,9 +871,6 @@ func TestRecordSystemActorMigration(t *testing.T) {
 	}
 }
 
-// TestAppAttachmentsKeepTheirAppFieldAndUploader checks the attachments table's triggers: an
-// attachment never moves to another app, field or uploader, but an account that goes leaves it
-// unattributed (owner ON DELETE SET NULL), so deleting a user who uploaded a photo works.
 func TestAppAttachmentsKeepTheirAppFieldAndUploader(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -957,7 +898,6 @@ func TestAppAttachmentsKeepTheirAppFieldAndUploader(t *testing.T) {
 			t.Fatalf("%s was accepted", bad)
 		}
 	}
-	// Ordinary changes of state still go through.
 	if _, err := sqlDB.ExecContext(ctx, `UPDATE app_attachments SET received = 4`); err != nil {
 		t.Fatal(err)
 	}
@@ -968,7 +908,6 @@ func TestAppAttachmentsKeepTheirAppFieldAndUploader(t *testing.T) {
 	if err := sqlDB.QueryRowContext(ctx, `SELECT owner FROM app_attachments WHERE id = ?`, id).Scan(&owner); err != nil || owner.Valid {
 		t.Fatalf("owner after the user went = %v, %v", owner, err)
 	}
-	// Nobody can be made the uploader of one that has none.
 	if _, err := sqlDB.ExecContext(ctx, `UPDATE app_attachments SET owner = 2`); err == nil {
 		t.Fatal("an unattributed attachment was given an uploader")
 	}

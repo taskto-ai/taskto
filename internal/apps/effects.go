@@ -13,52 +13,16 @@ import (
 	"taskto.ai/taskto/internal/currency"
 )
 
-// Platform effects.
-//
-// An insert or an update may declare effects (Action.Effects): operations on the rest of
-// taskto.ai that the record's change sets going. They are a fixed, small registry, checked
-// strictly when the definition is saved, and nothing in a definition can name anything outside
-// it: not a URL, not a tool, not a command.
-//
-//	create_card      a card on a board of a space, from templates over the record's fields
-//	update_card      moves a card an earlier create_card effect of the app made for the record
-//	create_document  a Markdown document under a path in a space, from templates
-//	open_route       a route of the web app to open (a board, a card or a document of the
-//	                 app's own effects), from a fixed list, never an address
-//	create_payment_link  a link to pay an amount of the record, asked of the integration a slot of
-//	                 the app is connected to (integrations.go, paymentlink.go), never a provider,
-//	                 an address or a key
-//
-// The first three act on boards and documents as the user who acted. create_payment_link is the one
-// effect that writes the record it came from, and it does so through the system writer
-// (system.go), not as the user: the link and its id go only to the two fields the effect names and
-// the approved contract declares, checked against the live release when the entry runs. Its other
-// work is outside TaskTo.AI, and is done once per entry (paymentlink.go).
-//
-// An effect may name a rule (When, the language of rules.go) that decides whether it applies to
-// the record as the change leaves it. Templates are text with {{field}} holes and nothing else:
-// a field of the collection, or id, the record's number. There are no expressions, no
-// functions and no nesting, and what is put in a hole is never read as a template again.
-//
-// A definition holds the aims of effects, never authority: when an effect runs it runs as the
-// user who acted and does only what that user may do, checked then (outbox.go).
-
-// The kinds of effect.
 const (
-	EffectCreateCard     = "create_card"
-	EffectUpdateCard     = "update_card"
-	EffectCreateDocument = "create_document"
-	EffectOpenRoute      = "open_route"
-	// EffectCreatePaymentLink asks an integration of the payments kind, which the app declares as a
-	// slot (integrations.go), for a link to pay an amount of the record. It names the slot, never a
-	// provider, an address or a key. Version 3 of the format.
+	EffectCreateCard        = "create_card"
+	EffectUpdateCard        = "update_card"
+	EffectCreateDocument    = "create_document"
+	EffectOpenRoute         = "open_route"
 	EffectCreatePaymentLink = "create_payment_link"
 )
 
-// EffectKinds lists the kinds of effect, which are what the server supports.
 var EffectKinds = []string{EffectCreateCard, EffectUpdateCard, EffectCreateDocument, EffectOpenRoute, EffectCreatePaymentLink}
 
-// The routes an open_route effect may open.
 const (
 	RouteBoard    = "board"
 	RouteCard     = "card"
@@ -67,14 +31,10 @@ const (
 
 var effectRoutes = []string{RouteBoard, RouteCard, RouteDocument}
 
-// EffectCapability is the capability of using effect kind: a release with such an effect needs a
-// client that knows to show its progress (Definition.Requires).
 func EffectCapability(kind string) string { return "effect." + kind }
 
-// cardColumns are the columns a card can be put in (package boards).
 var cardColumns = []string{"backlog", "todo", "doing", "review", "done"}
 
-// Bounds of effects.
 const (
 	maxEffectsPerAction = 5
 	maxEffectsTotal     = 20
@@ -83,55 +43,35 @@ const (
 	maxTemplatePath     = 300
 	maxTemplateContent  = 8000
 	maxEffectDocs       = 5
-	// The most a filled-in template holds.
-	maxTitleChars   = 200
-	maxBodyBytes    = 30 << 10
-	maxSlugChars    = 60
-	maxContentBytes = 256 << 10
+	maxTitleChars       = 200
+	maxBodyBytes        = 30 << 10
+	maxSlugChars        = 60
+	maxContentBytes     = 256 << 10
 )
 
-// Effect is one effect of an action. Which fields a kind takes is fixed (effectSpecs); a field it
-// doesn't take, or a key that isn't one of these, is refused.
 type Effect struct {
-	Kind string `json:"kind"`
-	// Name names a create_card effect, so update_card and open_route can refer to the card it
-	// made. Unique in the definition.
-	Name string `json:"name,omitempty"`
-	// When is the rule the record must satisfy, as the change leaves it, for the effect to apply.
-	When *Rule `json:"when,omitempty"`
-	// SpaceID and BoardID name the target by ID, in the definition, as the app's builder chose.
-	// Whoever acts needs access to both the app and the target when the effect runs.
-	SpaceID int64 `json:"space_id,omitempty"`
-	BoardID int64 `json:"board_id,omitempty"`
-	// Column is the column a card is created in (default backlog) or moved to.
-	Column string `json:"column,omitempty"`
-	// Title and Body are templates of a card. Docs are templates of paths of documents in the
-	// board's space that the card refers to.
-	Title string   `json:"title,omitempty"`
-	Body  string   `json:"body,omitempty"`
-	Docs  []string `json:"docs,omitempty"`
-	// Card is the Name of the create_card effect whose card for the record update_card changes
-	// and an open_route of kind "card" opens.
-	Card string `json:"card,omitempty"`
-	// Path and Content are templates of a document: where it goes in the space, and what it says.
-	Path    string `json:"path,omitempty"`
-	Content string `json:"content,omitempty"`
-	// Route is the route open_route opens, one of effectRoutes.
-	Route string `json:"route,omitempty"`
-	// What create_payment_link takes (integrations.go): the slot of the app's integrations it asks, the
-	// number field with the amount, the currency (a code, or a choice field of codes), a template of
-	// the text the payer reads, and the two string fields that the link and its id are written to.
-	Integration   string `json:"integration,omitempty"`
-	AmountField   string `json:"amount_field,omitempty"`
-	Currency      string `json:"currency,omitempty"`
-	CurrencyField string `json:"currency_field,omitempty"`
-	Description   string `json:"description,omitempty"`
-	URLField      string `json:"url_field,omitempty"`
-	IDField       string `json:"id_field,omitempty"`
+	Kind          string   `json:"kind"`
+	Name          string   `json:"name,omitempty"`
+	When          *Rule    `json:"when,omitempty"`
+	SpaceID       int64    `json:"space_id,omitempty"`
+	BoardID       int64    `json:"board_id,omitempty"`
+	Column        string   `json:"column,omitempty"`
+	Title         string   `json:"title,omitempty"`
+	Body          string   `json:"body,omitempty"`
+	Docs          []string `json:"docs,omitempty"`
+	Card          string   `json:"card,omitempty"`
+	Path          string   `json:"path,omitempty"`
+	Content       string   `json:"content,omitempty"`
+	Route         string   `json:"route,omitempty"`
+	Integration   string   `json:"integration,omitempty"`
+	AmountField   string   `json:"amount_field,omitempty"`
+	Currency      string   `json:"currency,omitempty"`
+	CurrencyField string   `json:"currency_field,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	URLField      string   `json:"url_field,omitempty"`
+	IDField       string   `json:"id_field,omitempty"`
 }
 
-// UnmarshalJSON reads an effect strictly, so a key that isn't one of an effect's (a url, a tool
-// name, a command) is refused instead of being dropped.
 func (e *Effect) UnmarshalJSON(b []byte) error {
 	type plain Effect
 	dec := json.NewDecoder(bytes.NewReader(b))
@@ -147,7 +87,6 @@ func (e *Effect) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// given lists the JSON names of the fields the effect sets.
 func (e Effect) given() []string {
 	var out []string
 	add := func(set bool, name string) {
@@ -177,15 +116,10 @@ func (e Effect) given() []string {
 	return out
 }
 
-// targetUnset is whether the effect names a space and board of taskto.ai to act on, and none has
-// been chosen yet: what a template, or a copy of an app whose boards its copier can't write,
-// holds until someone picks one. Such a definition is a draft that can be saved and read but not
-// published (unsetTargets, checked when it is), and one half chosen is refused like any other.
 func (e Effect) targetUnset() bool {
 	return e.SpaceID == 0 && e.BoardID == 0 && targetKinds(e)
 }
 
-// targetKinds is whether the effect has a space (and for a card or a board route, a board) to name.
 func targetKinds(e Effect) bool {
 	switch e.Kind {
 	case EffectCreateCard, EffectCreateDocument:
@@ -196,8 +130,6 @@ func targetKinds(e Effect) bool {
 	return false
 }
 
-// unsetTargets lists, as "action name", the effects of the definition that still have no target
-// chosen, in the order of the actions' names.
 func (d Definition) unsetTargets() []string {
 	var out []string
 	for _, name := range sortedKeys(d.Actions) {
@@ -210,8 +142,6 @@ func (d Definition) unsetTargets() []string {
 	return out
 }
 
-// setTargets gives every effect that has no target the board of space, and returns how many it
-// changed. A document effect takes only the space.
 func (d *Definition) setTargets(spaceID, boardID int64) int {
 	n := 0
 	for name, a := range d.Actions {
@@ -232,7 +162,6 @@ func (d *Definition) setTargets(spaceID, boardID int64) int {
 	return n
 }
 
-// effectSpec says which fields of a kind of effect may be set and which must be.
 type effectSpec struct{ allowed, required []string }
 
 var effectSpecs = map[string]effectSpec{
@@ -246,14 +175,12 @@ var effectSpecs = map[string]effectSpec{
 	},
 }
 
-// routeFields are the fields each route of open_route takes besides route and when.
 var routeFields = map[string][]string{
 	RouteBoard:    {"space_id", "board_id"},
 	RouteCard:     {"card"},
 	RouteDocument: {"space_id", "path"},
 }
 
-// effectNames collects the names of the definition's create_card effects.
 func (d Definition) effectNames() map[string]bool {
 	names := map[string]bool{}
 	for _, a := range d.Actions {
@@ -266,7 +193,6 @@ func (d Definition) effectNames() map[string]bool {
 	return names
 }
 
-// cardMaker finds the create_card effect named name.
 func (d Definition) cardMaker(name string) (Effect, bool) {
 	for _, key := range sortedKeys(d.Actions) {
 		for _, e := range d.Actions[key].Effects {
@@ -278,9 +204,6 @@ func (d Definition) cardMaker(name string) (Effect, bool) {
 	return Effect{}, false
 }
 
-// checkEffects validates the effects of every action against the collection and returns the
-// capabilities they need. Effects belong to an insert or an update (a delete leaves no record to
-// act on, a navigate changes nothing).
 func (d Definition) checkEffects(c Collection) ([]string, error) {
 	used := map[string]bool{}
 	total := 0
@@ -325,8 +248,6 @@ func (d Definition) checkEffects(c Collection) ([]string, error) {
 	return sortedKeys(used), nil
 }
 
-// check validates one effect: its kind, the fields it takes, and their values. creators are the
-// names of the definition's create_card effects.
 func (e Effect) check(c Collection, creators map[string]bool) error {
 	spec, ok := effectSpecs[e.Kind]
 	if !ok {
@@ -411,12 +332,8 @@ func (e Effect) check(c Collection, creators map[string]bool) error {
 	return nil
 }
 
-// A template is text with holes, {{name}}: name is a field of the collection or id. Nothing else
-// is a hole, and a "{{" or "}}" that isn't one is refused, so no one expects more of it than it
-// does.
 const holeOpen, holeClose = "{{", "}}"
 
-// holes walks a template: each call gets literal text, or, for a hole, its name.
 func holes(tpl string, fn func(text string, isHole bool) error) error {
 	for tpl != "" {
 		i := strings.Index(tpl, holeOpen)
@@ -443,7 +360,6 @@ func holes(tpl string, fn func(text string, isHole bool) error) error {
 	return nil
 }
 
-// checkTemplate checks a template's holes against the collection and its length.
 func checkTemplate(what, tpl string, c Collection, max int) error {
 	if utf8.RuneCountInString(tpl) > max {
 		return fmt.Errorf("%s is at most %d characters", what, max)
@@ -466,9 +382,6 @@ func checkTemplate(what, tpl string, c Collection, max int) error {
 	return nil
 }
 
-// checkPathTemplate checks a template of a knowledge-base path. Only its literal text is the
-// builder's: it can't climb out of a folder, and what is put in its holes is made a safe name
-// (render). A document's path ends in .md.
 func checkPathTemplate(what, tpl string, c Collection, document bool) error {
 	if err := checkTemplate(what, tpl, c, maxTemplatePath); err != nil {
 		return err
@@ -488,14 +401,11 @@ func checkPathTemplate(what, tpl string, c Collection, document bool) error {
 type renderMode int
 
 const (
-	modeLine renderMode = iota // one line: a title
-	modeText                   // text: a body, a document
-	modeSlug                   // a name in a path
+	modeLine renderMode = iota
+	modeText
+	modeSlug
 )
 
-// render fills a template with the record's values. id is the record's number (0 for one that
-// doesn't exist yet: a preview). What fills a hole is made to fit where it goes and is never read
-// as template again.
 func render(tpl string, c Collection, data map[string]any, id int64, mode renderMode) string {
 	var b strings.Builder
 	_ = holes(tpl, func(text string, isHole bool) error {
@@ -525,7 +435,6 @@ func render(tpl string, c Collection, data map[string]any, id int64, mode render
 	return out
 }
 
-// holeValue is what a hole shows: the field's value as text, nothing if the record has none.
 func holeValue(c Collection, data map[string]any, id int64, name string) string {
 	if name == "id" {
 		if id == 0 {
@@ -552,7 +461,6 @@ func holeValue(c Collection, data map[string]any, id int64, name string) string 
 	return ""
 }
 
-// oneLine puts text on one line: control characters, line breaks included, become spaces.
 func oneLine(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
@@ -563,7 +471,6 @@ func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// slug makes text a name fit for a path's segment: letters, digits, - and _, the rest one -.
 func slug(s string) string {
 	var b strings.Builder
 	dash := true
@@ -601,46 +508,30 @@ func truncateBytes(s string, max int) string {
 	return s
 }
 
-// payload is an effect with its templates filled in from a record: what the worker does, and
-// what is stored with the outbox entry. Nothing in it came from the client.
 type payload struct {
-	SpaceID int64    `json:"space_id,omitempty"`
-	BoardID int64    `json:"board_id,omitempty"`
-	Column  string   `json:"column,omitempty"`
-	Title   string   `json:"title,omitempty"`
-	Body    string   `json:"body,omitempty"`
-	Docs    []string `json:"docs,omitempty"`
-	Card    string   `json:"card,omitempty"`
-	Path    string   `json:"path,omitempty"`
-	Content string   `json:"content,omitempty"`
-	Route   string   `json:"route,omitempty"`
-	// What create_payment_link asks for, as the record filled it in: the slot, the amount as the
-	// shortest decimal text of the number field's value (never a float, never rounded: converting
-	// it to the currency's smallest unit is the integration's, and refuses what doesn't fit), the
-	// currency, the text the payer reads, and the two fields the link and its id are written to.
-	Slot        string `json:"slot,omitempty"`
-	AmountField string `json:"amount_field,omitempty"`
-	Amount      string `json:"amount,omitempty"`
-	Currency    string `json:"currency,omitempty"`
-	// CurrencyField is the choice field the currency was read from, "" for the effect's own code: the
-	// live contract must still read it from the same place.
-	CurrencyField string `json:"currency_field,omitempty"`
-	Description   string `json:"description,omitempty"`
-	URLField      string `json:"url_field,omitempty"`
-	IDField       string `json:"id_field,omitempty"`
-	// Describes and DescribesID are what the description was filled with, as the approved contract
-	// states it (ContractLink): the fields it sends out as text, sorted, and whether it sends the
-	// record's id. When the entry runs they are checked against the live release's contract, so a
-	// release that no longer approves sending a field stops the entry that would still send it.
-	Describes   []string `json:"describes,omitempty"`
-	DescribesID bool     `json:"describes_id,omitempty"`
-	// Uses names the fields of the record whose values the templates were filled with, and their
-	// types then: what is shown of the entry is shown only while the live release still declares
-	// them so (usesHold), as a field the release removed or retyped is not for people to read.
-	Uses map[string]string `json:"uses,omitempty"`
+	SpaceID       int64             `json:"space_id,omitempty"`
+	BoardID       int64             `json:"board_id,omitempty"`
+	Column        string            `json:"column,omitempty"`
+	Title         string            `json:"title,omitempty"`
+	Body          string            `json:"body,omitempty"`
+	Docs          []string          `json:"docs,omitempty"`
+	Card          string            `json:"card,omitempty"`
+	Path          string            `json:"path,omitempty"`
+	Content       string            `json:"content,omitempty"`
+	Route         string            `json:"route,omitempty"`
+	Slot          string            `json:"slot,omitempty"`
+	AmountField   string            `json:"amount_field,omitempty"`
+	Amount        string            `json:"amount,omitempty"`
+	Currency      string            `json:"currency,omitempty"`
+	CurrencyField string            `json:"currency_field,omitempty"`
+	Description   string            `json:"description,omitempty"`
+	URLField      string            `json:"url_field,omitempty"`
+	IDField       string            `json:"id_field,omitempty"`
+	Describes     []string          `json:"describes,omitempty"`
+	DescribesID   bool              `json:"describes_id,omitempty"`
+	Uses          map[string]string `json:"uses,omitempty"`
 }
 
-// templatesOf lists the templates of the effect that its payload is filled from.
 func (e Effect) templatesOf() []string {
 	switch e.Kind {
 	case EffectCreateCard:
@@ -657,7 +548,6 @@ func (e Effect) templatesOf() []string {
 	return nil
 }
 
-// usedFields is the fields of c the effect's templates have holes for, with their types.
 func (e Effect) usedFields(c Collection) map[string]string {
 	var uses map[string]string
 	for _, tpl := range e.templatesOf() {
@@ -675,7 +565,6 @@ func (e Effect) usedFields(c Collection) map[string]string {
 		})
 	}
 	if e.Kind == EffectCreatePaymentLink {
-		// The amount and the currency are read from fields, not from a template.
 		for _, name := range []string{e.AmountField, e.CurrencyField} {
 			if f, ok := c.field(name); ok && name != "" {
 				if uses == nil {
@@ -688,8 +577,6 @@ func (e Effect) usedFields(c Collection) map[string]string {
 	return uses
 }
 
-// usesHold reports whether every field the entry was filled from is still declared by c with the
-// type it had.
 func (p payload) usesHold(c Collection) bool {
 	for name, typ := range p.Uses {
 		if f, ok := c.field(name); !ok || f.Type != typ {
@@ -699,12 +586,10 @@ func (p payload) usesHold(c Collection) bool {
 	return true
 }
 
-// applies reports whether the effect applies to the record as the change leaves it.
 func (e Effect) applies(c Collection, data map[string]any) bool {
 	return e.When == nil || c.holds(*e.When, data)
 }
 
-// payload fills in the effect from the record.
 func (e Effect) payload(c Collection, data map[string]any, id int64) payload {
 	p := payload{SpaceID: e.SpaceID, BoardID: e.BoardID, Card: e.Card, Route: e.Route, Uses: e.usedFields(c)}
 	switch e.Kind {
@@ -736,14 +621,9 @@ func (e Effect) payload(c Collection, data map[string]any, id int64) payload {
 	return p
 }
 
-// moneyOf is the amount and the currency a payment link of the record asks for: the amount as
-// decimal text ("" when the record has no number there), the currency as the effect's own code or
-// the record's choice (what the field holds, upper case; "" when it holds none). Neither is checked
-// here: what is wrong with them is the integration's to refuse, when the entry runs.
 func (e Effect) moneyOf(c Collection, data map[string]any) (amount, code string) {
 	if f, ok := c.field(e.AmountField); ok {
 		if v, set := data[e.AmountField]; set && ofType(f, v) {
-			// A JSON number only: text that reads like one is not an amount (nothing is guessed).
 			switch n := v.(type) {
 			case float64:
 				amount, _ = currency.Decimal(n)
@@ -765,8 +645,6 @@ func (e Effect) moneyOf(c Collection, data map[string]any) (amount, code string)
 	return amount, strings.ToUpper(code)
 }
 
-// describes is what the effect's description names: the fields, sorted, and whether it names the
-// record's id. It is what a contract states of the text sent out (ContractLink.Describes).
 func (e Effect) describes() (fields []string, id bool) {
 	fields = []string{}
 	_ = holes(e.Description, func(text string, isHole bool) error {

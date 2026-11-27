@@ -112,15 +112,12 @@ test('a server with email but no public address says why links are not emailed',
 })
 
 test("the invite form says the server doesn't email invites only when it read the server's email status", async () => {
-  // Read, and the server doesn't send links: said.
   for (const status of [{ configured: false } as MailStatus, mail(false)]) {
     cleanup()
     fakeFetch(routes(status, made({})))
     render(<SettingsPage me={me} workspace={admin} tab="members" />)
     expect(await screen.findByText(/This server doesn't email invites/)).toBeTruthy()
   }
-  // Not readable: an admin who doesn't run the server is refused the status, and nothing is said
-  // about the server's email, which may well work.
   for (const refusal of [
     { status: 403, body: { error: 'operators only' } },
     { status: 500, body: {} },
@@ -133,7 +130,6 @@ test("the invite form says the server doesn't email invites only when it read th
     await act(() => new Promise((resolve) => setTimeout(resolve, 20)))
     expect(screen.queryByText(/This server doesn't email invites/)).toBeNull()
   }
-  // And where it does send them, nothing is said either.
   cleanup()
   fakeFetch(routes(mail(true), made({})))
   render(<SettingsPage me={me} workspace={admin} tab="members" />)

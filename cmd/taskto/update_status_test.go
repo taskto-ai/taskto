@@ -10,7 +10,6 @@ import (
 	"taskto.ai/taskto/internal/updatestatus"
 )
 
-// public is the status the updater leaves for the server, as the server reads it.
 func (e *updEnv) public() updatestatus.Status {
 	e.t.Helper()
 	s, ok, err := updatestatus.Read(filepath.Join(e.state, "public"))
@@ -20,12 +19,9 @@ func (e *updEnv) public() updatestatus.Status {
 	return s
 }
 
-// An update leaves the server what it needs to show admins: the last run and change, the
-// version on record, and nothing of the updater's own state.
 func TestUpdateWritesTheStatusForTheServer(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
-	// Where the notification goes may hold a secret.
 	e.write("etc/update-notify-url", "https://hooks.example.com/notify-path-token\n")
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
@@ -42,7 +38,6 @@ func TestUpdateWritesTheStatusForTheServer(t *testing.T) {
 		t.Errorf("checked %v", s.Checked)
 	}
 
-	// A copy made for the server: one file, readable by it, and only what it shows.
 	dir := filepath.Join(e.state, "public")
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != 1 || entries[0].Name() != "status.json" {
@@ -61,7 +56,6 @@ func TestUpdateWritesTheStatusForTheServer(t *testing.T) {
 		}
 	}
 
-	// A quiet night changes the last run, and keeps the last change.
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -93,7 +87,6 @@ func TestUpdateStatusForTheServerSaysHoldAndChannel(t *testing.T) {
 	}
 }
 
-// A dry run changes nothing, the server's status included.
 func TestUpdateDryRunLeavesTheServersStatusAlone(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
@@ -105,7 +98,6 @@ func TestUpdateDryRunLeavesTheServersStatusAlone(t *testing.T) {
 	}
 }
 
-// A release that needs a person is said so, until it is done and the install moves on.
 func TestUpdateStatusForTheServerSaysAManualUpgradeIsWaiting(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "Needs a new disk.\n\nmanual-upgrade: true\n", false, false)
@@ -116,7 +108,6 @@ func TestUpdateStatusForTheServerSaysAManualUpgradeIsWaiting(t *testing.T) {
 	if s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindManualUpgrade || s.NeedsPerson.Code != "manual-upgrade" || s.LastRun.Code != "manual-upgrade" || s.LastRun.Result != "skipped" {
 		t.Fatalf("status = %+v, %+v", s.NeedsPerson, s.LastRun)
 	}
-	// The person did the steps and ran --to: nothing waits.
 	if code, _ := e.run("--to", updNew); code != 0 {
 		t.Fatal("--to didn't update")
 	}
@@ -125,7 +116,6 @@ func TestUpdateStatusForTheServerSaysAManualUpgradeIsWaiting(t *testing.T) {
 	}
 }
 
-// A changed worker firewall is a manual upgrade too.
 func TestUpdateStatusForTheServerSaysAFirewallChangeIsWaiting(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
@@ -138,8 +128,6 @@ func TestUpdateStatusForTheServerSaysAFirewallChangeIsWaiting(t *testing.T) {
 	}
 }
 
-// An update that stopped waits for a person: every night says so, and the server's status is
-// made again each time, until `taskto-update --clear-block`.
 func TestUpdateStatusForTheServerSaysAStopIsWaitingUntilItIsCleared(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
@@ -153,7 +141,6 @@ func TestUpdateStatusForTheServerSaysAStopIsWaitingUntilItIsCleared(t *testing.T
 		t.Fatalf("after a stop: %+v, %+v", s.NeedsPerson, s.LastRun)
 	}
 
-	// The next night is refused, and says so again, with the stop's own last run kept.
 	if err := os.Remove(filepath.Join(e.state, "public", "status.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +152,6 @@ func TestUpdateStatusForTheServerSaysAStopIsWaitingUntilItIsCleared(t *testing.T
 		t.Fatalf("a blocked night: %+v, %+v", s.NeedsPerson, s.LastRun)
 	}
 
-	// A person has put the old version back, and clears it.
 	e.setVersion(updOld)
 	e.setInstallVersion(updOld)
 	e.setRunning(updOld)
@@ -179,7 +165,6 @@ func TestUpdateStatusForTheServerSaysAStopIsWaitingUntilItIsCleared(t *testing.T
 	}
 }
 
-// A server that isn't the version on record is blocked, and the status says what to do.
 func TestUpdateStatusForTheServerSaysAVersionMismatchIsWaiting(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
@@ -194,11 +179,9 @@ func TestUpdateStatusForTheServerSaysAVersionMismatchIsWaiting(t *testing.T) {
 	}
 }
 
-// A status that can't be written for the server never changes what the run did.
 func TestUpdateWithoutAWritableServerStatusStillUpdates(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
-	// A file where its directory goes.
 	e.write("state/public", "in the way")
 	if code, out := e.run(); code != 0 || !strings.Contains(out, "can't write") {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -206,8 +189,6 @@ func TestUpdateWithoutAWritableServerStatusStillUpdates(t *testing.T) {
 	e.wantStatus("updated", "")
 }
 
-// The server is only given what the updater writes for it: compose.yaml mounts that one
-// directory, read-only, the safety check says so, and the server's side only reads.
 func TestServerReadsTheUpdaterStatusOnly(t *testing.T) {
 	compose := readRepoFile(t, "compose.yaml")
 	for _, want := range []string{
@@ -233,8 +214,6 @@ func TestServerReadsTheUpdaterStatusOnly(t *testing.T) {
 	}
 }
 
-// A pending manual upgrade stays while runs can't look at the releases (a hold, the channel
-// off): the steps weren't done. A run that looks and finds nothing in the way clears it.
 func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "Needs a new disk.\n\nmanual-upgrade: true\n", false, false)
@@ -244,7 +223,6 @@ func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
 	if s := e.public(); s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindManualUpgrade {
 		t.Fatalf("pending: %+v", s.NeedsPerson)
 	}
-	// On hold, the run exits before it looks at the releases.
 	e.write("etc/update.hold", "")
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
@@ -253,7 +231,6 @@ func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
 		s.NeedsPerson.Code != "manual-upgrade" || !s.Hold || s.LastRun.Result != "skipped" || s.LastRun.Code != "hold" {
 		t.Fatalf("on hold: %+v, %+v", s.NeedsPerson, s.LastRun)
 	}
-	// The same with the channel off.
 	if err := os.Remove(e.hold); err != nil {
 		t.Fatal(err)
 	}
@@ -264,8 +241,6 @@ func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
 	if s := e.public(); s.NeedsPerson == nil || s.Channel != "off" {
 		t.Fatalf("off: %+v", s.NeedsPerson)
 	}
-	// Back on, and nothing newer than what is installed (the person updated by hand, outside the
-	// updater's own log): a run that looks clears it.
 	e.write("etc/install.env", strings.Replace(e.read("etc/install.env"), "TASKTO_UPDATE_CHANNEL='off'\n", "", 1))
 	e.gh.releases = []map[string]any{}
 	if code, _ := e.run(); code != 0 {
@@ -276,14 +251,13 @@ func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
 	}
 }
 
-// A run that couldn't read the releases doesn't clear it either.
 func TestUpdateStatusForTheServerKeepsAManualUpgradeWhenTheReleasesCantBeRead(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "manual-upgrade: true\n", false, false)
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	e.gh.releases = nil // the fake answers `null`, which isn't a release list
+	e.gh.releases = nil
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -292,8 +266,6 @@ func TestUpdateStatusForTheServerKeepsAManualUpgradeWhenTheReleasesCantBeRead(t 
 	}
 }
 
-// The stop's own instructions, from the transaction, come before what an older run said, when
-// the blocked marker can't be read.
 func TestUpdateStatusForTheServerGivesTheCurrentReasonForAStop(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
@@ -304,7 +276,6 @@ func TestUpdateStatusForTheServerGivesTheCurrentReasonForAStop(t *testing.T) {
 	if err := os.Remove(filepath.Join(e.state, "blocked")); err != nil {
 		t.Fatal(err)
 	}
-	// An older, unrelated run is what the private status says.
 	e.write("state/status.json", `{"at":"2020-01-01T00:00:00Z","result":"up-to-date","reason":"an older run"}`)
 	if code, _ := e.run(); code != 1 {
 		t.Fatalf("exit %d, want 1", code)

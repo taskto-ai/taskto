@@ -10,23 +10,11 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// Records, their history and their deletion. A record is a row of the app's collection. Who
-// may read a record's history, or find it among the deleted, is who may read the record
-// (the read scope of their role in the app: all, or only the records they created); who may
-// restore it is who may change it (the modify scope), as for deleting. Whatever the caller
-// can't read is answered as if it didn't exist.
-
-// Limits of what the history and deleted routes answer in one reply.
 const (
-	// MaxHistory bounds the versions of one record in a reply: the newest ones.
 	MaxHistory = 200
-	// MaxListed bounds the records in a reply: the most recently changed live ones, or the
-	// most recently deleted ones.
-	MaxListed = 1000
+	MaxListed  = 1000
 )
 
-// Record is one record with its provenance. Data holds the fields the live release's collection
-// declares (as items do); the others stay in the row, unseen.
 type Record struct {
 	ID       int64          `json:"id"`
 	Revision int64          `json:"revision"`
@@ -38,37 +26,27 @@ type Record struct {
 	UpdatedAt     string  `json:"updated_at"`
 	UpdatedBy     *Author `json:"updated_by"`
 	UpdatedAction string  `json:"updated_action,omitempty"`
-	// DeletedAt is when the record was deleted, or nil if it is live.
 	DeletedAt     *string `json:"deleted_at"`
 	DeletedBy     *Author `json:"deleted_by"`
 	DeletedAction string  `json:"deleted_action,omitempty"`
 }
 
-// Version is one revision of a record, as its history lists it.
 type Version struct {
-	Revision int64 `json:"revision"`
-	// Operation is "insert", "update", "delete" or "restore".
+	Revision  int64          `json:"revision"`
 	Operation string         `json:"operation"`
 	Data      map[string]any `json:"data" apitypes:"json,nonnull"`
 	At        string         `json:"at"`
 	By        *Author        `json:"by"`
-	// Action is the app's action that made the change; empty for a restore.
-	Action string `json:"action,omitempty"`
-	// Synthetic marks the one entry of a record that existed before revisions were kept:
-	// its data is the record as it was then, and earlier states are unknown.
-	Synthetic bool `json:"synthetic,omitempty"`
+	Action    string         `json:"action,omitempty"`
+	Synthetic bool           `json:"synthetic,omitempty"`
 }
 
-// History is a record and its versions, newest first.
 type History struct {
-	Record  Record    `json:"record"`
-	History []Version `json:"history"`
-	// Truncated is whether older versions than MaxHistory were left out.
-	Truncated bool `json:"truncated"`
+	Record    Record    `json:"record"`
+	History   []Version `json:"history"`
+	Truncated bool      `json:"truncated"`
 }
 
-// Records is some of an app's records the caller may read: the live ones most recently
-// changed first, or the deleted ones most recently deleted first.
 type Records struct {
 	Records   []Record `json:"records"`
 	Truncated bool     `json:"truncated"`
@@ -88,8 +66,6 @@ const (
 	recordSelect = recordColumns + recordFrom
 )
 
-// scanRecord reads a record selected with recordSelect, and its creator, which decides who
-// reads it.
 func scanRecord(row scanner, def Definition) (Record, sql.NullInt64, error) {
 	var rec Record
 	var creator, updater, deleter sql.NullInt64
@@ -113,9 +89,6 @@ func scanRecord(row scanner, def Definition) (Record, sql.NullInt64, error) {
 	return rec, creator, nil
 }
 
-// readableRecords is what a caller may read of an app's records, for its history and its
-// deleted ones: ErrNotFound for an app they can't see, ErrForbidden if their roles read no
-// record at all.
 func (s *Service) readableRecords(ctx context.Context, sp access.Space, a Actor, appID int64) (visibility, Definition, error) {
 	if err := may(sp, access.Read); err != nil {
 		return visibility{}, Definition{}, err
@@ -131,8 +104,6 @@ func (s *Service) readableRecords(ctx context.Context, sp access.Space, a Actor,
 	if err != nil {
 		return visibility{}, Definition{}, err
 	}
-	// The fields shown are the live release's: what the app declares to people. An app with
-	// no release has no records to show.
 	var def Definition
 	if ap.liveDef != nil {
 		def = *ap.liveDef
@@ -140,7 +111,6 @@ func (s *Service) readableRecords(ctx context.Context, sp access.Space, a Actor,
 	return readable(acc, a.UserID), def, nil
 }
 
-// recordHistory returns record id of appID, deleted or not, and its versions.
 func (s *Service) recordHistory(ctx context.Context, sp access.Space, a Actor, appID, id int64) (History, error) {
 	v, def, err := s.readableRecords(ctx, sp, a, appID)
 	if err != nil {
@@ -189,7 +159,6 @@ func (s *Service) recordHistory(ctx context.Context, sp access.Space, a Actor, a
 	return out, nil
 }
 
-// listRecords lists the live records of appID that the caller may read, or the deleted ones.
 func (s *Service) listRecords(ctx context.Context, sp access.Space, a Actor, appID int64, deleted bool) (Records, error) {
 	v, def, err := s.readableRecords(ctx, sp, a, appID)
 	if err != nil {
@@ -226,10 +195,6 @@ func (s *Service) listRecords(ctx context.Context, sp access.Space, a Actor, app
 	return out, nil
 }
 
-// restoreRecord brings a deleted record back, with its history, as a new revision. It needs
-// the right to change the record (as deleting did). expected, if given, is the revision the
-// caller saw: the deletion's. A record that isn't deleted, or has moved on, is ErrConflict.
-// The record must still fit the collection, and the app have room for it.
 func (s *Service) restoreRecord(ctx context.Context, sp access.Space, a Actor, appID, id int64, expected *int64) (Record, error) {
 	if err := may(sp, access.Write); err != nil {
 		return Record{}, err
@@ -253,7 +218,7 @@ func (s *Service) restoreRecord(ctx context.Context, sp access.Space, a Actor, a
 		if ap.liveDef == nil {
 			return ErrNotPublished
 		}
-		def := *ap.liveDef // the record must fit what the app declares now
+		def := *ap.liveDef
 		var data string
 		var revision int64
 		var creator sql.NullInt64
@@ -273,15 +238,13 @@ func (s *Service) restoreRecord(ctx context.Context, sp access.Space, a Actor, a
 		}
 		if !deletedAt.Valid || (expected != nil && *expected != revision) {
 			e := &conflictError{id: id}
-			// A live record is shown as it is now, if the caller reads it. A deleted one is
-			// in no ordinary read, and the caller learns of it from the list of deleted ones.
 			if !deletedAt.Valid && readable(acc, a.UserID).sees(creator) {
 				e.current = item(def, Row{ID: id, Revision: revision, Data: fields})
 			}
 			return e
 		}
 		if err := def.Collection.Fits(fields); err != nil {
-			return err // the collection changed since: the record no longer fits it
+			return err
 		}
 		var count, size int
 		if err := tx.QueryRowContext(ctx, `SELECT count(*), coalesce(sum(length(CAST(data AS BLOB))), 0) FROM app_rows WHERE app_id = ? AND deleted_at IS NULL`, appID).

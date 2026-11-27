@@ -32,45 +32,34 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// fakePassword is obviously fake, and long enough.
 const fakePassword = "fake-test-password"
 
-// stack is the whole server, as cmd/taskto puts it together, with the MCP endpoint, and
-// people in it:
-//
-//   - workspace one: alice (admin), bob and carol. secret is a shared space only carol is
-//     in; team is one alice and bob edit.
-//   - workspace two: alice, alone.
 type stack struct {
-	// frozen, if set, is the time the apps go by; the real time otherwise.
 	frozen *time.Time
 	t      *testing.T
 	db     *sql.DB
 	h      http.Handler
-	dir    string // the data directory
-	// sched is the scheduler the boards' reminders are on; its worker isn't started.
-	sched *schedule.Service
-	one   int64
-	two   int64
+	dir    string
+	sched  *schedule.Service
+	one    int64
+	two    int64
 
 	alice, bob, carol  person
 	secret, team       int64
 	alicePrivate2      int64
 	alicePersonalBoard int64
 	setupToken, mcpURL string
-	// hooks run what a test sets at chosen moments of the database's use.
-	hooks *db.Hooks
+	hooks              *db.Hooks
 }
 
 type person struct {
 	id      int64
-	cookie  string // the browser's session
-	private int64  // their private space in one
+	cookie  string
+	private int64
 }
 
 func newStack(t *testing.T) *stack { return newStackWith(t, nil) }
 
-// newStackWith is newStack with the server's options changed by mod.
 func newStackWith(t *testing.T, mod func(*Options)) *stack {
 	t.Helper()
 	if mod == nil {
@@ -79,7 +68,6 @@ func newStackWith(t *testing.T, mod func(*Options)) *stack {
 	return newStackDB(t, func(o *Options, _ *sql.DB) { mod(o) })
 }
 
-// newStackDB is newStackWith with the stack's database given to mod too, for a service that needs it.
 func newStackDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
 	t.Helper()
 	ctx := context.Background()
@@ -101,14 +89,11 @@ func newStackDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
 	store := providers.NewStore(sqlDB, key)
 	index := search.New(sqlDB, kb, store, search.Options{})
 	spaces := access.New(sqlDB, nil)
-	// The scheduler and the boards' reminders, as the command sets them up: the handlers on the
-	// service the tools use, and the same scheduler given to the server for its HTTP routes.
 	boardSvc := boards.New(sqlDB, spaces)
 	sched := schedule.New(sqlDB, spaces, schedule.Options{})
 	if err := boardSvc.EnableReminders(sched); err != nil {
 		t.Fatal(err)
 	}
-	// The apps' clock, which a test may freeze (stack.frozen) to run the budget of tokens' actions.
 	var s *stack
 	clock := func() time.Time { return s.clockNow() }
 	tools := agenttools.New(agenttools.Options{
@@ -151,13 +136,11 @@ func newStackDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
 	s.team = s.sharedSpace("Team", s.bob)
 	s.alicePersonalBoard = s.scalar(`SELECT id FROM boards WHERE space_id = ?`, s.alice.private)
 
-	// A second workspace for alice, made as anyone who administers one may.
 	s.two = s.createWorkspace(s.alice.cookie, "Two")
 	s.alicePrivate2 = s.scalar(`SELECT id FROM spaces WHERE workspace_id = ? AND owner_id = ?`, s.two, s.alice.id)
 	return s
 }
 
-// invite adds a member to one, through an invite alice makes, and logs them in.
 func (s *stack) invite(email, name string) person {
 	s.t.Helper()
 	code, inv := s.browser(s.alice.cookie, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", s.one), map[string]any{"email": email})
@@ -173,8 +156,6 @@ func (s *stack) invite(email, name string) person {
 	return person{id: id(body["user"].(map[string]any)["id"]), cookie: sessionCookie(rec)}
 }
 
-// sharedSpace makes a shared space of one with editor as its only member besides alice,
-// who then leaves it unless editor is bob.
 func (s *stack) sharedSpace(name string, editor person) int64 {
 	s.t.Helper()
 	ws := fmt.Sprintf("/api/workspaces/%d/spaces", s.one)
@@ -195,8 +176,6 @@ func (s *stack) sharedSpace(name string, editor person) int64 {
 	return spaceID
 }
 
-// createWorkspace makes a workspace for the browser with cookie, which must be allowed to,
-// and returns its ID.
 func (s *stack) createWorkspace(cookie, name string) int64 {
 	s.t.Helper()
 	code, body := s.browser(cookie, http.MethodPost, "/api/workspaces", map[string]any{"name": name})
@@ -224,7 +203,6 @@ func (s *stack) scalar(q string, args ...any) int64 {
 
 func id(v any) int64 { return int64(v.(float64)) }
 
-// sameOrigin is a browser's same-origin request, with its session cookie if it has one.
 func sameOrigin(cookie string) func(*http.Request) {
 	return func(r *http.Request) {
 		r.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -234,7 +212,6 @@ func sameOrigin(cookie string) func(*http.Request) {
 	}
 }
 
-// bearer is a client with an access token: not a browser, so no Sec-Fetch-Site or Origin.
 func bearer(token string) func(*http.Request) {
 	return func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+token) }
 }
@@ -276,7 +253,6 @@ func decode(rec *httptest.ResponseRecorder) map[string]any {
 	return out
 }
 
-// browser makes a same-origin request with a session cookie.
 func (s *stack) browser(cookie, method, path string, body any) (int, map[string]any) {
 	s.t.Helper()
 	rec := s.request(method, path, body, sameOrigin(cookie))
@@ -286,14 +262,12 @@ func (s *stack) browser(cookie, method, path string, body any) (int, map[string]
 	return rec.Code, decode(rec)
 }
 
-// api makes a request with an access token.
 func (s *stack) api(token, method, path string, body any) (int, map[string]any) {
 	s.t.Helper()
 	rec := s.request(method, path, body, bearer(token))
 	return rec.Code, decode(rec)
 }
 
-// newToken makes an access token in workspace ws for the browser with cookie.
 func (s *stack) newToken(cookie string, ws int64, name string) (string, map[string]any) {
 	s.t.Helper()
 	code, body := s.browser(cookie, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/tokens", ws), map[string]any{"name": name})
@@ -303,8 +277,6 @@ func (s *stack) newToken(cookie string, ws int64, name string) (string, map[stri
 	return body["token"].(string), body
 }
 
-// tool calls a tool over MCP with token, as one stateless JSON-RPC request, and returns the
-// HTTP status, whether the tool refused, and its text.
 func (s *stack) tool(token, name string, args map[string]any) (int, bool, string) {
 	s.t.Helper()
 	msg, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -338,7 +310,6 @@ func (s *stack) tool(token, name string, args map[string]any) (int, bool, string
 	return rec.Code, reply.Result.IsError, reply.Result.Content[0].Text
 }
 
-// toolOK is tool for a call that must succeed, decoding its result.
 func (s *stack) toolOK(token, name string, args map[string]any) map[string]any {
 	s.t.Helper()
 	code, refused, text := s.tool(token, name, args)
@@ -356,8 +327,6 @@ func (s *stack) apps(ws, space int64) string {
 	return fmt.Sprintf("/api/workspaces/%d/spaces/%d/apps", ws, space)
 }
 
-// app makes the bundled example app in a space of one with a browser's session, with one
-// row, published, and returns its ID.
 func (s *stack) app(cookie string, space int64, row string) int64 {
 	s.t.Helper()
 	ex, err := apps.Examples()
@@ -369,7 +338,6 @@ func (s *stack) app(cookie string, space int64, row string) int64 {
 		s.t.Fatalf("create app = %d %v", code, a)
 	}
 	appID := id(a["id"])
-	// A new app is a draft: its owner publishes it (which makes it version 2) before it can be used.
 	if code, body := s.browser(cookie, http.MethodPost, fmt.Sprintf("%s/%d/publish", s.apps(s.one, space), appID), map[string]any{
 		"version": id(a["version"]), "acknowledge": []any{},
 	}); code != http.StatusOK {
@@ -388,9 +356,6 @@ func (s *stack) docs(ws, space int64) string {
 	return fmt.Sprintf("/api/workspaces/%d/spaces/%d/docs", ws, space)
 }
 
-// A token reaches what its user can in its workspace, and nothing else: not another user's
-// private space, not a shared space its user isn't in, not another workspace, over REST or
-// MCP.
 func TestTokensReachOnlyTheirUsersSpacesInTheirWorkspace(t *testing.T) {
 	s := newStack(t)
 	for _, sp := range []int64{s.carol.private, s.secret} {
@@ -408,7 +373,6 @@ func TestTokensReachOnlyTheirUsersSpacesInTheirWorkspace(t *testing.T) {
 	bob, _ := s.newToken(s.bob.cookie, s.one, "bob's agent")
 	alice, _ := s.newToken(s.alice.cookie, s.one, "alice's agent")
 
-	// Their own space works, over both.
 	if code, body := s.api(bob, http.MethodPut, s.docs(s.one, s.bob.private)+"/mine.md", map[string]any{"content": "# Mine\n"}); code != http.StatusCreated {
 		t.Fatalf("bob's token writes his own space = %d %v", code, body)
 	}
@@ -416,7 +380,6 @@ func TestTokensReachOnlyTheirUsersSpacesInTheirWorkspace(t *testing.T) {
 		t.Fatalf("read_doc = %v", res)
 	}
 
-	// Another user's private space, and a shared space bob isn't in.
 	for _, sp := range []int64{s.carol.private, s.secret} {
 		for _, path := range []string{s.docs(s.one, sp), s.docs(s.one, sp) + "/hidden.md", fmt.Sprintf("/api/workspaces/%d/spaces/%d/boards", s.one, sp)} {
 			if code, _ := s.api(bob, http.MethodGet, path, nil); code != http.StatusNotFound {
@@ -444,7 +407,6 @@ func TestTokensReachOnlyTheirUsersSpacesInTheirWorkspace(t *testing.T) {
 				t.Errorf("bob's token: %s in space %d = %d %v %q, want the error not found", call.name, sp, code, refused, text)
 			}
 		}
-		// Nor carol's app through bob's own space.
 		if _, refused, text := s.tool(bob, "list_app_rows", map[string]any{"space_id": s.bob.private, "app_id": carolApps[sp]}); !refused || text != "error: not found" {
 			t.Errorf("bob's token reads carol's app %d through his space: %q", carolApps[sp], text)
 		}
@@ -455,7 +417,6 @@ func TestTokensReachOnlyTheirUsersSpacesInTheirWorkspace(t *testing.T) {
 			t.Errorf("bob's token lists space %d", got)
 		}
 	}
-	// list_members says nothing about a space bob can't read, as for the spaces' own routes.
 	for _, sp := range []int64{s.carol.private, s.secret} {
 		if code, refused, text := s.tool(bob, "list_members", map[string]any{"space_id": sp}); !refused || text != "error: not found" {
 			t.Errorf("bob's token lists the members of space %d = %d %v %q", sp, code, refused, text)
@@ -468,7 +429,6 @@ func TestTokensReachOnlyTheirUsersSpacesInTheirWorkspace(t *testing.T) {
 		t.Errorf("bob's token finds %v", hits)
 	}
 
-	// Another workspace of the same user: alice is a member of two, her token is for one.
 	if code, _ := s.api(alice, http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces", s.two), nil); code != http.StatusNotFound {
 		t.Errorf("alice's token lists two's spaces = %d, want 404", code)
 	}
@@ -490,8 +450,6 @@ func TestTokensReachOnlyTheirUsersSpacesInTheirWorkspace(t *testing.T) {
 	}
 }
 
-// Revoking a token, its expiry, and its user leaving the workspace end it from the next
-// request, over REST and MCP, and it doesn't come back if they rejoin.
 func TestRevokedExpiredAndRemovedTokensFailAtOnce(t *testing.T) {
 	s := newStack(t)
 	spaces := fmt.Sprintf("/api/workspaces/%d/spaces", s.one)
@@ -522,13 +480,11 @@ func TestRevokedExpiredAndRemovedTokensFailAtOnce(t *testing.T) {
 	if !works(kept) {
 		t.Error("revoking one token ended another")
 	}
-	// Only its owner revokes a token.
 	_, carols := s.newToken(s.carol.cookie, s.one, "carol's")
 	if code, _ := s.browser(s.alice.cookie, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/tokens/%d", s.one, id(carols["id"])), nil); code != http.StatusNotFound {
 		t.Errorf("alice revokes carol's token = %d, want 404", code)
 	}
 
-	// Expiry: the token's time passes.
 	expiring, made := s.newToken(s.bob.cookie, s.one, "expiring")
 	if !works(expiring) {
 		t.Fatal("token doesn't work")
@@ -550,7 +506,6 @@ func TestRevokedExpiredAndRemovedTokensFailAtOnce(t *testing.T) {
 		t.Errorf("a token expiring tomorrow = %d %v", code, body)
 	}
 
-	// Leaving the workspace.
 	if !works(kept) {
 		t.Fatal("token doesn't work")
 	}
@@ -566,8 +521,6 @@ func TestRevokedExpiredAndRemovedTokensFailAtOnce(t *testing.T) {
 	}
 }
 
-// Its user's membership is checked on every request, besides tokens being dropped when
-// they leave.
 func TestTokensNeedTheirUsersMembership(t *testing.T) {
 	s := newStack(t)
 	token, _ := s.newToken(s.bob.cookie, s.one, "agent")
@@ -581,7 +534,6 @@ func TestTokensNeedTheirUsersMembership(t *testing.T) {
 	}
 }
 
-// The database keeps a token's SHA-256, never the token, and only creating it shows it.
 func TestTokensAreStoredHashed(t *testing.T) {
 	s := newStack(t)
 	token, made := s.newToken(s.bob.cookie, s.one, "agent")
@@ -601,7 +553,6 @@ func TestTokensAreStoredHashed(t *testing.T) {
 		strings.TrimPrefix(token, auth.AccessTokenPrefix)).Scan(&stored); err != nil || stored != 0 {
 		t.Fatalf("the token is in the database (%d, %v)", stored, err)
 	}
-	// It works, and is never shown again.
 	if code, _ := s.api(token, http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces", s.one), nil); code != http.StatusOK {
 		t.Fatalf("token = %d", code)
 	}
@@ -613,15 +564,11 @@ func TestTokensAreStoredHashed(t *testing.T) {
 	if len(list) != 1 || list[0].(map[string]any)["last_used_at"] == nil || list[0].(map[string]any)["name"] != "agent" {
 		t.Fatalf("list = %v, want the token with its last use", list)
 	}
-	// Another member doesn't see it.
 	if code, body := s.browser(s.carol.cookie, http.MethodGet, fmt.Sprintf("/api/workspaces/%d/tokens", s.one), nil); code != http.StatusOK || len(body["tokens"].([]any)) != 0 {
 		t.Fatalf("carol's list = %d %v", code, body)
 	}
 }
 
-// A token never logs in, sets up, accepts invites, manages members, spaces, providers or
-// tokens, or reaches any route that doesn't take one: 403, even with a session cookie
-// alongside. A token is alice's, an admin, so only the token can be why.
 func TestTokensCannotCreateTokensOrChangeTheAccount(t *testing.T) {
 	s := newStack(t)
 	token, made := s.newToken(s.alice.cookie, s.one, "agent")
@@ -654,8 +601,6 @@ func TestTokensCannotCreateTokensOrChangeTheAccount(t *testing.T) {
 		{http.MethodPut, fmt.Sprintf("%s/spaces/%d/search/embedding", ws, s.alice.private), map[string]any{}},
 		{http.MethodGet, ws + "/conversations", nil},
 		{http.MethodPost, ws + "/conversations", map[string]any{}},
-		// The apps' routes that build, publish, share or serve the web app itself take a session
-		// only; the ones that read an app and run its actions are in TestTokensUseTheAppsRoutes.
 		{http.MethodPost, s.apps(s.one, s.alice.private), map[string]any{"name": "x"}},
 	}
 	for _, withSession := range []bool{false, true} {
@@ -681,7 +626,6 @@ func TestTokensCannotCreateTokensOrChangeTheAccount(t *testing.T) {
 		t.Fatalf("members = %d %v", code, body)
 	}
 
-	// The routes that take one.
 	board := fmt.Sprintf("%s/spaces/%d/boards/%d", ws, s.alice.private, s.alicePersonalBoard)
 	for _, c := range []struct {
 		method, path string
@@ -706,7 +650,6 @@ func TestTokensCannotCreateTokensOrChangeTheAccount(t *testing.T) {
 	}
 }
 
-// Changes made with a token are the user's, marked with the token's name, over REST and MCP.
 func TestTokenChangesAreTheUsersMarkedWithTheToken(t *testing.T) {
 	s := newStack(t)
 	token, _ := s.newToken(s.alice.cookie, s.one, "laptop")
@@ -736,7 +679,6 @@ func TestTokenChangesAreTheUsersMarkedWithTheToken(t *testing.T) {
 			t.Errorf("%s by %v, want %v", what, by, want)
 		}
 	}
-	// Apps too, and their rows are read over MCP as the browser shows them.
 	appID := s.app(s.alice.cookie, s.alice.private, "coffee")
 	mcpApp := s.toolOK(token, "update_app", map[string]any{"space_id": s.alice.private, "app_id": appID, "version": 2, "name": "Spending"})
 	if by := mcpApp["updated_by"]; fmt.Sprint(by) != fmt.Sprint(want) {
@@ -750,15 +692,12 @@ func TestTokenChangesAreTheUsersMarkedWithTheToken(t *testing.T) {
 		t.Errorf("list_app_rows = %v", rows)
 	}
 
-	// The browser's own changes stay unmarked.
 	code, own := s.browser(s.alice.cookie, http.MethodPost, board, map[string]any{"title": "Mine"})
 	if by := own["created_by"].(map[string]any); code != http.StatusCreated || by["agent"] != false || by["via"] != nil {
 		t.Errorf("a browser's card by %v", by)
 	}
 }
 
-// The browser's CSRF protection is what it was: cross-site requests and non-JSON bodies are
-// refused with a session. A token doesn't get around it either, on /api or /mcp.
 func TestCSRFIsUnchanged(t *testing.T) {
 	s := newStack(t)
 	token, _ := s.newToken(s.alice.cookie, s.one, "agent")
@@ -813,7 +752,6 @@ func TestCSRFIsUnchanged(t *testing.T) {
 	}
 }
 
-// bearerTransport adds an access token to every request, as an MCP client's config does.
 type bearerTransport struct{ token string }
 
 func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -822,8 +760,6 @@ func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-// An MCP client (the official SDK's) connects, lists the tools, calls them, and is cut
-// off when its token is revoked.
 func TestMCPClient(t *testing.T) {
 	s := newStack(t)
 	token, made := s.newToken(s.alice.cookie, s.one, "client")
@@ -841,8 +777,6 @@ func TestMCPClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Every tool but the conversation agent's own (the browser's, whose hand-over to the user
-	// happens in a conversation).
 	defs := map[string]agenttools.Definition{}
 	for _, d := range agenttools.Definitions() {
 		if !d.ConversationOnly && !d.NoToken {
@@ -891,7 +825,6 @@ func TestMCPClient(t *testing.T) {
 	}
 }
 
-// /mcp without a token says how to get one, and never echoes what it was given.
 func TestMCPWithoutAToken(t *testing.T) {
 	s := newStack(t)
 	for _, token := range []string{"", auth.AccessTokenPrefix + "not-a-real-token-but-long-enough-xxxxxxxxxxxx", "a-session-token"} {

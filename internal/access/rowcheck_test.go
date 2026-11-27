@@ -8,7 +8,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// The check tells a space from one made later with its ID: by workspace and by creation time.
 func TestSpaceRowCheckTellsTheSameSpaceFromOneThatTookItsID(t *testing.T) {
 	ctx := context.Background()
 	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), db.FileName))
@@ -45,7 +44,6 @@ func TestSpaceRowCheckTellsTheSameSpaceFromOneThatTookItsID(t *testing.T) {
 	check(Space{ID: 7, WorkspaceID: 2, CreatedAt: old.CreatedAt}, false, "another workspace's space of the same ID")
 	check(Space{ID: 8, WorkspaceID: 1, CreatedAt: old.CreatedAt}, false, "another ID")
 
-	// The space is deleted and another takes its ID.
 	if _, err := sqlDB.Exec(`DELETE FROM spaces WHERE id = 7`); err != nil {
 		t.Fatal(err)
 	}

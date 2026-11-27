@@ -14,16 +14,6 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// The agent's app tools (docs/agent-tools.md) call the methods below. The agent works for
-// one user at a time, in that user's conversation, and has exactly that user's access:
-// each method checks a.UserID's access to the space through package access, as
-// RequireSpace does for a request, and their roles in the app through Checker.App. A space
-// or app the user can't read is ErrNotFound; a change the space doesn't let them make is
-// ErrReadOnly, and one their roles in the app don't is ErrForbidden. Changes are recorded as
-// a.UserID's, marked as the agent's when a.Agent is set. The agent has no tool to set roles,
-// and an app's definition holds none: it gains no authority by what it writes.
-
-// space returns spaceID as a's user sees it, or ErrNotFound.
 func (s *Service) space(ctx context.Context, a Actor, spaceID int64) (access.Space, error) {
 	sp, err := s.access.Check(ctx, a.UserID, spaceID)
 	if errors.Is(err, access.ErrNotFound) {
@@ -32,7 +22,6 @@ func (s *Service) space(ctx context.Context, a Actor, spaceID int64) (access.Spa
 	return sp, err
 }
 
-// ListApps lists a space's apps, the offline ones too if withArchived.
 func (s *Service) ListApps(ctx context.Context, a Actor, spaceID int64, withArchived bool) ([]App, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -41,8 +30,6 @@ func (s *Service) ListApps(ctx context.Context, a Actor, spaceID int64, withArch
 	return s.listApps(ctx, sp, a, withArchived)
 }
 
-// ShowApp returns an app with its draft, for the agent that edits it, and the live
-// release's number and needs but not its definition: both would be too much for one reply.
 func (s *Service) ShowApp(ctx context.Context, a Actor, spaceID, appID int64) (App, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -52,8 +39,6 @@ func (s *Service) ShowApp(ctx context.Context, a Actor, spaceID, appID int64) (A
 	return forAgent(ap), err
 }
 
-// AppIntegrations is the integrations the app's draft declares and where the approval of each
-// stands, for someone who may design or publish it (forbidden otherwise).
 func (s *Service) AppIntegrations(ctx context.Context, a Actor, spaceID, appID int64) (IntegrationStatus, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -62,8 +47,6 @@ func (s *Service) AppIntegrations(ctx context.Context, a Actor, spaceID, appID i
 	return s.integrationStatus(ctx, sp, a, appID)
 }
 
-// forAgent leaves out the live release's definition: the agent works on the draft, and a reply
-// holds one definition (MaxDefinitionSize), not two.
 func forAgent(ap App) App {
 	if ap.Live != nil {
 		live := *ap.Live
@@ -73,7 +56,6 @@ func forAgent(ap App) App {
 	return ap
 }
 
-// CreateApp saves a new app in a space.
 func (s *Service) CreateApp(ctx context.Context, a Actor, spaceID int64, na NewApp) (App, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -83,9 +65,6 @@ func (s *Service) CreateApp(ctx context.Context, a Actor, spaceID int64, na NewA
 	return forAgent(ap), err
 }
 
-// UpdateApp changes an app: ch.Version must be its current version, or ErrStale. A new
-// definition replaces the draft; the live release is not touched, and the agent has no way
-// to publish: that is for a person who may publish the app.
 func (s *Service) UpdateApp(ctx context.Context, a Actor, spaceID, appID int64, ch Changes) (App, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -95,9 +74,6 @@ func (s *Service) UpdateApp(ctx context.Context, a Actor, spaceID, appID int64, 
 	return forAgent(ap), err
 }
 
-// InstallTemplate makes a new app in a space from a bundled template: a draft, nothing
-// published, with the template's own role assignments for the user as installTemplate makes
-// them (a template's roles are its definition's, not something the agent chooses).
 func (s *Service) InstallTemplate(ctx context.Context, a Actor, spaceID int64, templateID string, in Install) (App, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -111,8 +87,6 @@ func (s *Service) InstallTemplate(ctx context.Context, a Actor, spaceID int64, t
 	return forAgent(ap), err
 }
 
-// DuplicateApp copies an app's definition into a new draft app, in the same space or another
-// of the workspace the user may write: no rows, roles, releases or secrets come with it.
 func (s *Service) DuplicateApp(ctx context.Context, a Actor, spaceID, appID int64, req DuplicateRequest) (App, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -125,8 +99,6 @@ func (s *Service) DuplicateApp(ctx context.Context, a Actor, spaceID, appID int6
 	return forAgent(ap), err
 }
 
-// ListEffects lists an app's effects (newest first) that the user may see: those of records
-// they may read, with the same view of what they made or why they failed as the API gives.
 func (s *Service) ListEffects(ctx context.Context, a Actor, spaceID, appID int64, f EffectFilter) (EffectList, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -135,8 +107,6 @@ func (s *Service) ListEffects(ctx context.Context, a Actor, spaceID, appID int64
 	return s.listEffects(ctx, sp, a, appID, f)
 }
 
-// ListReleases lists an app's releases, newest first, without their definitions, for a user
-// who may design or publish the app.
 func (s *Service) ListReleases(ctx context.Context, a Actor, spaceID, appID int64) ([]Release, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -145,8 +115,6 @@ func (s *Service) ListReleases(ctx context.Context, a Actor, spaceID, appID int6
 	return s.listReleases(ctx, sp, a, appID)
 }
 
-// AppRoles returns an app's role assignments, for a user who manages them. The agent only
-// reads them: there is no method here that sets them.
 func (s *Service) AppRoles(ctx context.Context, a Actor, spaceID, appID int64) ([]access.AppGrant, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -155,22 +123,11 @@ func (s *Service) AppRoles(ctx context.Context, a Actor, spaceID, appID int64) (
 	return s.appRoles(ctx, sp, a, appID)
 }
 
-// ListRows returns an app's rows as the app shows them (Items), oldest first: those the
-// user may read, which for a user who reads only their own records are theirs. An offline
-// app's rows are kept, so they are read too. An attachment field holds each attachment's
-// metadata, not its bytes.
 func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) ([]map[string]any, error) {
 	_, _, items, err := s.snapshotRows(ctx, a, spaceID, appID, nil)
 	return items, err
 }
 
-// snapshotRows reads an app and its rows as a's user may read them, all of one snapshot: the
-// space's access, the app's roles (and so the scope of the rows), the app, its live or draft
-// definition, the rows and their attachments' metadata. A demotion, a removal or a publish
-// that happens meanwhile is therefore either all in what comes back or not at all: never rows
-// of a scope the person no longer has, nor rows shaped by another release than the definition
-// that is returned. check, if set, is asked inside the snapshot, once the access is known, and
-// an error from it ends the read.
 func (s *Service) snapshotRows(ctx context.Context, a Actor, spaceID, appID int64, check func(ctx context.Context, tx *sql.Tx, sp access.Space, acc access.AppAccess) error) (App, access.AppAccess, []map[string]any, error) {
 	var ap App
 	var acc access.AppAccess
@@ -191,8 +148,6 @@ func (s *Service) snapshotRows(ctx context.Context, a Actor, spaceID, appID int6
 				return err
 			}
 		}
-		// The app and its rows are read asking for the app to be in this space: an app that
-		// moved before the snapshot began is ErrNotFound, never its rows read from the space it left.
 		if ap, err = app(ctx, tx, sp.ID, appID); err != nil {
 			return err
 		}
@@ -200,14 +155,11 @@ func (s *Service) snapshotRows(ctx context.Context, a Actor, spaceID, appID int6
 		if err != nil {
 			return err
 		}
-		// As the app shows them: by the live release (an unpublished app has no rows).
 		def := ap.draftDef
 		if ap.liveDef != nil {
 			def = *ap.liveDef
 		}
 		items = Items(def, rows)
-		// An attachment field shows what each attachment is (id, type, size, pixels), never its bytes:
-		// the agent has no tool to read or to upload a file.
 		return describeAttachments(ctx, tx, sp.ID, ap.ID, def, items)
 	})
 	if err != nil {
@@ -216,9 +168,6 @@ func (s *Service) snapshotRows(ctx context.Context, a Actor, spaceID, appID int6
 	return ap, acc, items, nil
 }
 
-// QueryRows is a page of an app's rows as the app shows them (Items), filtered, searched and
-// sorted, with the totals of everything that matches, for the rows the user may read (query.go).
-// An offline app's rows are kept, so they are read too.
 func (s *Service) QueryRows(ctx context.Context, a Actor, spaceID, appID int64, q Query) (RowsPage, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -239,37 +188,20 @@ func (s *Service) QueryRows(ctx context.Context, a Actor, spaceID, appID int64, 
 	return page, nil
 }
 
-// ActionInfo is one of an app's actions that change a record, as the agent is told of it.
 type ActionInfo struct {
-	Name string `json:"name"`
-	// Kind is "insert", "update" or "delete".
-	Kind string `json:"kind"`
-	// Allowed is whether the user's roles in the app let them run it: an insert is the right to
-	// submit records, an update or a delete the right to modify them (their own, or all).
-	Allowed bool `json:"allowed"`
-	// Effects are the kinds of what the action sets going once it has changed a record.
+	Name    string   `json:"name"`
+	Kind    string   `json:"kind"`
+	Allowed bool     `json:"allowed"`
 	Effects []string `json:"effects,omitempty"`
 }
 
-// ActionList is what an app's live release offers the agent to run, and what the user may do.
 type ActionList struct {
-	// Release is the live release's number.
-	Release int64 `json:"release"`
-	// Access is what the user may do in the app: their roles and capabilities.
-	Access access.AppAccess `json:"access"`
-	// Collection is the live release's: the fields an action's context may set.
-	Collection Collection   `json:"collection"`
-	Actions    []ActionInfo `json:"actions"`
+	Release    int64            `json:"release"`
+	Access     access.AppAccess `json:"access"`
+	Collection Collection       `json:"collection"`
+	Actions    []ActionInfo     `json:"actions"`
 }
 
-// Actions lists the actions of the app's live release that change a record (navigating changes
-// nothing), with whether the user may run each. Anyone who may open the app is told: its screens
-// say as much to them.
-//
-// What the user may do and the release are read apart, and a role revoked or a release published
-// between the two reads could pair one with the other: the access is read again after the
-// release, and the list is made only if it is the same (else all is read again), so what is
-// shown is what the user held while the release was read.
 func (s *Service) Actions(ctx context.Context, a Actor, spaceID, appID int64) (ActionList, error) {
 	for range actionsReads {
 		sp, err := s.space(ctx, a, spaceID)
@@ -305,10 +237,8 @@ func (s *Service) Actions(ctx context.Context, a Actor, spaceID, appID int64) (A
 	return ActionList{}, ErrStale
 }
 
-// actionsReads is how many times Actions reads again when what the user may do changes under it.
 const actionsReads = 3
 
-// actionList is what the live release of ap offers a user with access acc in space sp.
 func actionList(sp access.Space, acc access.AppAccess, ap App) ActionList {
 	def := *ap.liveDef
 	out := ActionList{Release: ap.Live.Number, Access: acc, Collection: def.Collection, Actions: []ActionInfo{}}
@@ -332,53 +262,26 @@ func actionList(sp access.Space, acc access.AppAccess, ap App) ActionList {
 	return out
 }
 
-// ActionRun is a request to run one of an app's actions that changes a record.
 type ActionRun struct {
-	Action string
-	// Context is what the action's button would send: the fields to set and, for an update or a
-	// delete, the row's "id".
-	Context map[string]any
-	// ExpectedRevision is the revision of the row the caller saw, for an update or a delete; if the
-	// row has moved on, nothing changes (ErrConflict).
+	Action           string
+	Context          map[string]any
 	ExpectedRevision *int64
-	// ExpectedRelease is the number of the live release the caller decided from (ActionList.Release),
-	// required: the action runs only if it is the live release when it runs (ErrReleaseOutdated
-	// otherwise), so what it does, its effects included, is what the caller was told. A retry under
-	// the same Operation names the release of the request it repeats.
-	ExpectedRelease int64
-	// Operation is the request's idempotency key (ClientAction.Operation).
-	Operation string
+	ExpectedRelease  int64
+	Operation        string
 }
 
-// ActionResult is what an action did. It names the record and its revision but carries no data:
-// whether the user may read the record is for the read tools to say.
 type ActionResult struct {
-	Action string `json:"action"`
-	Kind   string `json:"kind"`
-	// ID and Revision are the record's, after the change: a deleted record's revision is that of
-	// its deletion. Both are absent for a request already made under the same operation.
-	ID       int64 `json:"id,omitempty"`
-	Revision int64 `json:"revision,omitempty"`
-	// Changed is false for an update that left the record as it was: no new revision, no effects.
-	Changed bool `json:"changed"`
-	// Replayed is a request made before under the same operation, which changed nothing again.
-	Replayed bool `json:"replayed,omitempty"`
-	// EffectsQueued is how many effects the change set going, for the server to do afterwards.
-	EffectsQueued int `json:"effects_queued"`
+	Action        string `json:"action"`
+	Kind          string `json:"kind"`
+	ID            int64  `json:"id,omitempty"`
+	Revision      int64  `json:"revision,omitempty"`
+	Changed       bool   `json:"changed"`
+	Replayed      bool   `json:"replayed,omitempty"`
+	EffectsQueued int    `json:"effects_queued"`
 }
 
-// RunAction runs one of the live release's actions that change a record, as the user: the same
-// code as the action route (store.go, runChange), so the user's roles, the records they may
-// modify, the collection's rules, the locks of captured values, the record's history and the
-// action's effects are those of the web app. The agent sets no photo, signature or location (it
-// can't capture one): agentMaySet.
 func (s *Service) RunAction(ctx context.Context, a Actor, spaceID, appID int64, run ActionRun) (ActionResult, error) {
 	res, err := s.runAction(ctx, a, spaceID, appID, run)
-	// A request this user made before under the same operation and release, and that committed, is
-	// answered with its receipt even if their access has changed or the app has gone offline since
-	// (as the action route does, act): an agent that lost the answer must learn that it is in.
-	// The receipt names no record and carries no data; a request that did not commit is refused as
-	// it would be.
 	if err != nil && run.ExpectedRelease >= 1 &&
 		(errors.Is(err, ErrNotFound) || errors.Is(err, ErrReadOnly) || errors.Is(err, ErrForbidden) || errors.Is(err, ErrOffline)) {
 		action := ClientAction{
@@ -392,8 +295,6 @@ func (s *Service) RunAction(ctx context.Context, a Actor, spaceID, appID int64, 
 	return res, err
 }
 
-// actionReceipt is the answer to a request that committed before: it names the action and its kind
-// (from the release the request was made against) and says it was replayed, and no record.
 func (s *Service) actionReceipt(ctx context.Context, appID int64, run ActionRun) ActionResult {
 	receipt := ActionResult{Action: run.Action, Replayed: true}
 	if rel, err := loadRelease(ctx, s.db, appID, run.ExpectedRelease, true); err == nil && rel.Definition != nil {
@@ -425,8 +326,6 @@ func (s *Service) runAction(ctx context.Context, a Actor, spaceID, appID int64, 
 		return ActionResult{}, err
 	}
 	if err := s.spendTokenAction(a, sp.WorkspaceID); err != nil {
-		// A request that committed before is answered over the budget too, as a replay, for an
-		// agent that lost the answer; only a new operation is refused.
 		if IsRateLimited(err) && s.committed(ctx, sp.ID, a, appID, action) {
 			return s.actionReceipt(ctx, appID, run), nil
 		}
@@ -443,9 +342,6 @@ func (s *Service) runAction(ctx context.Context, a Actor, spaceID, appID int64, 
 	return res, nil
 }
 
-// agentMaySet refuses an action of the agent that sets a photo, a signature or a location: it
-// can read them, never capture one, so what it stores of them would be made up. Leaving them out
-// of an update keeps them as they were.
 func agentMaySet(def Definition, ch Change) error {
 	for name := range ch.Data {
 		f, _ := def.Collection.field(name)
@@ -457,7 +353,6 @@ func agentMaySet(def Definition, ch Change) error {
 	return nil
 }
 
-// RowsPage is QueryResult with its records as items.
 type RowsPage struct {
 	Rows       []map[string]any  `json:"rows"`
 	NextCursor *string           `json:"next_cursor"`
@@ -468,13 +363,11 @@ type RowsPage struct {
 //go:embed examples/*.json
 var examplesFS embed.FS
 
-// Example is a bundled app, to start from or learn the format.
 type Example struct {
 	Name       string     `json:"name"`
 	Definition Definition `json:"definition"`
 }
 
-// Examples returns the bundled example apps, each checked as a saved app is.
 func Examples() ([]Example, error) {
 	entries, err := examplesFS.ReadDir("examples")
 	if err != nil {
@@ -500,12 +393,8 @@ func Examples() ([]Example, error) {
 	return all, nil
 }
 
-// CatalogReference describes what an app may be made of, for the agent: the components
-// and their props, the functions, the field types and the actions.
 type CatalogReference struct {
-	Protocol string `json:"protocol"`
-	// Capabilities are what a definition may need (Definition.Requires), DefinitionVersion
-	// the version of its format.
+	Protocol          string                       `json:"protocol"`
 	DefinitionVersion int                          `json:"definition_version"`
 	Capabilities      []string                     `json:"capabilities"`
 	Components        map[string]map[string]string `json:"components"`
@@ -514,7 +403,6 @@ type CatalogReference struct {
 	Examples          []Example                    `json:"examples"`
 }
 
-// Reference returns the catalog's reference, with the bundled examples.
 func Reference() (CatalogReference, error) {
 	ex, err := Examples()
 	if err != nil {

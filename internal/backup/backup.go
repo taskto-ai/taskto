@@ -1,27 +1,3 @@
-// Package backup writes a consistent snapshot of the data directory to an archive, and
-// restores one.
-//
-// The archive is a tar, gzipped unless the caller asks for it plain (Options): a backup
-// program that deduplicates, such as restic, stores a plain tar's unchanged files once,
-// where every gzipped archive is new from the first change on. Its first entry is a
-// manifest (manifestName); then come the data directory's directories and files, by path
-// relative to it; the last entry (endName) counts them, so a restore notices an archive
-// cut short even without gzip's checksum. Every SQLite
-// database in it (the server's, the agent runtime's, any later one) is found by its file
-// header and copied with VACUUM INTO, which reads one transaction's view of the database
-// while the server keeps running: a live WAL database copied byte by byte can be torn.
-// Their -wal, -shm and -journal files are left out, since the copy already holds what
-// they had committed. Other files (the server key, the spaces' git repositories) are
-// copied as they are, except the files the server derives from the database at start
-// (derived), the cache of what can be downloaded again (cacheDir), and the lock file of
-// the server that runs on it. Sockets are skipped, and so are symbolic links, which a
-// restore would have to follow.
-//
-// A backup runs alongside the server, so it doesn't take the data directory's lock. A
-// restore takes it, so no server starts on the data directory while it is written.
-//
-// Each database is consistent on its own; two databases are copied one after the other,
-// so they can be a moment apart, as after a crash.
 package backup
 
 import (
@@ -44,80 +20,50 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite" // registers the "sqlite" driver
+	_ "modernc.org/sqlite"
 
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/lockfile"
 )
 
-// manifestName is the archive's first entry, and endName its last. Neither is a data
-// directory file, and a restore doesn't write them.
 const (
 	manifestName = "taskto-backup.json"
 	endName      = "taskto-backup-end.json"
 )
 
-// tmpPrefix starts the name of the directory, in the data directory, where Create makes
-// its snapshots. It is never backed up.
 const tmpPrefix = ".backup-"
 
-// derived are paths the server writes afresh from the database at every start, so a backup
-// leaves them out: the agent runtime's providers file and its key files, which hold the
-// provider accounts' API keys in clear (the database keeps them encrypted with server.key).
-// The providers feed's temporary files, named .tmp-*, are left out with them.
 var derived = []string{"agent/providers.json", "agent/keys"}
 
-// cacheDir is the data directory's cache: only what can be downloaded again, and is
-// checked when it is (dictation models, docs/dictation.md). A backup leaves it out, and a
-// restored server fills it again as it needs to.
 const cacheDir = "cache"
 
-// format is the archive layout's version. Format 1 was always gzipped and had no end
-// entry; format 2 has the end entry, and may be plain. A restore reads both, and refuses
-// others.
 const format = 2
 
-// gzipMagic starts every gzip stream.
 var gzipMagic = []byte{0x1f, 0x8b}
 
-// sqliteHeader starts every SQLite database file.
 var sqliteHeader = []byte("SQLite format 3\x00")
 
-// Manifest describes a backup.
 type Manifest struct {
-	Format int `json:"format"`
-	// Version is the version of the binary that made the backup.
-	Version string `json:"version"`
-	// Created is when the backup started, in UTC.
+	Format  int       `json:"format"`
+	Version string    `json:"version"`
 	Created time.Time `json:"created"`
 }
 
-// end is the archive's last entry: the number of entries between the manifest and it.
 type end struct {
 	Entries int `json:"entries"`
 }
 
-// Options are how Create writes the archive.
 type Options struct {
-	// Uncompressed writes a plain tar instead of a gzipped one, for a backup program that
-	// compresses and deduplicates what it stores (restic).
 	Uncompressed bool
 }
 
-// Result is what Create backed up.
 type Result struct {
 	Manifest
-	// Databases are the SQLite databases, by path relative to the data directory.
 	Databases []string
-	// Files is the number of other files.
-	Files int
-	// Skipped are the paths left out because they are symbolic links or other special
-	// files, but not sockets.
-	Skipped []string
+	Files     int
+	Skipped   []string
 }
 
-// Create writes a snapshot of dataDir to w, gzipped unless opts say otherwise. version is
-// the running binary's version, recorded in the manifest.
 func Create(ctx context.Context, dataDir, version string, w io.Writer, opts Options) (Result, error) {
 	res := Result{Manifest: Manifest{Format: format, Version: version, Created: time.Now().UTC().Truncate(time.Second)}}
 	info, err := os.Stat(dataDir)
@@ -127,17 +73,12 @@ func Create(ctx context.Context, dataDir, version string, w io.Writer, opts Opti
 	if !info.IsDir() {
 		return res, fmt.Errorf("data directory: %s is not a directory", dataDir)
 	}
-	// The snapshots are made in the data directory, which has room for its databases,
-	// rather than in a temporary directory that can be small or in memory.
-	// What a backup that was killed left behind goes first: it can be as large as the
-	// databases.
 	_ = CleanStale(dataDir)
 	tmp, err := os.MkdirTemp(dataDir, tmpPrefix)
 	if err != nil {
 		return res, err
 	}
 	defer os.RemoveAll(tmp)
-	// Held while the backup runs, so CleanStale leaves this directory alone.
 	lock, err := lockfile.Lock(filepath.Join(tmp, lockName))
 	if err != nil {
 		return res, err
@@ -149,7 +90,7 @@ func Create(ctx context.Context, dataDir, version string, w io.Writer, opts Opti
 		gz = gzip.NewWriter(w)
 	}
 	tw := tar.NewWriter(gz)
-	entries := 0 // written after the manifest, for the end entry
+	entries := 0
 	manifest, err := json.MarshalIndent(res.Manifest, "", "  ")
 	if err != nil {
 		return res, err
@@ -174,14 +115,12 @@ func Create(ctx context.Context, dataDir, version string, w io.Writer, opts Opti
 		}
 		name := filepath.ToSlash(rel)
 		if d.IsDir() && path.Dir(name) == "." && strings.HasPrefix(name, tmpPrefix) {
-			return filepath.SkipDir // this backup's snapshots, or a failed one's
+			return filepath.SkipDir
 		}
 		if name == StatusDir && d.IsDir() {
-			return filepath.SkipDir // the backup schedule's status: about this server, not data
+			return filepath.SkipDir
 		}
 		if name == manifestName || name == endName {
-			// Not the server's file, and its name is one of the archive's own: archiving it
-			// would make a backup that restore refuses. Reported, like other skipped files.
 			res.Skipped = append(res.Skipped, name)
 			if d.IsDir() {
 				return filepath.SkipDir
@@ -199,7 +138,7 @@ func Create(ctx context.Context, dataDir, version string, w io.Writer, opts Opti
 			entries++
 			return tw.WriteHeader(&tar.Header{Name: name + "/", Mode: 0o700, Typeflag: tar.TypeDir, ModTime: modTime(d)})
 		case t&fs.ModeSocket != 0:
-			return nil // the agent runtime's socket: the sidecar makes a new one
+			return nil
 		case !t.IsRegular():
 			res.Skipped = append(res.Skipped, name)
 			return nil
@@ -237,8 +176,6 @@ func Create(ctx context.Context, dataDir, version string, w io.Writer, opts Opti
 	if err != nil {
 		return res, err
 	}
-	// The end entry, written only once everything else is: an archive without it was cut
-	// short.
 	trailer, err := json.Marshal(end{Entries: entries})
 	if err != nil {
 		return res, err
@@ -255,12 +192,8 @@ func Create(ctx context.Context, dataDir, version string, w io.Writer, opts Opti
 	return res, gz.Close()
 }
 
-// staleAge is how old a backup's directory without a lock file must be before CleanStale
-// takes it for a leftover: a backup that has only just made it hasn't locked it yet.
 const staleAge = time.Hour
 
-// CleanStale removes what backups that were killed left in dataDir: their directories of
-// snapshots, which no running backup holds the lock of.
 func CleanStale(dataDir string) error {
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
@@ -276,18 +209,16 @@ func CleanStale(dataDir string) error {
 		_, err := os.Lstat(lockPath)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-			// No lock file: just made, or left by a version without one.
 			if info, err := e.Info(); err != nil || time.Since(info.ModTime()) < staleAge {
 				continue
 			}
 		case err != nil:
-			// Can't tell whether a backup holds it: leave it.
 			errs = append(errs, err)
 			continue
 		default:
 			lock, err := lockfile.Lock(lockPath)
 			if errors.Is(err, lockfile.ErrLocked) {
-				continue // a backup is running
+				continue
 			}
 			if err != nil {
 				errs = append(errs, err)
@@ -300,7 +231,6 @@ func CleanStale(dataDir string) error {
 	return errors.Join(errs...)
 }
 
-// nopCloser is a writer whose Close does nothing: the plain archive's stand-in for gzip.
 type nopCloser struct{ io.Writer }
 
 func (nopCloser) Close() error { return nil }
@@ -313,11 +243,8 @@ func modTime(d fs.DirEntry) time.Time {
 	return info.ModTime()
 }
 
-// fileMode is the mode a file is archived and restored with: owner-only, keeping whether
-// the owner may execute it (a git hook, say).
 func fileMode(perm fs.FileMode) fs.FileMode { return 0o600 | perm&0o100 }
 
-// journal reports whether p is a SQLite -wal, -shm or -journal file next to its database.
 func journal(p string) bool {
 	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 		if base, ok := strings.CutSuffix(p, suffix); ok {
@@ -329,7 +256,7 @@ func journal(p string) bool {
 }
 
 func isSQLite(p string) (bool, error) {
-	f, err := os.Open(p) // #nosec G304 -- a file in the data directory being backed up.
+	f, err := os.Open(filepath.Clean(p))
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
@@ -339,13 +266,11 @@ func isSQLite(p string) (bool, error) {
 	defer f.Close()
 	head := make([]byte, len(sqliteHeader))
 	if _, err := io.ReadFull(f, head); err != nil {
-		return false, nil // shorter than a header: not a database
+		return false, nil
 	}
 	return bytes.Equal(head, sqliteHeader), nil
 }
 
-// snapshot copies the database at src to dst with VACUUM INTO: a consistent copy, made
-// as one read transaction, so writers carry on meanwhile.
 func snapshot(ctx context.Context, src, dst string) error {
 	sqlDB, err := open(src)
 	if err != nil {
@@ -356,8 +281,6 @@ func snapshot(ctx context.Context, src, dst string) error {
 	return err
 }
 
-// open opens the database at p with only a busy timeout: its other settings (journal
-// mode and so on) are its owner's, and a backup or restore mustn't change them.
 func open(p string) (*sql.DB, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
@@ -367,11 +290,8 @@ func open(p string) (*sql.DB, error) {
 	return sql.Open("sqlite", u.String())
 }
 
-// addFile writes the file at src to tw as name, with d's time and mode. A file that
-// shrinks while it is read is an error; one that grows is copied up to the size it had
-// when opened.
 func addFile(tw *tar.Writer, name, src string, d fs.DirEntry) error {
-	f, err := os.Open(src) // #nosec G304 -- a file in the data directory, or our snapshot of one.
+	f, err := os.Open(filepath.Clean(src))
 	if err != nil {
 		return err
 	}
@@ -397,11 +317,6 @@ func addFile(tw *tar.Writer, name, src string, d fs.DirEntry) error {
 	return nil
 }
 
-// Restore writes the backup read from r, gzipped or plain, into dataDir, which must be
-// empty or not exist, and checks every database it restored. A format 2 archive must end
-// with its end entry, which counts the entries before it. Restore holds the data
-// directory's lock while it runs, so it fails if a server runs on dataDir, and no server
-// starts there until it is done. A restore that fails removes what it wrote.
 func Restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error) {
 	var m Manifest
 	if err := emptyDir(dataDir); err != nil {
@@ -412,12 +327,9 @@ func Restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 		return m, err
 	}
 	defer lock.Close()
-	// Again, now that no server can start: one may have started since the first check.
 	if err := emptyDir(dataDir); err != nil {
 		return m, err
 	}
-	// The directory was empty and is ours until the lock goes: whatever a failed restore
-	// wrote is removed, so the next attempt finds it empty again.
 	m, err = restore(ctx, r, dataDir)
 	if err != nil {
 		if clearErr := clearDir(dataDir); clearErr != nil {
@@ -427,7 +339,6 @@ func Restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 	return m, err
 }
 
-// clearDir removes everything in dir but the data directory's lock file.
 func clearDir(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -442,8 +353,6 @@ func clearDir(dir string) error {
 	return errors.Join(errs...)
 }
 
-// restore writes the backup read from r into dataDir, which Restore has checked is empty
-// and holds the lock of.
 func restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error) {
 	var m Manifest
 	root, err := os.OpenRoot(dataDir)
@@ -473,7 +382,6 @@ func restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 	case m.Format != 1 && m.Format != format:
 		return m, fmt.Errorf("backup format %d isn't supported by this version (it reads formats 1 to %d)", m.Format, format)
 	case m.Format == 1 && gz == nil:
-		// Format 1 was always gzipped, and has no end entry: plain, a cut couldn't be seen.
 		return m, errors.New("not a taskto.ai backup: a format 1 backup is gzipped")
 	}
 
@@ -506,8 +414,6 @@ func restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 		}
 		read++
 		name := strings.TrimSuffix(hdr.Name, "/")
-		// Only plain relative paths inside the data directory; os.Root also refuses any
-		// path that would leave it.
 		if !filepath.IsLocal(name) || path.Clean(name) != name || name == manifestName || name == endName || name == lockfile.DataDirName {
 			return m, fmt.Errorf("the backup has an unexpected path %q", hdr.Name)
 		}
@@ -534,9 +440,8 @@ func restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 	if m.Format >= 2 && !ended {
 		return m, errors.New("the backup is incomplete: its end is missing (was it cut short?)")
 	}
-	// The gzip trailer's checksum is only checked once the stream is read to its end.
 	if gz != nil {
-		if _, err := io.Copy(io.Discard, gz); err != nil { // #nosec G110 -- discarded, never stored.
+		if _, err := io.Copy(io.Discard, gz); err != nil {
 			return m, fmt.Errorf("read the backup: %w", err)
 		}
 	}
@@ -546,7 +451,6 @@ func restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 			return m, fmt.Errorf("restored database %s: %w", name, err)
 		}
 	}
-	// The server's own database: no login the backup held may come back (see endLogins).
 	if slices.Contains(databases, db.FileName) {
 		if err := endLogins(ctx, filepath.Join(dataDir, db.FileName)); err != nil {
 			return m, fmt.Errorf("end the restored logins: %w", err)
@@ -558,11 +462,6 @@ func restore(ctx context.Context, r io.Reader, dataDir string) (Manifest, error)
 	return m, nil
 }
 
-// forgetWorkerHistory marks the CLI workers' history of the restored server database at p as
-// unknown up to now (cli_worker_history, migration 0059). The backup's record says which workers
-// had run when it was made, not which ran since, while its accounts were still in use: a purge of
-// one of those accounts must wait for either worker to remove their files. A database from a
-// version without the record gets it when the server migrates it.
 func forgetWorkerHistory(ctx context.Context, p string) error {
 	sqlDB, err := open(p)
 	if err != nil {
@@ -573,39 +472,23 @@ func forgetWorkerHistory(ctx context.Context, p string) error {
 	if err := sqlDB.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'cli_worker_history'`).Scan(&n); err != nil || n == 0 {
 		return err
 	}
-	// Not before any restored account was made, whatever this host's clock says.
 	_, err = sqlDB.ExecContext(ctx, `INSERT INTO cli_worker_history (worker, since)
 		VALUES ('unknown', max(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), coalesce((SELECT max(created_at) FROM users), '')))
 		ON CONFLICT (worker) DO UPDATE SET since = max(since, excluded.since)`)
 	return err
 }
 
-// loginTables are the tables of the server's database that hold a bearer's way in, emptied
-// by a restore, in the order that leaves no row pointing at a deleted one: a push
-// subscription and its deliveries depend on a session.
-//
-// A server ends a login by deleting its row (signing out, a password change, revoking a
-// token, using a reset link or a challenge), so a backup made before that holds the row
-// still, and restoring it would bring the login back: a browser that kept its cookie after
-// its session was refused would be signed in again with no password. A restore can't tell
-// which rows were ended after the backup, so it ends them all. Tables a database from an
-// older version doesn't have yet are skipped.
-//
-// What a restore leaves, because it holds no revocation: invites (they expire, and use
-// needs the address's own account) and two-factor recovery codes and TOTP steps (the state
-// of the account as of the backup, like the password itself, which a restore also brings
-// back: a person who changed it since changes it again).
-var loginTables = []string{
-	"push_deliveries",
-	"push_subscriptions",
-	"sessions",
-	"access_tokens",
-	"password_resets",
-	"login_challenges",
+type loginTable struct{ name, clear string }
+
+var loginTables = []loginTable{
+	{"push_deliveries", `DELETE FROM push_deliveries`},
+	{"push_subscriptions", `DELETE FROM push_subscriptions`},
+	{"sessions", `DELETE FROM sessions`},
+	{"access_tokens", `DELETE FROM access_tokens`},
+	{"password_resets", `DELETE FROM password_resets`},
+	{"login_challenges", `DELETE FROM login_challenges`},
 }
 
-// endLogins deletes every row of loginTables in the restored server database at p, in one
-// transaction.
 func endLogins(ctx context.Context, p string) error {
 	sqlDB, err := open(p)
 	if err != nil {
@@ -619,23 +502,19 @@ func endLogins(ctx context.Context, p string) error {
 	defer func() { _ = tx.Rollback() }()
 	for _, table := range loginTables {
 		var n int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table.name).Scan(&n); err != nil {
 			return err
 		}
 		if n == 0 {
 			continue
 		}
-		// The names are constants of this file, never input.
-		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table); err != nil { // #nosec G202
-			return fmt.Errorf("%s: %w", table, err)
+		if _, err := tx.ExecContext(ctx, table.clear); err != nil {
+			return fmt.Errorf("%s: %w", table.name, err)
 		}
 	}
 	return tx.Commit()
 }
 
-// emptyDir makes dir if it doesn't exist, and fails if it isn't an empty directory, so
-// a restore never mixes with or overwrites existing data. The data directory's lock file
-// doesn't count: a restore that failed before writing anything leaves it.
 func emptyDir(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -668,8 +547,6 @@ func mkdirAll(root *os.Root, name string) error {
 	return err
 }
 
-// restoreFile writes one file of the backup with mode, and reports whether it is a
-// SQLite database. A path that already exists is an error: the archive repeats it.
 func restoreFile(root *os.Root, name string, mode fs.FileMode, r io.Reader) (isDB bool, err error) {
 	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
@@ -686,7 +563,6 @@ func restoreFile(root *os.Root, name string, mode fs.FileMode, r io.Reader) (isD
 	return bytes.Equal(head.b, sqliteHeader), nil
 }
 
-// prefix keeps the first want bytes written to it.
 type prefix struct {
 	want int
 	b    []byte
@@ -699,7 +575,6 @@ func (p *prefix) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// check runs SQLite's integrity check on a restored database.
 func check(ctx context.Context, p string) error {
 	sqlDB, err := open(p)
 	if err != nil {

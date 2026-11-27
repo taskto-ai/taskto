@@ -14,8 +14,6 @@ import (
 	"taskto.ai/taskto/internal/knowledge"
 )
 
-// failingKB fails the removal and the rewriting of the spaces it is told to, and notes every space it
-// was asked about.
 type failingKB struct {
 	Knowledge
 	mu      sync.Mutex
@@ -46,15 +44,13 @@ func (k *failingKB) AnonymizeAuthorsNoting(ctx context.Context, sp access.Space,
 	return k.Knowledge.AnonymizeAuthorsNoting(ctx, sp, emails, planned)
 }
 
-// A private space whose directory can't be removed doesn't keep the leaver's other private spaces
-// from being removed, and the account stays until all are gone.
 func TestOneStuckPrivateSpaceDoesNotStopTheRemovalOfTheOthers(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
 	ws2 := exec(t, w.db, `INSERT INTO workspaces (name) VALUES ('Second')`)
 	exec(t, w.db, `INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'member')`, ws2, w.leaver)
 	if n := w.count(`SELECT count(*) FROM spaces WHERE owner_id = ?`, w.leaver); n != 2 {
-		t.Fatalf("fixture: %d private spaces", n) // a membership makes its private space
+		t.Fatalf("fixture: %d private spaces", n)
 	}
 	kb := &failingKB{Knowledge: w.kb, failIDs: map[int64]bool{w.private.ID: true}}
 	w.svc.o.Knowledge = kb
@@ -74,8 +70,6 @@ func TestOneStuckPrivateSpaceDoesNotStopTheRemovalOfTheOthers(t *testing.T) {
 	}
 }
 
-// A shared repository that can't be rewritten doesn't keep the others' histories from being
-// anonymized, and the purge stays pending.
 func TestOneStuckSharedRepositoryDoesNotStopTheRewritingOfTheOthers(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -98,7 +92,6 @@ func TestOneStuckSharedRepositoryDoesNotStopTheRewritingOfTheOthers(t *testing.T
 	}
 }
 
-// movesApps fails FinishMoves for one space and notes the spaces it was asked about.
 type movesApps struct {
 	Apps
 	mu    sync.Mutex
@@ -116,8 +109,6 @@ func (a *movesApps) FinishMoves(ctx context.Context, space int64) error {
 	return a.Apps.FinishMoves(ctx, space)
 }
 
-// An app move that can't finish in one private space doesn't skip the others, and nothing is removed
-// until all are finished.
 func TestOneStuckAppMoveDoesNotSkipTheOtherPrivateSpaces(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -143,7 +134,6 @@ func TestOneStuckAppMoveDoesNotSkipTheOtherPrivateSpaces(t *testing.T) {
 	}
 }
 
-// hangingAgent never answers until its context ends.
 type hangingAgent struct{ conversations.Purger }
 
 func (hangingAgent) RetireConversation(context.Context, int64) error { return nil }
@@ -153,8 +143,6 @@ func (hangingAgent) PurgeConversation(ctx context.Context, _ int64) error {
 	return ctx.Err()
 }
 
-// A runtime that accepts a call and never answers fails the step at its deadline: it doesn't hold
-// the maintenance loop, and the step stays recorded.
 func TestASilentAgentRuntimeFailsTheStepAtItsDeadline(t *testing.T) {
 	w := newWorld(t)
 	w.svc.stepTimeout = 50 * time.Millisecond
@@ -177,9 +165,6 @@ func TestASilentAgentRuntimeFailsTheStepAtItsDeadline(t *testing.T) {
 	}
 }
 
-// A runtime that is not ready, because its sidecar keeps restarting, fails the step at the step's
-// deadline: the wait for it is inside the deadline, the step stays recorded and the steps after it
-// still run.
 func TestAnAgentRuntimeThatIsNeverReadyFailsTheStepAtItsDeadlineAndLaterStepsRun(t *testing.T) {
 	w := newWorld(t)
 	w.svc.stepTimeout = 50 * time.Millisecond
@@ -220,9 +205,6 @@ func TestAnAgentRuntimeThatIsNeverReadyFailsTheStepAtItsDeadlineAndLaterStepsRun
 	}
 }
 
-// A purge refuses every call on a private space it removed until the space's rows are gone, and
-// then forgets it: the database may give the same ID to a space made later (spaces' IDs aren't
-// kept apart from the rows'), and its documents must be writable.
 func TestAPurgedSpaceIDCanBeUsedAgain(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -239,9 +221,6 @@ func TestAPurgedSpaceIDCanBeUsedAgain(t *testing.T) {
 	}
 }
 
-// A write that had resolved a private space before its account was purged, and reaches the
-// knowledge base after the purge deleted the rows and forgot the removal, is refused by the
-// space's row and makes nothing: no directory, no repository.
 func TestAWriteThatResolvedASpaceBeforeThePurgeMakesNothingAfterIt(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -260,9 +239,6 @@ func TestAWriteThatResolvedASpaceBeforeThePurgeMakesNothingAfterIt(t *testing.T)
 	}
 }
 
-// The refusal of a removed space is lifted for the spaces whose row is gone, whatever the purge's
-// last step returned (a transaction that committed and failed to say so), and kept for one that is
-// still recorded.
 func TestForgetGoneLiftsTheRefusalOfSpacesWhoseRowIsGone(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)

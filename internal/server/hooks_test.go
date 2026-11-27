@@ -28,8 +28,6 @@ func hooksStack(t *testing.T) *stack {
 	})
 }
 
-// makeIntegration creates a Stripe integration in workspace ws as alice and returns its id and
-// its public id.
 func (s *stack) makeIntegration(ws int64, name, webhookSecret string) (int64, string) {
 	s.t.Helper()
 	code, body := s.browser(s.alice.cookie, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/integrations", ws), map[string]any{
@@ -61,8 +59,6 @@ func (s *stack) hook(publicID string, body []byte, secret string, at time.Time, 
 	return rec
 }
 
-// The route works through the whole server, outside /api: the CSRF guard and the account checks
-// don't touch it, a signature alone opens it, and nothing of workspaces is told by what it says.
 func TestTheWebhookRouteThroughTheServer(t *testing.T) {
 	s := hooksStack(t)
 	oneID, one := s.makeIntegration(s.one, "shop", testprovider.TestWebhookSecret)
@@ -79,8 +75,6 @@ func TestTheWebhookRouteThroughTheServer(t *testing.T) {
 		return s.scalar(`SELECT count(*) FROM integration_events WHERE integration_id = ?`, integration)
 	}
 
-	// An id that doesn't exist, and a signature that doesn't verify, are the same JSON 404: not the
-	// web app's page, which any other unknown path gets.
 	unknown := s.hook(strings.Repeat("a", 32), body, testprovider.TestWebhookSecret, now, nil)
 	wrong := s.hook(one, body, testprovider.OtherWebhookSecret, now, nil)
 	unsigned := s.hook(one, body, "", now, nil)
@@ -93,7 +87,6 @@ func TestTheWebhookRouteThroughTheServer(t *testing.T) {
 		}
 	}
 
-	// Workspace one's secret against workspace two's integration, and the other way: refused.
 	if rec := s.hook(two, body, testprovider.TestWebhookSecret, now, nil); rec.Code != http.StatusNotFound {
 		t.Errorf("workspace one's secret on workspace two's integration = %d", rec.Code)
 	}
@@ -104,8 +97,6 @@ func TestTheWebhookRouteThroughTheServer(t *testing.T) {
 		t.Fatal("a refused delivery stored an event")
 	}
 
-	// A signed delivery is accepted with no session, no origin headers and whatever cookie, and a
-	// browser's session never stands in for the signature.
 	for name, mod := range map[string]func(*http.Request){
 		"no cookie":         nil,
 		"another account's": func(r *http.Request) { r.Header.Set("Cookie", "taskto_session="+s.bob.cookie) },
@@ -132,7 +123,6 @@ func TestTheWebhookRouteThroughTheServer(t *testing.T) {
 		t.Errorf("the stored event is not a pending payment.expired: %d", got)
 	}
 
-	// Only POST is the route's: another method gets the app's own handling, and stores nothing.
 	r := httptest.NewRequest(http.MethodGet, integrations.HookPrefix+one, nil)
 	rec := httptest.NewRecorder()
 	s.h.ServeHTTP(rec, r)

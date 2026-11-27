@@ -15,80 +15,32 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// Drafts and releases.
-//
-// An app has one DRAFT, its definition as builders edit it (Changes.Definition, the agent's
-// update_app), and RELEASES: numbered, immutable copies of drafts that someone who may publish
-// the app published. The app serves its live release; editing the draft never changes it.
-// Publishing and rolling back are the two ways the live release changes, and both are the
-// publish capability's (access.CapPublish), the app's roles' and the space's alike: a builder
-// who can't publish, a user, a viewer, and anyone of another space are refused. Neither
-// changes a single row.
-//
-// Publish checks the draft against the catalog again and against the app's rows. A draft
-// whose collection would break data the live release shows is refused unless the request
-// acknowledges each such change by name, nothing more and nothing less (Publish.Acknowledge);
-// the answer names the changes (field and kind), never the rows or their values. Rollback
-// points the app at an earlier release and, when its collection is not the live one's, is
-// refused unless every row fits it; with the live collection nothing about the rows changes,
-// so there is no check, and the answer is the same whatever the rows hold.
-//
-// What a refusal says about the rows is only for those who read them all. For a publisher whose
-// read scope isn't "all", publish judges the draft by the two schemas alone: every change that
-// could affect a stored row is to be acknowledged, whether or not one does, so neither the
-// refusal nor its list of changes tells whether a row lacks a field or holds a value past a
-// bound (tightening a bound again and again would read the values out). A rollback by such a
-// publisher, which can't be judged without the rows, is refused unless the release's collection
-// is the live one's, and then it is never judged by them.
-//
-// A release records the capabilities its screen needs (Definition.Requires), so a
-// client that lacks one shows that it must update, and the version of the definition format.
-//
-// The rows are the app's, not a release's: a release only says how they are drawn and which
-// actions may change them. Actions name the release they were drawn from (see Service.act).
-
-// Release is one published definition of an app.
 type Release struct {
-	// Number is 1, 2, 3 … per app, never reused.
-	Number int64 `json:"number"`
-	// DefinitionVersion and Requires are those of its definition: what a client needs to draw it.
-	DefinitionVersion int      `json:"definition_version"`
-	Requires          []string `json:"requires" apitypes:"nonnull"`
-	PublishedAt       string   `json:"published_at"`
-	PublishedBy       *Author  `json:"published_by"`
-	// Live is whether the app serves it now; LiveSince is since when (publishing it, or rolling
-	// back to it).
-	Live      bool   `json:"live"`
-	LiveSince string `json:"live_since,omitempty"`
-	// Definition is in the reply that reads one release, and the live one of a single app's.
-	Definition *Definition `json:"definition,omitempty"`
+	Number            int64       `json:"number"`
+	DefinitionVersion int         `json:"definition_version"`
+	Requires          []string    `json:"requires" apitypes:"nonnull"`
+	PublishedAt       string      `json:"published_at"`
+	PublishedBy       *Author     `json:"published_by"`
+	Live              bool        `json:"live"`
+	LiveSince         string      `json:"live_since,omitempty"`
+	Definition        *Definition `json:"definition,omitempty"`
 }
 
 var (
-	// ErrNotPublished is for launching an app that has no release yet, or running its actions.
-	ErrNotPublished = errors.New("this app is not published yet: it has a draft, but no release to launch")
-	// ErrReleaseNotFound is for a release the app doesn't have.
-	ErrReleaseNotFound = errors.New("the app has no such release")
-	// ErrReleaseOutdated is for an action from a release the live one can't take.
-	ErrReleaseOutdated = errors.New("this screen is from an older release of the app: reload it")
-	// ErrReleaseIncompatible is for a rollback to a release the app's rows don't fit.
+	ErrNotPublished        = errors.New("this app is not published yet: it has a draft, but no release to launch")
+	ErrReleaseNotFound     = errors.New("the app has no such release")
+	ErrReleaseOutdated     = errors.New("this screen is from an older release of the app: reload it")
 	ErrReleaseIncompatible = errors.New("the app's data doesn't fit that release")
-	// ErrReleaseLive is for a rollback to the release that is already live.
-	ErrReleaseLive = errors.New("that release is already live")
-	// ErrNothingToPublish is for publishing a draft that is the live release.
-	ErrNothingToPublish = errors.New("the draft is the live release: there is nothing to publish")
-	// ErrMigration is for a publish whose acknowledged schema changes aren't exactly the
-	// changes it makes.
-	ErrMigration = errors.New("the schema changes aren't acknowledged")
+	ErrReleaseLive         = errors.New("that release is already live")
+	ErrNothingToPublish    = errors.New("the draft is the live release: there is nothing to publish")
+	ErrMigration           = errors.New("the schema changes aren't acknowledged")
 )
 
-// outdatedError is ErrReleaseOutdated, saying which releases.
 type outdatedError struct{ release, live int64 }
 
 func (e *outdatedError) Error() string        { return ErrReleaseOutdated.Error() }
 func (e *outdatedError) Is(target error) bool { return target == ErrReleaseOutdated }
 
-// incompatibleError is ErrReleaseIncompatible, naming the fields (never rows) that don't fit.
 type incompatibleError struct{ fields []string }
 
 func (e *incompatibleError) Error() string {
@@ -96,8 +48,6 @@ func (e *incompatibleError) Error() string {
 }
 func (e *incompatibleError) Is(target error) bool { return target == ErrReleaseIncompatible }
 
-// migrationError is ErrMigration: the changes the publish makes and needs acknowledged
-// (unacknowledged is true), or those acknowledged that it doesn't make.
 type migrationError struct {
 	unacknowledged bool
 	changes        []SchemaChange
@@ -111,56 +61,31 @@ func (e *migrationError) Error() string {
 }
 func (e *migrationError) Is(target error) bool { return target == ErrMigration }
 
-// The kinds of schema change a publish must acknowledge. Each is a change of a field against
-// the live release's collection that rows already stored are affected by: they would hold a
-// value the app no longer declares or no longer reads as before, or lack one it now requires.
 const (
-	// ChangeFieldRemoved: a declared field is gone and some row has a value for it. The value
-	// stays in the row, unseen, and comes back if the field is declared again.
-	ChangeFieldRemoved = "field_removed"
-	// ChangeFieldTypeChanged: a field's type changed and some row has a value for it.
-	ChangeFieldTypeChanged = "field_type_changed"
-	// ChangeFieldRequired: a field became required (or was added as required) and some row
-	// has no value for it.
-	ChangeFieldRequired = "field_required"
-	// ChangeFieldNarrowed: a field's limits (max_length, min, max), or a choice's options, now
-	// refuse a value some row has.
-	ChangeFieldNarrowed = "field_narrowed"
-	// ChangeFieldRequiredWhen: a field gained a conditional requirement, or its rule changed
-	// (required_when), and some row has no value for it where the new rule requires one.
+	ChangeFieldRemoved      = "field_removed"
+	ChangeFieldTypeChanged  = "field_type_changed"
+	ChangeFieldRequired     = "field_required"
+	ChangeFieldNarrowed     = "field_narrowed"
 	ChangeFieldRequiredWhen = "field_required_when"
 )
 
 var schemaChanges = []string{ChangeFieldRemoved, ChangeFieldTypeChanged, ChangeFieldRequired, ChangeFieldNarrowed, ChangeFieldRequiredWhen}
 
-// SchemaChange names one change of a field: its kind and the field.
 type SchemaChange struct {
 	Change string `json:"change"`
 	Field  string `json:"field"`
 }
 
-// Publish is a request to publish an app's draft.
 type Publish struct {
-	// Version is the app's version the client read the draft in: if the app changed since
-	// (the draft included), nothing is published (ErrStale), so what is published is what
-	// the publisher saw.
-	Version int64 `json:"version"`
-	// Acknowledge is the migration: the schema changes the draft makes that existing rows are
-	// affected by, which the publisher knows and accepts. It must be exactly the changes
-	// the server finds, each named by kind and field; the rows are never rewritten, and
-	// rows that don't fit are handled as Service.act and Items say. Empty when there are none.
+	Version     int64          `json:"version"`
 	Acknowledge []SchemaChange `json:"acknowledge"`
 }
 
-// Rollback is a request to make an earlier release the live one.
 type Rollback struct {
-	// Version is the app's version the client read.
 	Version int64 `json:"version"`
-	// Release is the number of the release to serve.
 	Release int64 `json:"release"`
 }
 
-// newRelease builds a release from its columns; the definition is left to the caller.
 func newRelease(number int64, version int, requires, at string, by sql.NullInt64, byName string) (Release, error) {
 	rel := Release{Number: number, DefinitionVersion: version, Requires: []string{}, PublishedAt: at, PublishedBy: author(by, byName, false, sql.NullString{})}
 	if err := json.Unmarshal([]byte(requires), &rel.Requires); err != nil {
@@ -172,8 +97,6 @@ func newRelease(number int64, version int, requires, at string, by sql.NullInt64
 	return rel, nil
 }
 
-// decodeDefinition reads a stored definition. One stored before definitions said their
-// version and needs has them filled in from version and requires (the release's columns).
 func decodeDefinition(text string, version int, requires []string) (Definition, error) {
 	var d Definition
 	if err := json.Unmarshal([]byte(text), &d); err != nil {
@@ -191,8 +114,6 @@ func decodeDefinition(text string, version int, requires []string) (Definition, 
 	return d, nil
 }
 
-// sameDefinition reports whether two definitions are the same in everything that matters,
-// whatever the order of their keys.
 func sameDefinition(a, b Definition) bool {
 	x, errA := json.Marshal(a)
 	y, errB := json.Marshal(b)
@@ -206,15 +127,10 @@ func sameDefinition(a, b Definition) bool {
 	return reflect.DeepEqual(vx, vy)
 }
 
-// sameCollection reports whether two collections are the same in how their rows are read and
-// written: the fields' names, types, options, limits and rules. What only changes how a value reads
-// to people (a choice's option_labels) is left out: it changes no row and no refusal, so a release
-// that differs by it alone is not a different collection.
 func sameCollection(a, b Collection) bool {
 	return sameDefinition(Definition{Collection: withoutPresentation(a)}, Definition{Collection: withoutPresentation(b)})
 }
 
-// withoutPresentation is c without the properties of its fields that are only for display.
 func withoutPresentation(c Collection) Collection {
 	c.Fields = slices.Clone(c.Fields)
 	for i := range c.Fields {
@@ -258,7 +174,6 @@ func scanRelease(row scanner, withDefinition bool) (Release, error) {
 	return rel, nil
 }
 
-// loadRelease returns release number of appID, or ErrReleaseNotFound.
 func loadRelease(ctx context.Context, q queryer, appID, number int64, withDefinition bool) (Release, error) {
 	col := `''`
 	if withDefinition {
@@ -271,7 +186,6 @@ func loadRelease(ctx context.Context, q queryer, appID, number int64, withDefini
 	return rel, err
 }
 
-// reviewer checks the caller may see what isn't live: the draft and the releases.
 func (s *Service) reviewer(ctx context.Context, sp access.Space, a Actor, appID int64) (access.AppAccess, error) {
 	if err := may(sp, access.Read); err != nil {
 		return access.AppAccess{}, err
@@ -286,7 +200,6 @@ func (s *Service) reviewer(ctx context.Context, sp access.Space, a Actor, appID 
 	return acc, nil
 }
 
-// listReleases lists an app's releases, the newest first, for who may design or publish it.
 func (s *Service) listReleases(ctx context.Context, sp access.Space, a Actor, appID int64) ([]Release, error) {
 	if _, err := s.reviewer(ctx, sp, a, appID); err != nil {
 		return nil, err
@@ -307,7 +220,6 @@ func (s *Service) listReleases(ctx context.Context, sp access.Space, a Actor, ap
 	return all, rows.Err()
 }
 
-// getRelease returns one release with its definition, for who may design or publish the app.
 func (s *Service) getRelease(ctx context.Context, sp access.Space, a Actor, appID, number int64) (Release, error) {
 	if _, err := s.reviewer(ctx, sp, a, appID); err != nil {
 		return Release{}, err
@@ -315,7 +227,6 @@ func (s *Service) getRelease(ctx context.Context, sp access.Space, a Actor, appI
 	return loadRelease(ctx, s.db, appID, number, true)
 }
 
-// screenOf picks the definition a surface is drawn from (Service.surface).
 func screenOf(ctx context.Context, q queryer, a App, acc access.AppAccess, which string) (Definition, error) {
 	switch which {
 	case "":
@@ -346,7 +257,6 @@ func screenOf(ctx context.Context, q queryer, a App, acc access.AppAccess, which
 	return *rel.Definition, nil
 }
 
-// publishApp makes the draft a new release and the live one.
 func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appID int64, req Publish) (App, error) {
 	if err := may(sp, access.Write); err != nil {
 		return App{}, err
@@ -370,8 +280,6 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 		if err != nil {
 			return err
 		}
-		// What the draft's effects target is the publisher's to use, checked as of now, with the
-		// write lock held (only a publisher gets here: the draft is not theirs to read otherwise).
 		if unset := cur.draftDef.unsetTargets(); len(unset) > 0 {
 			return unsetError(unset)
 		}
@@ -381,13 +289,10 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 		if cur.Version != req.Version {
 			return ErrStale
 		}
-		// The draft is checked again, as it was when it was saved: the catalog may have changed.
 		checked, err := cur.draftDef.Check()
 		if err != nil {
 			return err
 		}
-		// Every integration the release declares needs an admin's approval of its contract, as it
-		// stands in the release (integration_approvals.go).
 		if err := s.checkApprovals(ctx, tx, appID, checked); err != nil {
 			return err
 		}
@@ -398,7 +303,6 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 			}
 			base = &cur.liveDef.Collection
 		}
-		// A publisher who doesn't read every row is judged by the schemas alone.
 		blind := acc.ReadRecords != access.ScopeAll
 		var rows []Row
 		if !blind {
@@ -445,8 +349,6 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 	return published, nil
 }
 
-// rollbackApp points the app at an earlier release, if every row fits its collection. It
-// leaves the rows and the draft as they are.
 func (s *Service) rollbackApp(ctx context.Context, sp access.Space, a Actor, appID int64, req Rollback) (App, error) {
 	if err := may(sp, access.Write); err != nil {
 		return App{}, err
@@ -480,23 +382,14 @@ func (s *Service) rollbackApp(ctx context.Context, sp access.Space, a Actor, app
 		if cur.Live != nil && cur.Live.Number == target.Number {
 			return ErrReleaseLive
 		}
-		// An earlier release's effects are the one who makes it live's to use, as at publishing.
 		if err := s.checkEffectTargets(ctx, sp.WorkspaceID, a, *target.Definition); err != nil {
 			return err
 		}
-		// And so is the approval of what it asks of integrations: an earlier release's contract may
-		// never have been approved, or have been revoked since.
 		if err := s.checkApprovals(ctx, tx, appID, *target.Definition); err != nil {
 			return err
 		}
-		// A release with the live release's collection changes nothing about how the rows are
-		// read or written, so there is nothing to check and nothing to tell: the answer is the
-		// same whatever the rows hold (rows may misfit the live collection, after a publish that
-		// acknowledged it, and a refusal here would tell which, one rollback at a time).
 		if cur.liveDef == nil || !sameCollection(cur.liveDef.Collection, target.Definition.Collection) {
 			if acc.ReadRecords != access.ScopeAll {
-				// Whether the rows fit a different collection is theirs to learn only if they
-				// read them all.
 				return forbidden(capReadRecords)
 			}
 			rows, err := loadRows(ctx, tx, appID, everything)
@@ -526,9 +419,6 @@ func (s *Service) rollbackApp(ctx context.Context, sp access.Space, a Actor, app
 	return rolled, nil
 }
 
-// misfits returns the names of the fields of c that some row doesn't fit (a required value
-// missing, or one of the wrong type or outside the limits), in the order c declares them: no
-// row and no value is named.
 func misfits(c Collection, rows []Row) []string {
 	var bad []string
 	for _, f := range c.Fields {
@@ -539,18 +429,11 @@ func misfits(c Collection, rows []Row) []string {
 	return bad
 }
 
-// holds reports whether the row has a value for name.
 func holds(r Row, name string) bool {
 	v, ok := r.Data[name]
 	return ok && v != nil
 }
 
-// breakingChanges works out what publishing a collection next over the live one (nil before
-// the first release) does to the rows stored, as the kinds of SchemaChange, sorted by field.
-// Only a field that differs from the live release's is looked at, and only a row that is
-// affected counts: a change nothing stored is touched by is free. Blind, for a publisher who
-// doesn't read every row, rows are not looked at: every change that could affect one counts,
-// so the answer is the same whatever the rows hold.
 func breakingChanges(live *Collection, next Collection, rows []Row, blind bool) []SchemaChange {
 	if live == nil {
 		return nil
@@ -565,12 +448,7 @@ func breakingChanges(live *Collection, next Collection, rows []Row, blind bool) 
 			}
 			continue
 		}
-		// A retyped field is still judged for what it now requires; its limits, of another
-		// type, are not compared.
 		retyped := nf.Type != was.Type
-		// A field that becomes a location or a signature is a change whether or not a row has a value:
-		// what it takes from then on is locked once stored, and what was pending for what it was (a photo
-		// waiting to be saved) is not a signature, which the publisher says by acknowledging it.
 		intoEvidence := retyped && (nf.Type == TypeLocation || nf.Type == TypeSignature)
 		if retyped && (intoEvidence || anyRow(func(r Row) bool { return holds(r, was.Name) })) {
 			out = append(out, SchemaChange{ChangeFieldTypeChanged, was.Name})
@@ -589,9 +467,6 @@ func breakingChanges(live *Collection, next Collection, rows []Row, blind bool) 
 		})) {
 			out = append(out, SchemaChange{ChangeFieldNarrowed, was.Name})
 		}
-		// A conditional requirement that is new or changed. Judged blind, it counts whenever the
-		// rule differs; otherwise only if some row would now be refused that the live release
-		// didn't refuse.
 		if !nf.Required && nf.RequiredWhen != nil && !sameRule(nf.RequiredWhen, was.RequiredWhen) && anyRow(func(r Row) bool {
 			return !holds(r, was.Name) && next.requires(nf, r.Data) && !live.requires(was, r.Data)
 		}) {
@@ -618,8 +493,6 @@ func breakingChanges(live *Collection, next Collection, rows []Row, blind bool) 
 	return out
 }
 
-// narrower reports whether field next, of the same type as was, refuses some value was takes:
-// a shorter max_length, or a min or max that is new or tighter.
 func narrower(was, next Field) bool {
 	length := func(f Field) int {
 		if f.MaxLength == 0 {
@@ -640,7 +513,6 @@ func narrower(was, next Field) bool {
 	if was.Type == TypeAttachment && next.MaxFiles < was.MaxFiles {
 		return true
 	}
-	// A barcode field that now reads one format only, or another, refuses codes it took.
 	if was.Type == TypeBarcode && next.Format != "" && next.Format != was.Format {
 		return true
 	}
@@ -650,8 +522,6 @@ func narrower(was, next Field) bool {
 	return next.Max != nil && (was.Max == nil || *next.Max < *was.Max)
 }
 
-// checkAcknowledge refuses an acknowledgement that is malformed: an unknown kind, a field
-// that is no field name, or the same change twice.
 func checkAcknowledge(list []SchemaChange) error {
 	seen := map[SchemaChange]bool{}
 	for _, c := range list {
@@ -664,8 +534,6 @@ func checkAcknowledge(list []SchemaChange) error {
 	return nil
 }
 
-// acknowledged checks that the acknowledged changes are exactly the changes made: one found
-// and not acknowledged, or acknowledged and not found, is refused.
 func acknowledged(found, ack []SchemaChange) error {
 	var missing, extra []SchemaChange
 	for _, c := range found {
@@ -687,12 +555,6 @@ func acknowledged(found, ack []SchemaChange) error {
 	return nil
 }
 
-// liveTakes reports whether the live release can take an action of the release from, which
-// is not the live one (Service.act): the live release declares the same action (its kind and
-// the screens it opens: whatever it sets going besides the change, its effects, is always the
-// live release's, so a release that only changed those takes the older screens' actions), every
-// field the action sets is one it declares with the same type, and an insert gives every field it
-// requires.
 func liveTakes(live, from Definition, name string, ch Change) bool {
 	la, ok := live.Actions[name]
 	if !ok {

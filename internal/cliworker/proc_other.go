@@ -4,7 +4,6 @@ package cliworker
 
 import "os/exec"
 
-// CLI workers need process groups: Unix only.
 const supported = false
 
 type signal int

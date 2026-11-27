@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// serve starts a server on h and returns its address.
 func serve(t *testing.T, h http.Handler) (*http.Server, string) {
 	t.Helper()
 	ln, err := new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -33,7 +32,6 @@ func get(addr string) {
 	}
 }
 
-// A handler that is running when the server is closed is waited for, and its context ends.
 func TestShutdownWaitsForARunningHandlerAndEndsItsContext(t *testing.T) {
 	tr := New()
 	started := make(chan struct{})
@@ -41,7 +39,7 @@ func TestShutdownWaitsForARunningHandlerAndEndsItsContext(t *testing.T) {
 	srv, addr := serve(t, tr.Handler(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		close(started)
 		<-r.Context().Done()
-		time.Sleep(200 * time.Millisecond) // cleanup that takes a while
+		time.Sleep(200 * time.Millisecond)
 		finished.Store(true)
 	})))
 	go get(addr)
@@ -55,7 +53,6 @@ func TestShutdownWaitsForARunningHandlerAndEndsItsContext(t *testing.T) {
 	}
 }
 
-// A handler that never returns is given up on, and said to be.
 func TestShutdownReportsAHandlerThatNeverReturns(t *testing.T) {
 	tr := New()
 	started, release := make(chan struct{}), make(chan struct{})
@@ -77,13 +74,12 @@ func TestShutdownReportsAHandlerThatNeverReturns(t *testing.T) {
 	}
 }
 
-// After Stop a request is refused before it reaches the handler.
 func TestStoppedTrackerRefusesRequests(t *testing.T) {
 	tr := New()
 	var calls atomic.Int32
 	h := tr.Handler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
 	tr.Stop()
-	tr.Stop() // more than once is fine
+	tr.Stop()
 
 	rec := &recorder{}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)

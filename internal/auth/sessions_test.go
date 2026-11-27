@@ -21,7 +21,6 @@ type sessionList struct {
 	Sessions []Session `json:"sessions"`
 }
 
-// loginAs logs email in as a new browser with the given User-Agent.
 func (e *env) loginAs(email, password, userAgent string) *client {
 	e.t.Helper()
 	c := e.client()
@@ -52,7 +51,6 @@ func TestParseUserAgent(t *testing.T) {
 			t.Errorf("parseUserAgent(%q) = %q, %q; want %q, %q", tc.ua, b, o, tc.browser, tc.os)
 		}
 	}
-	// A huge header isn't read past its limit.
 	if b, _ := parseUserAgent(strings.Repeat("x", 5000) + "Firefox/1"); b != "" {
 		t.Errorf("read a User-Agent past its limit: %q", b)
 	}
@@ -88,7 +86,6 @@ func TestSessionsListShowsDeviceAndMarksTheCurrentOne(t *testing.T) {
 	if current != 1 || !sawPhone {
 		t.Fatalf("current = %d, phone listed = %v: %+v", current, sawPhone, list)
 	}
-	// From the phone, the phone is the current one.
 	for _, x := range e.sessionsOf(phone) {
 		if x.Current != (x.Browser == "Safari") {
 			t.Fatalf("the phone's own list marks the wrong session: %+v", x)
@@ -108,7 +105,6 @@ func TestSessionsNeverReturnTokensOrAddresses(t *testing.T) {
 			t.Fatalf("the list has a %q field: %s", field, body)
 		}
 	}
-	// What is stored of the device is the two names, nothing of the header or the address.
 	r := owner.req(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword})
 	r.Header.Set("User-Agent", firefoxMac)
 	expect(t, owner.send(r), http.StatusOK)
@@ -144,7 +140,7 @@ func TestExpiredSessionsAreNotListed(t *testing.T) {
 	e.setup()
 	e.advance(30 * time.Minute)
 	laptop := e.loginAs("owner@example.com", ownerPassword, firefoxMac)
-	e.advance(31 * time.Minute) // the first session is over, the second isn't
+	e.advance(31 * time.Minute)
 	list := e.sessionsOf(laptop)
 	if len(list) != 1 || !list[0].Current {
 		t.Fatalf("want only the live session: %+v", list)
@@ -164,10 +160,8 @@ func TestRevokeOneSession(t *testing.T) {
 		}
 	}
 	expect(t, laptop.do(http.MethodDelete, fmt.Sprintf("/api/me/sessions/%s", phoneID), nil), http.StatusNoContent)
-	// The phone is signed out at once; the laptop isn't.
 	expect(t, phone.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 	expect(t, laptop.do(http.MethodGet, "/api/me", nil), http.StatusOK)
-	// Twice is a 404, not a second success.
 	rec := laptop.do(http.MethodDelete, fmt.Sprintf("/api/me/sessions/%s", phoneID), nil)
 	expect(t, rec, http.StatusNotFound)
 	if !strings.Contains(rec.Body.String(), `"session_not_found"`) {
@@ -211,8 +205,6 @@ func TestRevokeOtherSessionsKeepsTheCurrentOne(t *testing.T) {
 	}
 }
 
-// Another user's sessions can be neither read, nor revoked one by one, nor swept up by "all
-// others": every route acts on the caller's own.
 func TestSessionsAreTheCallersOwnOnly(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
@@ -224,7 +216,6 @@ func TestSessionsAreTheCallersOwnOnly(t *testing.T) {
 		t.Fatalf("owner %+v, alice %+v", ownerList, aliceList)
 	}
 
-	// Alice names the owner's session: not found, as if it never existed, and it stays.
 	rec := alice.do(http.MethodDelete, fmt.Sprintf("/api/me/sessions/%s", ownerList[0].ID), nil)
 	expect(t, rec, http.StatusNotFound)
 	if !strings.Contains(rec.Body.String(), `"session_not_found"`) {
@@ -232,13 +223,11 @@ func TestSessionsAreTheCallersOwnOnly(t *testing.T) {
 	}
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 
-	// Alice's "sign out the others" leaves the owner's session alone.
 	alice2 := e.loginAs("alice@example.com", otherPassword, firefoxMac)
 	expect(t, alice2.do(http.MethodDelete, "/api/me/sessions", nil), http.StatusOK)
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 	expect(t, alice.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 
-	// Alice's list holds nobody else's.
 	for _, x := range e.sessionsOf(alice2) {
 		if x.ID == ownerList[0].ID {
 			t.Fatal("alice sees the owner's session")
@@ -266,13 +255,11 @@ func TestSessionRoutesNeedALoginAndRefuseTokens(t *testing.T) {
 		r.Header.Set("Authorization", "Bearer "+token)
 		expect(t, c.send(r), http.StatusForbidden)
 	}
-	// Still all there.
 	if n := len(e.sessionsOf(owner)); n != 1 {
 		t.Fatalf("sessions = %d", n)
 	}
 }
 
-// Revoking a session takes its device's push subscriptions with it.
 func TestRevokingASessionEndsItsPushSubscriptions(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
@@ -297,8 +284,6 @@ func TestRevokingASessionEndsItsPushSubscriptions(t *testing.T) {
 	}
 }
 
-// Signing sessions out is a security action: recorded in the change's transaction, and a refused
-// request records nothing.
 func TestSessionRevokesAreAudited(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
@@ -316,12 +301,10 @@ func TestSessionRevokesAreAudited(t *testing.T) {
 			lapID = x.ID
 		}
 	}
-	// Refused: another user's, the current one, one that isn't there. None records anything.
 	aliceSession := e.sessionsOf(alice)[0].ID
 	expect(t, laptop.do(http.MethodDelete, fmt.Sprintf("/api/me/sessions/%s", aliceSession), nil), http.StatusNotFound)
 	expect(t, laptop.do(http.MethodDelete, fmt.Sprintf("/api/me/sessions/%s", lapID), nil), http.StatusBadRequest)
 	expect(t, laptop.do(http.MethodDelete, "/api/me/sessions/"+strings.Repeat("0", 32), nil), http.StatusNotFound)
-	// Nothing to sign out: no event.
 	expect(t, alice.do(http.MethodDelete, "/api/me/sessions", nil), http.StatusOK)
 	if n := len(e.events(audit.SessionRevoked)) + len(e.events(audit.OtherSessionsRevoked)); n != 0 {
 		t.Fatalf("%d events for refusals and an empty sweep", n)
@@ -339,9 +322,6 @@ func TestSessionRevokesAreAudited(t *testing.T) {
 	}
 }
 
-// The caller's own login may end between the middleware and the delete (it expires, is signed
-// out from another browser, or is replaced by a password reset): "sign out the others" must then
-// end nothing, or it would take the login made since with the rest.
 func TestRevokeOthersWithAGoneCallerEndsNothing(t *testing.T) {
 	e := newEnv(t, Options{})
 	e.setup()
@@ -350,7 +330,6 @@ func TestRevokeOthersWithAGoneCallerEndsNothing(t *testing.T) {
 	userID := e.userID(replacement)
 	before := e.count(`SELECT count(*) FROM sessions WHERE user_id = ?`, userID)
 
-	// The stale browser's login is gone after its request passed the middleware.
 	if _, err := e.db.Exec(`DELETE FROM sessions WHERE token_hash = ?`, hashToken(stale.cookie.Value)); err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +345,6 @@ func TestRevokeOthersWithAGoneCallerEndsNothing(t *testing.T) {
 		t.Fatalf("%d audit events for a refused sweep", n)
 	}
 
-	// An expired caller is as gone as a deleted one.
 	e.advance(60 * 24 * time.Hour)
 	if _, err := e.svc.revokeOtherSessions(context.Background(), userID, replacement.cookie.Value); !errors.Is(err, errSessionGone) {
 		t.Fatalf("an expired caller: %v", err)
@@ -379,14 +357,11 @@ func TestRevokeOthersWithAGoneCallerEndsNothing(t *testing.T) {
 	}
 }
 
-// SQLite hands out the highest row ID again once its row is deleted. A session is named by a
-// public ID that is never reused, so a page that listed a session since signed out can't end the
-// login made after it.
 func TestStaleSessionIDNeverEndsALaterLogin(t *testing.T) {
 	e := newEnv(t, Options{})
 	e.setup()
 	laptop := e.loginAs("owner@example.com", ownerPassword, firefoxMac)
-	phone := e.loginAs("owner@example.com", ownerPassword, safariIOS) // the highest row ID
+	phone := e.loginAs("owner@example.com", ownerPassword, safariIOS)
 	var phoneID string
 	for _, x := range e.sessionsOf(laptop) {
 		if x.Browser == "Safari" {
@@ -400,7 +375,6 @@ func TestStaleSessionIDNeverEndsALaterLogin(t *testing.T) {
 	expect(t, laptop.do(http.MethodDelete, "/api/me/sessions/"+phoneID, nil), http.StatusNoContent)
 	expect(t, phone.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
 
-	// A new login takes the row ID the phone had.
 	tablet := e.loginAs("owner@example.com", ownerPassword, firefoxMac)
 	var tabletRow int64
 	var tabletID string
@@ -414,11 +388,9 @@ func TestStaleSessionIDNeverEndsALaterLogin(t *testing.T) {
 		t.Fatal("a new session got the public ID of an ended one")
 	}
 
-	// The stale page asks again for the phone's session: it is gone, and the tablet is untouched.
 	expect(t, laptop.do(http.MethodDelete, "/api/me/sessions/"+phoneID, nil), http.StatusNotFound)
 	expect(t, tablet.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 
-	// The API names sessions by their public IDs only: hex, 128 bits, none empty or repeated.
 	seen := map[string]bool{}
 	for _, x := range e.sessionsOf(laptop) {
 		if !validSessionPublicID(x.ID) || seen[x.ID] {
@@ -426,14 +398,10 @@ func TestStaleSessionIDNeverEndsALaterLogin(t *testing.T) {
 		}
 		seen[x.ID] = true
 	}
-	// The integer row ID doesn't name a session.
 	expect(t, laptop.do(http.MethodDelete, fmt.Sprintf("/api/me/sessions/%d", tabletRow), nil), http.StatusNotFound)
 	expect(t, tablet.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 }
 
-// WatchSession's context ends with the login: at once when it is signed out or revoked by
-// the sessions routes or a password change, and at the latest at its next look when the row went
-// some other way.
 func TestWatchSessionEndsWithTheLogin(t *testing.T) {
 	e := newEnv(t, Options{})
 	e.setup()
@@ -467,7 +435,6 @@ func TestWatchSessionEndsWithTheLogin(t *testing.T) {
 		}
 	}
 
-	// Revoked from the list: only that login's watch ends.
 	phoneCtx, _ := watch(phone, time.Hour)
 	laptopCtx, _ := watch(laptop, time.Hour)
 	var phoneID string
@@ -481,14 +448,12 @@ func TestWatchSessionEndsWithTheLogin(t *testing.T) {
 		t.Fatal("revoking one session must end its connections only")
 	}
 
-	// "Sign out the others": the caller's watch stays.
 	otherCtx, _ := watch(other, time.Hour)
 	expect(t, laptop.do(http.MethodDelete, "/api/me/sessions", nil), http.StatusOK)
 	if !ended(otherCtx) || !alive(laptopCtx) {
 		t.Fatal("signing out the others must end their connections and not the caller's")
 	}
 
-	// A login ended behind the signal's back is found by the next look.
 	ctx, _ := watch(laptop, 20*time.Millisecond)
 	if _, err := e.db.Exec(`DELETE FROM sessions WHERE token_hash = ?`, hashToken(laptop.cookie.Value)); err != nil {
 		t.Fatal(err)
@@ -497,7 +462,6 @@ func TestWatchSessionEndsWithTheLogin(t *testing.T) {
 		t.Fatal("a login deleted without a signal kept its connection")
 	}
 
-	// Logging out, and a password change.
 	again := e.loginAs("owner@example.com", ownerPassword, firefoxMac)
 	againCtx, _ := watch(again, time.Hour)
 	expect(t, again.do(http.MethodPost, "/api/logout", nil), http.StatusNoContent)
@@ -512,7 +476,6 @@ func TestWatchSessionEndsWithTheLogin(t *testing.T) {
 		t.Fatal("a password change kept another login's connection")
 	}
 
-	// No session, no watch.
 	ctx, stop := e.svc.WatchSession(e.client().req(http.MethodGet, "/api/me", nil), time.Hour)
 	defer stop()
 	if ctx.Err() == nil {
@@ -520,9 +483,6 @@ func TestWatchSessionEndsWithTheLogin(t *testing.T) {
 	}
 }
 
-// A login ended between WatchSession's first look at it and the watch's registration sent its
-// signal to nobody: the watch ends at once all the same, not at the interval's next look (an
-// hour here).
 func TestWatchSessionEndedBeforeItIsRegistered(t *testing.T) {
 	e := newEnv(t, Options{})
 	e.setup()
@@ -564,8 +524,6 @@ func TestWatchSessionEndedBeforeItIsRegistered(t *testing.T) {
 	}
 }
 
-// When the look after the registration fails for a reason other than "no such login", the new
-// connection is refused: a revocation committed just before it could not be ruled out.
 func TestWatchSessionRefusedWhenItsVerificationFails(t *testing.T) {
 	e := newEnv(t, Options{})
 	e.setup()
@@ -587,8 +545,6 @@ func TestWatchSessionRefusedWhenItsVerificationFails(t *testing.T) {
 	}
 }
 
-// A login that passes the second step is a session like any other: it names its browser and
-// system (from the second request's User-Agent), is listed, and can be signed out.
 func TestSessionAfterTheSecondStepRecordsItsDevice(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, _ := e.setup()
@@ -618,8 +574,6 @@ func TestSessionAfterTheSecondStepRecordsItsDevice(t *testing.T) {
 	}
 }
 
-// The reply of /api/me, and of a login, names the login it is for: the web app tells by it that a
-// login is still the same one, not only the same account.
 func TestMeNamesItsSession(t *testing.T) {
 	e := newEnv(t, Options{})
 	e.setup()
@@ -638,7 +592,6 @@ func TestMeNamesItsSession(t *testing.T) {
 	if got, want := decode[Me](t, rec).Session, current(first); got == "" || got != want {
 		t.Fatalf("/api/me session = %q, want %q", got, want)
 	}
-	// Signing in again in the same browser: the reply names the new login, not the one replaced.
 	before := decode[Me](t, rec).Session
 	again := first.do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword})
 	expect(t, again, http.StatusOK)
@@ -647,8 +600,6 @@ func TestMeNamesItsSession(t *testing.T) {
 	}
 }
 
-// A sign-out names the login it is for; tried again after a newer login replaced it in this
-// browser, it revokes nothing.
 func TestLogoutRevokesOnlyTheLoginItNames(t *testing.T) {
 	e := newEnv(t, Options{})
 	e.setup()
@@ -659,22 +610,18 @@ func TestLogoutRevokesOnlyTheLoginItNames(t *testing.T) {
 		return decode[Me](t, rec)
 	}
 	original := meOf(first).Session
-	// The browser signs in again (another tab): its cookie is the newer login's now.
 	expect(t, first.do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}), http.StatusOK)
 	newer := meOf(first).Session
 	if newer == original {
 		t.Fatal("signing in again kept the same session")
 	}
-	// The older tab tries its sign-out again, for the original login: refused, nothing revoked.
 	rec := first.do(http.MethodPost, "/api/logout", map[string]string{"session": original})
 	expect(t, rec, http.StatusConflict)
 	if got := meOf(first).Session; got != newer {
 		t.Fatalf("the newer login is %q after a refused sign-out, want %q", got, newer)
 	}
-	// Naming the login it carries, it signs out.
 	expect(t, first.do(http.MethodPost, "/api/logout", map[string]string{"session": newer}), http.StatusNoContent)
 	expect(t, first.do(http.MethodGet, "/api/me", nil), http.StatusUnauthorized)
-	// Asked again once that login is over (its first answer was lost): nothing to end, 204.
 	expect(t, first.do(http.MethodPost, "/api/logout", map[string]string{"session": newer}), http.StatusNoContent)
 	expect(t, first.do(http.MethodPost, "/api/logout", map[string]string{"session": original}), http.StatusNoContent)
 }

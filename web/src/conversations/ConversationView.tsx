@@ -1,12 +1,4 @@
-// One conversation: its head, the transcript over the events stream with earlier messages on
-// demand, the apps the agent saved in it, the model it runs on, and the composer, which steers or
-// stops the agent while it works. Each is a part of its own; this view holds what they share.
-//
-// A conversation on a CLI worker shows the CLI's work as it streams, as plain text, and when
-// the user's login to that CLI has expired, a banner to sign in again right here: the turn
-// waits for it and goes on by itself.
-
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import {
   ApiError,
   api,
@@ -22,6 +14,7 @@ import { BrowserPanel } from '../browser/BrowserPanel'
 import { HelpCard } from '../browser/HelpCard'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
+import { useChanged } from '../memo'
 import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
@@ -37,7 +30,6 @@ import { lastSavedApp, liveApps } from './savedApps'
 import { type AppRef, pendingHelp, type ToolUse, transcript } from './transcript'
 import { type EventSourceFactory, useConversationStream } from './useConversationStream'
 
-// The answers that say the caller can't read this conversation.
 const REFUSED = new Set([403, 404, 410])
 
 export function ConversationView({
@@ -54,26 +46,15 @@ export function ConversationView({
   workspace: number
   id: number
   backHref: string
-  // The conversation was sent to, renamed or archived: the list is out of date.
   onChanged: () => void
   streams?: EventSourceFactory
-  // Where to build an app in this conversation (the builder); no link without it.
   buildHref?: string
-  // Whether the apps the agent saved show launched in the transcript. The builder shows the app in
-  // its own pane instead, and the transcript only links to it.
   embedApps?: boolean
-  // Called with the app the agent saved last, and the tool call that saved it (which changes with
-  // each save, so the caller knows to read the app again).
   onSavedApp?: (app: AppRef, save: string) => void
-  // Only an app saved in an entry after this one is told to onSavedApp.
   savedAfter?: number
 }) {
   const t = useT()
   const base = `${ws(workspace)}/conversations/${id}`
-  // Whether the server refused the conversation (403, 404 or 410) on its last answer: then it
-  // can't be read. Any other failure (a server restarting, the network) is shown with a way to try
-  // again, and the composer stays usable.
-  // Only the latest read says so: an answer to a read since superseded is dropped, as useLoad drops it.
   const [refused, setRefused] = useState(false)
   const reads = useRef(0)
   const meta = useLoad(() => {
@@ -90,14 +71,14 @@ export function ConversationView({
     )
   }, [base])
   const { view, status } = useConversationStream(`${base}/events`, streams)
-  // Nothing can be sent: the server refused it and nothing of it is shown, or the stream found it gone.
   const unreadable = (refused && !meta.data) || status === 'gone'
-  // When the stream connects again after a failed read, the conversation is read again too.
   const reloadMeta = meta.reload
   const metaFailed = Boolean(meta.error)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: read again when the stream comes back
+  const retryMeta = useEffectEvent(() => {
+    if (metaFailed) reloadMeta()
+  })
   useEffect(() => {
-    if (status === 'live' && metaFailed) reloadMeta()
+    if (status === 'live') retryMeta()
   }, [status])
   const loadPage = useCallback((before: number) => api<History>(`${base}/entries?before=${before}`), [base])
   const older = useHistory(view, loadPage)
@@ -107,13 +88,14 @@ export function ConversationView({
   const archived = Boolean(meta.data?.archived_at)
   const apps = embedApps ? liveApps(messages) : new Set<ToolUse>()
   const saved = lastSavedApp(messages, savedAfter)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: told again for each new save only
-  useEffect(() => {
+  const savedKey = saved?.save
+  const tellSaved = useEffectEvent(() => {
     if (saved) onSavedApp?.(saved.app, saved.save)
-  }, [saved?.save])
+  })
+  useEffect(() => {
+    if (savedKey !== undefined) tellSaved()
+  }, [savedKey])
 
-  // The model it runs on, and what the caller may choose; with a CLI among either, the
-  // caller's CLI accounts, for the picker's hints and the Reconnect banner.
   const providers = useLoad(
     () => api<{ providers: ModelProvider[] }>(`${ws(workspace)}/models`).then((r) => r.providers),
     [workspace],
@@ -123,34 +105,22 @@ export function ConversationView({
   const model = picked ?? loadedModel.data
   const usesCli = Boolean(cliOfProvider(model?.provider) || providers.data?.some((p) => p.scope === 'cli'))
   const cli = useLoad(() => (usesCli ? api<CliAccounts>(CLI_ACCOUNTS) : Promise.resolve(null)), [usesCli])
-  // A turn that finds the login expired says so in its output: the account is read again then,
-  // and when a run starts or ends.
   const asks = messages.reduce((n, m) => n + m.tools.filter((t) => t.cli && t.output?.includes('⚠')).length, 0)
-  const reloadCli = cli.reload
-  // biome-ignore lint/correctness/useExhaustiveDependencies: read again when these change
-  useEffect(() => {
-    if (cliOfProvider(model?.provider)) reloadCli()
-  }, [asks, running])
-  const reconnect = reconnectAccount(model, cli.data)
   const cliName = cliOfProvider(model?.provider)
-  // A CLI's question shows in its output ("? Claude Code asks to use …") and its answer
-  // ("✓" / "✗"): the questions are read again then, and when a run starts or ends.
+  const cliTurnChanged = useChanged(`${asks}:${running}`)
+  if (cliTurnChanged && cliName) cli.reload()
+  const reconnect = reconnectAccount(model, cli.data)
   const questionLines = messages.reduce(
     (n, m) => n + m.tools.reduce((k, t) => k + (t.cli ? (t.output?.match(/^(\? | {2}[✓✗] )/gm)?.length ?? 0) : 0), 0),
     0,
   )
 
-  // The user's own browser (docs/agent-browser.md): its panel, and the agent's request to take it
-  // over (browser_help) until the user answers it.
   const browser = useLoad(() => api<BrowserStatus>(BROWSER), [])
   const [browserOpen, setBrowserOpen] = useState(false)
   const [takeOver, setTakeOver] = useState(false)
   const help = pendingHelp(messages)
-  const reloadBrowser = browser.reload
-  // biome-ignore lint/correctness/useExhaustiveDependencies: read again when a request comes or a run ends
-  useEffect(() => {
-    if (help) reloadBrowser()
-  }, [help?.message, running])
+  const helpChanged = useChanged(JSON.stringify([help?.message ?? null, running]))
+  if (helpChanged && help) browser.reload()
   const changed = () => {
     meta.reload()
     onChanged()
@@ -224,8 +194,6 @@ export function ConversationView({
           />
         )}
       </div>
-      {/* Screen readers hear when the agent starts and when it has replied, not each word of a
-          reply as it streams in. */}
       <VisuallyHidden>
         <span role="status">
           {running

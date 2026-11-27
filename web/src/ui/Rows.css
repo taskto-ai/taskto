@@ -28,8 +28,6 @@
     color: var(--color-text-muted);
   }
 
-  /* The title takes the room; when there is too little (a phone), the status and the actions
-     wrap under it, at the end. */
   .ui-row-main {
     flex: 1 1 12rem;
     min-inline-size: 0;
@@ -47,7 +45,6 @@
     text-decoration: none;
   }
 
-  /* A row that opens in place: its title is a button that looks like the title. */
   .ui-row-open {
     margin: 0;
     padding: 0;
@@ -57,8 +54,6 @@
     cursor: pointer;
   }
 
-  /* A row that is a link answers a click anywhere on it: the link's box covers the row, and the
-     status and the actions sit above it. */
   :is(a, button).ui-row-title::after {
     content: "";
     position: absolute;
@@ -94,8 +89,6 @@
     margin-inline-start: auto;
   }
 
-  /* Actions below: a line of their own under the title and the status, across the row, wrapping
-     when they don't fit, so a row with several never makes the list wider than the screen. */
   .ui-row[data-actions-below] > .ui-row-actions {
     flex: 1 1 100%;
     flex-wrap: wrap;
@@ -103,7 +96,6 @@
     margin-inline-start: 0;
   }
 
-  /* What opens under a row takes its whole width, under the title, the status and the actions. */
   .ui-row-more {
     position: relative;
     flex: 1 1 100%;

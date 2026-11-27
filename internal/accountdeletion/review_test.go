@@ -16,7 +16,6 @@ import (
 	"taskto.ai/taskto/internal/conversations"
 )
 
-// newApp makes an app, with a record, in space.
 func (w *world) newApp(space int64, name string) (appID, rowID int64) {
 	w.t.Helper()
 	appID = exec(w.t, w.db, `INSERT INTO apps (space_id, name, definition) VALUES (?, ?, '{}')`, space, name)
@@ -24,7 +23,6 @@ func (w *world) newApp(space int64, name string) (appID, rowID int64) {
 	return appID, rowID
 }
 
-// attachment records a photo's row, as the store has it: ready on a record, or uploading.
 func (w *world) attachment(id string, app, space, owner int64, row int64) {
 	w.t.Helper()
 	if row != 0 {
@@ -65,13 +63,10 @@ const (
 	photoC = "cccccccccccccccccccccccccccccccc"
 )
 
-// An app moved from the person's private space to a shared one, with its files not yet moved (the
-// move stopped, or its sweep hasn't run): the purge finishes the move, and the record keeps its photo.
 func TestPurgeFinishesAnInterruptedAppMoveSoASharedPhotoSurvives(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
-	app, row := w.newApp(w.team.ID, "Receipts") // the app is in the shared space now
-	// ...but its attachment still says the private space, where the bytes and the thumbnail are.
+	app, row := w.newApp(w.team.ID, "Receipts")
 	w.attachment(photoA, app, w.private.ID, w.leaver, row)
 	w.putFile(w.private, app, photoA, "picture")
 	w.putFile(w.private, app, photoA+".thumb", "thumb")
@@ -101,14 +96,11 @@ func TestPurgeFinishesAnInterruptedAppMoveSoASharedPhotoSurvives(t *testing.T) {
 	}
 }
 
-// The purge doesn't go on while a shared photo is still recorded in the private space, whatever
-// kept the move from finishing.
 func TestPurgeStopsRatherThanDeleteASharedPhotoItCouldNotMove(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
 	app, row := w.newApp(w.team.ID, "Receipts")
 	w.attachment(photoA, app, w.private.ID, w.leaver, row)
-	// The bytes are a directory: they can't be copied as a file.
 	if err := os.MkdirAll(w.filePath(w.private, app, photoA), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +116,6 @@ func TestPurgeStopsRatherThanDeleteASharedPhotoItCouldNotMove(t *testing.T) {
 	}
 }
 
-// What the effects of a shared app did stays, without who; what hadn't run yet can't, and goes.
 func TestPurgeKeepsTheEffectHistoryOfASharedAppWithoutWho(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -172,15 +163,13 @@ func TestPurgeKeepsTheEffectHistoryOfASharedAppWithoutWho(t *testing.T) {
 	}
 }
 
-// An unfinished upload of the person in a shared app goes with its file; a photo already on a record,
-// and another member's upload, stay.
 func TestPurgeRemovesTheirUnfinishedUploadsInSharedApps(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
 	app, row := w.newApp(w.team.ID, "Site visits")
-	w.attachment(photoA, app, w.team.ID, w.leaver, 0)   // theirs, being uploaded
-	w.attachment(photoB, app, w.team.ID, w.leaver, row) // theirs, on a record
-	w.attachment(photoC, app, w.team.ID, w.carol, 0)    // someone else's, being uploaded
+	w.attachment(photoA, app, w.team.ID, w.leaver, 0)
+	w.attachment(photoB, app, w.team.ID, w.leaver, row)
+	w.attachment(photoC, app, w.team.ID, w.carol, 0)
 	w.putFile(w.team, app, photoA+".part", "half a picture")
 	w.putFile(w.team, app, photoB, "picture")
 	w.putFile(w.team, app, photoC+".part", "carol's")
@@ -206,8 +195,6 @@ func TestPurgeRemovesTheirUnfinishedUploadsInSharedApps(t *testing.T) {
 	}
 }
 
-// A mention written with zeros in front is the same person's, and goes the same way; it can't name
-// whoever is given a number later.
 func TestPurgeRewritesAZeroPaddedMention(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -226,9 +213,6 @@ func TestPurgeRewritesAZeroPaddedMention(t *testing.T) {
 	}
 }
 
-// The agent runtime's database keeps what was said until the server has it purged: a purge that
-// can't reach the runtime stays unfinished, with the account and the record of what is to do, and
-// finishes when it can.
 func TestPurgeWaitsForTheAgentRuntimeToPurgeTheTranscripts(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -259,8 +243,6 @@ func TestPurgeWaitsForTheAgentRuntimeToPurgeTheTranscripts(t *testing.T) {
 	}
 }
 
-// With the agent runtime off, the account goes (nothing can be asked of it), and what it keeps is
-// recorded for when it is on: the purge says so, and a later start does it.
 func TestPurgeWithTheAgentRuntimeOffRecordsTheStepAndASetAgentFinishesIt(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -295,8 +277,6 @@ func TestPurgeWithTheAgentRuntimeOffRecordsTheStepAndASetAgentFinishesIt(t *test
 	}
 }
 
-// The providers file and the key files hold the person's provider accounts: they are rewritten
-// once the account is gone, and with no running agent runtime they are removed.
 func TestPurgeRefreshesTheProvidersFileAndKeys(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -319,8 +299,6 @@ func TestPurgeRefreshesTheProvidersFileAndKeys(t *testing.T) {
 		}
 	}
 
-	// With the runtime's feed, it is asked to write them again from the database that no longer has
-	// the accounts, after the account is gone; a failure leaves the step to try again.
 	w2 := newWorld(t)
 	calls, fail := 0, errors.New("the feed can't write")
 	w2.svc.SetProviders(func(context.Context) error {
@@ -346,7 +324,6 @@ func TestPurgeRefreshesTheProvidersFileAndKeys(t *testing.T) {
 	}
 }
 
-// The person's id is never given to another account.
 func TestAPurgedAccountsIDIsNeverGivenAgain(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -360,8 +337,6 @@ func TestAPurgedAccountsIDIsNeverGivenAgain(t *testing.T) {
 	}
 }
 
-// Removing the person from a workspace while their purge is failing doesn't lose the job: the
-// scheduler keeps trying it without a restart. Jobs of other kinds still go with the membership.
 func TestLeavingAWorkspaceKeepsThePurgeJobButNotOtherJobs(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -391,7 +366,6 @@ func TestLeavingAWorkspaceKeepsThePurgeJobButNotOtherJobs(t *testing.T) {
 	}
 }
 
-// A purge whose tries ran out is scheduled again by the periodic reconcile, with no restart.
 func TestMaintainSchedulesAPurgeWhoseTriesRanOut(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)

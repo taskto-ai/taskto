@@ -5,8 +5,6 @@ import { FONT_PACKAGES, PACKAGES, thirdPartyNotices } from './notices'
 
 const root = join(import.meta.dirname, '..')
 
-// The decoder the build ships has its licences with it: the MIT notices of the packages that
-// carry code in it, and the Apache-2.0 text of ZXing-C++, which its .wasm is made from.
 test('the notices shipped with the decoder have each licence in full', () => {
   const text = thirdPartyNotices(root)
   for (const name of PACKAGES) {
@@ -22,8 +20,6 @@ test('the notices shipped with the decoder have each licence in full', () => {
   expect(text).toContain('Permission is hereby granted, free of charge')
 })
 
-// The fonts are served from the app's own files, and their licence goes with them: the OFL asks
-// for its text and the copyright line to accompany copies of the font.
 test("the notices carry the fonts' licence and copyright line", () => {
   const text = thirdPartyNotices(root)
   for (const name of FONT_PACKAGES) {

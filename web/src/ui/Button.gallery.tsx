@@ -11,7 +11,6 @@ export const title = 'Button'
 
 export default function ButtonGallery() {
   const t = useT()
-  // The segmented controls in the rows can be turned, as a person would.
   const [view, setView] = useState<'list' | 'board'>('list')
   return (
     <>

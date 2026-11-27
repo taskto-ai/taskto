@@ -1,13 +1,3 @@
-// The viewer's own CLI accounts (docs/cli-workers.md): their logins to Claude Code, Codex and
-// Grok Build, for conversations that run on those CLIs. They are the user's, not a workspace's:
-// only they see and use them, in any of their workspaces. A user may connect several accounts
-// to a CLI (docs/account-switching.md), each a login of their own.
-//
-// A login goes through the CLI's own flow on the server's worker. This page shows what the CLI
-// printed: its sign-in URL, as a link only when it is on the CLI's known sign-in host, and its
-// one-time code; for Claude Code, the code its sign-in page shows is pasted back here. Every
-// string from the server is shown as text, never as HTML.
-
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
@@ -38,14 +28,10 @@ import { Alert, CopyField, FormActions, Loading, Section, SettingsTab, useAction
 import { SharedCliAccountsPanel } from './SharedCliAccounts'
 import { SwitchingPanel } from './SwitchingPanel'
 
-// How often a login in progress is read again.
 export const LOGIN_POLL_MS = 2000
-// After a failed read, the next waits twice as long, up to this; reading stops for good after
-// LOGIN_POLL_LIMIT_MS, when the CLI's login has expired anyway (15 minutes).
 const LOGIN_POLL_MAX_MS = 30_000
 const LOGIN_POLL_LIMIT_MS = 16 * 60_000
 
-// Each CLI's terms, linked next to Connect.
 export const CLI_TERMS: Record<CliName, string> = {
   claude: 'https://code.claude.com/docs/en/legal-and-compliance',
   codex: 'https://openai.com/policies/terms-of-use/',
@@ -89,8 +75,6 @@ export function CliAccountsTab({ workspace, admin = false }: { workspace?: numbe
   )
 }
 
-// Another account for a CLI, on its next free number: offered once every account of the CLI
-// listed is connected (or needs a new sign-in), so an unused one is filled first.
 function AddAccount({ accounts, onChanged }: { accounts: CliAccount[]; onChanged: () => void }) {
   const t = useT()
   const first = accounts[0]
@@ -202,14 +186,10 @@ function AccountCard({ account: a, onChanged }: { account: CliAccount; onChanged
   )
 }
 
-// The user's name for an account, to tell several apart.
 function LabelForm({ account: a, onChanged }: { account: CliAccount; onChanged: () => void }) {
   const [label, setLabel] = useState(a.label)
   const action = useAction()
   const t = useT()
-  // The draft follows the account's name when the server's changes. This is not an effect: an
-  // effect runs after the first commit, and a name typed before it ran (the commit and the typing
-  // are both quick) was overwritten with the saved one.
   const [saved, setSaved] = useState(a.label)
   if (saved !== a.label) {
     setSaved(a.label)
@@ -247,13 +227,9 @@ function LabelForm({ account: a, onChanged }: { account: CliAccount; onChanged: 
 
 const live = (l: CliLogin | null | undefined) => l?.state === 'starting' || l?.state === 'waiting'
 
-// A login shown on its own: one in progress, or one that ended without connecting (with why).
 const shown = (l: CliLogin | null | undefined) =>
   l && (live(l) || l.state === 'failed' || l.state === 'expired') ? l : null
 
-// Connects a CLI through its own login flow: starts the login (or picks up the one in
-// progress), shows its URL and code, takes Claude Code's pasted code, and reads it again every
-// LOGIN_POLL_MS until it connects, fails or expires. `offer` shows the button that starts one.
 export function CliLoginFlow({
   account,
   name,
@@ -263,7 +239,6 @@ export function CliLoginFlow({
   icon,
   onConnected,
 }: {
-  // The account's handle: `claude`, or `claude-2` for another account.
   account: string
   name: string
   label: string
@@ -304,10 +279,6 @@ export function CliLoginFlow({
         setLogin(null)
       })
 
-  // Reads the login again while it is in progress, one read at a time: each read that ends
-  // (answered or failed) moves tick on, which schedules the next one; a login that ends stops
-  // it. A login the server no longer has ended there (cancelled elsewhere, or the server
-  // restarted): it is dropped, and can be started again.
   const polling = live(login)
   const [pollError, setPollError] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
@@ -320,7 +291,7 @@ export function CliLoginFlow({
       pollingSince.current = 0
       return
     }
-    void tick // each read that ends moves tick on, which runs this again for the next one
+    void tick
     pollingSince.current ||= Date.now()
     if (Date.now() - pollingSince.current > LOGIN_POLL_LIMIT_MS) {
       setPollError(translate('settings.cliAccounts.tookTooLong'))
@@ -343,7 +314,7 @@ export function CliLoginFlow({
           return
         }
         failures.current++
-        setPollError(errorText(e)) // tried again, a little later each time; the error shows meanwhile
+        setPollError(errorText(e))
       }
       if (!stopped) setTick((n) => n + 1)
     }, delay)
@@ -378,7 +349,6 @@ export function CliLoginFlow({
       <div className="settings-panel-body">
         <Notice tone="danger">
           {login.state === 'expired' ? t('settings.cliAccounts.expired') : t('settings.cliAccounts.failed')}
-          {/* Why it failed, in the CLI's own words, which can't be translated; an expired one says no more. */}
           {login.state === 'failed' && login.message ? ` ${login.message}` : ''}
         </Notice>
         <Alert error={action.error} />
@@ -418,8 +388,6 @@ export function CliLoginFlow({
   )
 }
 
-// The sign-in URL, a link only when it is on the CLI's known sign-in host (and https), and the
-// one-time code to enter there.
 function SignIn({ login, name }: { login: CliLogin; name: string }) {
   const t = useT()
   const url = login.url ?? ''
@@ -446,7 +414,6 @@ function SignIn({ login, name }: { login: CliLogin; name: string }) {
         </p>
       ) : (
         <>
-          {/* A security warning: said at once, as an alert, in the warning's colour. */}
           <div role="alert">
             <Notice tone="warning" live={false}>
               {t('settings.cliAccounts.untrusted', { name })}
@@ -503,8 +470,6 @@ function CodeForm({ base, name, onSent }: { base: string; name: string; onSent: 
   )
 }
 
-// A window's name: Claude Code names its windows (five_hour, seven_day, …), Codex gives
-// primary and secondary with their length in minutes.
 const WINDOWS: Record<string, Key> = {
   five_hour: 'settings.cliAccounts.limits.fiveHour',
   seven_day: 'settings.cliAccounts.limits.weekly',
@@ -512,7 +477,6 @@ const WINDOWS: Record<string, Key> = {
   seven_day_sonnet: 'settings.cliAccounts.limits.weeklySonnet',
 }
 
-// A window of m minutes, by the largest unit that divides it: "5-hour limit".
 function minutes(m: number): string {
   if (m % 10080 === 0) return translate('settings.cliAccounts.limits.weeks', { count: m / 10080 })
   if (m % 1440 === 0) return translate('settings.cliAccounts.limits.days', { count: m / 1440 })
@@ -520,8 +484,6 @@ function minutes(m: number): string {
   return translate('settings.cliAccounts.limits.minutes', { count: m })
 }
 
-// A limit's name in the current language. A window the app doesn't know shows by the name
-// the CLI gives it.
 export function windowLabel(l: CliLimit): string {
   if (WINDOWS[l.window]) return translate(WINDOWS[l.window])
   if (l.window_minutes && l.window_minutes > 0) return minutes(l.window_minutes)
@@ -529,7 +491,6 @@ export function windowLabel(l: CliLimit): string {
   return words ? words[0].toUpperCase() + words.slice(1) : translate('settings.cliAccounts.limits.limit')
 }
 
-// The account's usage limits as the CLI last reported them, "as of" when that was.
 export function CliLimits({ account: a }: { account: CliAccount }) {
   const t = useT()
   const f = useFormat()

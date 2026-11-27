@@ -8,43 +8,19 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// Offline use (docs/offline.md).
-//
-// A person who may open an app can download it for offline use: its live release, as much as a
-// client needs to draw and use it, and the records they may read. The download is a snapshot: it
-// says the release it was taken from and when, and what it holds is what the caller reads and
-// nothing more (the rows through the same filter as every screen, without deleted ones, and each
-// as the screen shows it: no field the collection doesn't declare, none of another type). The
-// server keeps nothing of it: it is the client's copy, and the client's writes made against it are
-// the app's ordinary actions, sent again with their operation keys (outbox.go, Service.act), which
-// make a retried one apply once.
-//
-// An admin may turn downloads off for a shared space (Space.OfflineDownloads), for a space whose
-// data shouldn't stay on devices. Turning it off refuses new downloads; what a device already
-// holds is removed by that device when it next asks the server and is refused.
-
-// MaxOfflineRows bounds the records of a download: the latest ones, when the app holds more. The
-// download says how many the caller reads in all, so a client never presents its copy as the
-// whole.
 const MaxOfflineRows = 2000
 
-// OfflineScreen is a screen of a downloaded app: its name, and whether it shows one record.
 type OfflineScreen struct {
 	Name   string `json:"name"`
 	Record bool   `json:"record,omitempty"`
 }
 
-// OfflineAction is what an action of a downloaded app does, and nothing of what it sets going on
-// the server (the effects are the server's to do, when the record arrives).
 type OfflineAction struct {
 	Kind   string `json:"kind"`
 	Screen string `json:"screen,omitempty"`
 	Then   string `json:"then,omitempty"`
 }
 
-// OfflineDefinition is the part of a definition a client needs to use a downloaded app: the
-// format's version and what it requires of a client, the collection, the actions' kinds, the
-// summaries and the screens. The components are in the download's messages.
 type OfflineDefinition struct {
 	DefinitionVersion int                      `json:"definition_version"`
 	Requires          []string                 `json:"requires" apitypes:"nonnull"`
@@ -55,44 +31,23 @@ type OfflineDefinition struct {
 	Summaries         map[string]Summary       `json:"summaries,omitempty"`
 }
 
-// OfflineApp is what GET …/apps/{app}/offline answers.
 type OfflineApp struct {
-	AppID   int64  `json:"app_id"`
-	SpaceID int64  `json:"space_id"`
-	Name    string `json:"name"`
-	// Release is the live release the download was taken from; its definition's version and
-	// requirements are in Definition.
+	AppID      int64             `json:"app_id"`
+	SpaceID    int64             `json:"space_id"`
+	Name       string            `json:"name"`
 	Release    int64             `json:"release"`
 	Definition OfflineDefinition `json:"definition"`
-	// Messages draw the app as it is at CapturedAt: the A2UI messages the surface route sends,
-	// with the records downloaded and the summaries over them.
-	Messages []Message `json:"messages" apitypes:"json,nonnull"`
-	// Scope is whose records the download holds: "all" of the app's, or only the caller's "own".
-	Scope string `json:"scope"`
-	// Records is how many are downloaded; Total how many the caller reads in all. Truncated is
-	// true when the latest MaxOfflineRows were downloaded and the rest were not. Summaries in
-	// Messages count the downloaded records only.
-	Records   int  `json:"records"`
-	Total     int  `json:"total"`
-	Truncated bool `json:"truncated"`
-	// CanInsert is whether the caller may add records now: the app lets them, and the space is
-	// writable.
-	CanInsert  bool   `json:"can_insert"`
-	CapturedAt string `json:"captured_at"`
-	// Operations says which of the downloaded records the caller's own operations made: the
-	// operation key (the idempotency key of the request that made the record) to the record's
-	// id. A device that sent a record and holds it in its outbox as well as in this download
-	// knows by it that the two are one.
-	Operations map[string]int64 `json:"operations" apitypes:"nonnull"`
-	// Modifiable is which of the downloaded records the caller may change or delete now: the
-	// ones their role's modify scope reaches (all of them, or only those they created), and none
-	// when the space is read-only. A client offers an offline edit or deletion only for these. It
-	// saves a wait and decides nothing: every send is checked again (Service.act), and a record
-	// that stopped being changeable is answered as one the app doesn't have.
-	Modifiable []int64 `json:"modifiable" apitypes:"nonnull"`
+	Messages   []Message         `json:"messages" apitypes:"json,nonnull"`
+	Scope      string            `json:"scope"`
+	Records    int               `json:"records"`
+	Total      int               `json:"total"`
+	Truncated  bool              `json:"truncated"`
+	CanInsert  bool              `json:"can_insert"`
+	CapturedAt string            `json:"captured_at"`
+	Operations map[string]int64  `json:"operations" apitypes:"nonnull"`
+	Modifiable []int64           `json:"modifiable" apitypes:"nonnull"`
 }
 
-// offlineApp answers a download: the caller's view of the live release and their records.
 func (s *Service) offlineApp(ctx context.Context, sp access.Space, actor Actor, appID int64) (OfflineApp, error) {
 	if err := may(sp, access.Read); err != nil {
 		return OfflineApp{}, err
@@ -147,9 +102,6 @@ func (s *Service) offlineApp(ctx context.Context, sp access.Space, actor Actor, 
 	return out, nil
 }
 
-// modifiableOf is the ids of rows (the caller's download) that the caller may change or delete:
-// every one for the modify scope "all", the ones they created for "own", none otherwise or in a
-// space that can't be written.
 func (s *Service) modifiableOf(ctx context.Context, sp access.Space, appID, userID int64, scope access.Scope, rows []Row) ([]int64, error) {
 	out := []int64{}
 	if may(sp, access.Write) != nil {
@@ -186,7 +138,6 @@ func (s *Service) modifiableOf(ctx context.Context, sp access.Space, appID, user
 	return out, found.Err()
 }
 
-// operationsOf is the caller's operations that made one of rows: key to the record's id.
 func (s *Service) operationsOf(ctx context.Context, appID, userID int64, rows []Row) (map[string]int64, error) {
 	out := map[string]int64{}
 	if len(rows) == 0 {

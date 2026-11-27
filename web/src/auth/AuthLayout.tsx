@@ -1,15 +1,8 @@
-// The frame of every screen outside the app: first-run setup, logging in, invites, password reset,
-// and what is shown before the app starts. Centred on the page, the logo at a size of its own, a
-// title in the display face, a line of help, then the form; the paths that lead elsewhere (back,
-// forgot the password) are quieter, under it. It keeps clear of the status and home bars of an
-// installed app, and fits a 320px screen.
-
 import { type FormEvent, type ReactNode, useEffect, useRef } from 'react'
 import { BrandLogo } from '../BrandLogo'
 import { Heading } from '../ui/Heading'
 import './AuthLayout.css'
 
-// The product's name, the same in every language.
 export const BRAND = 'taskto.ai'
 
 export function AuthLayout({
@@ -22,9 +15,7 @@ export function AuthLayout({
   title?: ReactNode
   help?: ReactNode
   children?: ReactNode
-  // Links (or quiet buttons) to the other paths: back, forgot your password.
   links?: ReactNode
-  // The screen is waiting for something before it can be used.
   busy?: boolean
 }) {
   return (
@@ -50,10 +41,6 @@ export function AuthLayout({
   )
 }
 
-// A form on an auth screen: its fields, then the one primary button, full width. Each is drawn with
-// a key of its own (the step it is): two forms drawn at the same place, such as an invite's new
-// account and its log-in, would otherwise share their fields, and a password shown in one would
-// start shown in the next.
 export function AuthForm({
   onSubmit,
   failure,
@@ -61,10 +48,7 @@ export function AuthForm({
   children,
 }: {
   onSubmit: (e: FormEvent) => void
-  // The form's last failure: when one comes, the focus goes to the first field it marked
-  // invalid, or else to the form's error, so the person lands where there is something to do.
   failure?: object | null
-  // A field of the form changed, by its name: a failure about it can go.
   onEdit?: (name: string) => void
   children: ReactNode
 }) {
@@ -90,7 +74,6 @@ export function AuthForm({
   )
 }
 
-// The quiet "or" between the single sign-on buttons and the password form.
 export function AuthDivider({ children }: { children: ReactNode }) {
   return (
     <p className="ui-auth-divider">

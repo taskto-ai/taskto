@@ -1,7 +1,3 @@
-// "Offline use" on an app's page: download it for use without a connection, see whether it is
-// ready and how much room is left, and remove the copy. Building with AI, publishing and sharing
-// are said to stay online.
-
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, type App, errorText, type Space } from '../api'
 import { unsupportedBy } from '../apps/capabilities'
@@ -28,7 +24,6 @@ export function OfflinePanel({
   workspace: number
   space: number
   app: App
-  // The space as the caller sees it, which says whether an admin turned downloads off.
   spaceInfo?: Space
 }) {
   const t = useT()
@@ -42,8 +37,6 @@ export function OfflinePanel({
   const copy = data.downloads.find((d) => d.app === app.id && d.space === space && d.workspace === workspace)
   const live = app.live
   const refresh = useCallback(() => void storageStatus().then(setStorage), [])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a changed copy changes what is used
-  useEffect(refresh, [refresh, copy?.capturedAt])
 
   const disabled = spaceInfo?.offline_downloads === false
   const unsupported = live ? unsupportedBy(live) : []
@@ -55,7 +48,6 @@ export function OfflinePanel({
     try {
       await downloadApp(runtime.store, scope)
     } catch (e) {
-      // Overtaken by a removal that began later (the copy was revoked): the panel shows what is held.
       if (e instanceof StaleDownload) return
       setError(
         e instanceof NotSaved
@@ -85,6 +77,7 @@ export function OfflinePanel({
 
   return (
     <section className="ui-offline" aria-label={t('offline.title')}>
+      <MeasureStorage key={copy?.capturedAt ?? ''} measure={refresh} />
       <Heading level={2} size="subsection" className="ui-offline-title">
         <Icon name="offline" size={16} />
         {t('offline.title')}
@@ -122,7 +115,6 @@ export function OfflinePanel({
             ) : (
               <p className="ui-offline-note">{t('offline.notDownloaded')}</p>
             )}
-            {/* A secondary action: the app's own primary button is the one the page is about. */}
             <div className="ui-offline-actions">
               <Button
                 size="sm"
@@ -179,4 +171,9 @@ export function OfflinePanel({
       )}
     </section>
   )
+}
+
+function MeasureStorage({ measure }: { measure: () => void }) {
+  useEffect(measure, [measure])
+  return null
 }

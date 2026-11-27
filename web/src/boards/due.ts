@@ -1,28 +1,20 @@
-// A card's due date is a calendar date (YYYY-MM-DD) with no time zone, so "today" is the
-// reader's own day: the browser's local date, never the server's.
-
 import { useEffect, useState } from 'react'
 import type { Card } from '../api'
 
-// Today's date where the reader is, as YYYY-MM-DD.
 export function localToday(now: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
 }
 
-// Overdue: due before today, and not finished (a done or archived card isn't late).
 export function isOverdue(card: Pick<Card, 'due' | 'column'>, today: string): boolean {
   return card.due !== null && card.due < today && card.column !== 'done' && card.column !== 'archived'
 }
 
-// The day after a date (YYYY-MM-DD), as YYYY-MM-DD.
 function nextDay(ymd: string): string {
   const [y, m, d] = ymd.split('-').map(Number)
   return localToday(new Date(y, m - 1, d + 1))
 }
 
-// How a card's due date reads on the board: overdue, due soon (today or tomorrow) or later; null
-// for no date, or a finished card's (a done or archived card is neither late nor soon).
 export type DueState = 'overdue' | 'soon' | 'later'
 
 export function dueState(card: Pick<Card, 'due' | 'column'>, today: string): DueState | null {
@@ -32,8 +24,6 @@ export function dueState(card: Pick<Card, 'due' | 'column'>, today: string): Due
   return !finished && card.due <= nextDay(today) ? 'soon' : 'later'
 }
 
-// Today's date where the reader is, kept current: it changes at the next local midnight, and
-// again when the page becomes visible (a timer may not have fired while it slept).
 export function useToday(): string {
   const [today, setToday] = useState(() => localToday())
   useEffect(() => {
@@ -43,7 +33,6 @@ export function useToday(): string {
       setToday(localToday())
       const now = new Date()
       const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-      // A second past it, so the clock has surely turned over.
       timer = setTimeout(refresh, midnight.getTime() - now.getTime() + 1000)
     }
     const visible = () => {

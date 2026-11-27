@@ -25,13 +25,11 @@ func TestLocales(t *testing.T) {
 	owner, ws := e.setup()
 	member, _ := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Member")
 
-	// None picked: "" for both, until someone picks one.
 	got := decode[me](t, member.do(http.MethodGet, "/api/me", nil))
 	if got.User.Locale != "" || got.Workspaces[0].Locale != "" {
 		t.Fatalf("GET /api/me = %+v, want no locales", got)
 	}
 
-	// A user picks their own; PATCH /api/me answers like GET /api/me.
 	got = decode[me](t, member.do(http.MethodPatch, "/api/me", map[string]string{"locale": "pt-BR"}))
 	if got.User.Locale != "pt-BR" || got.User.Email != "member@example.com" {
 		t.Fatalf("PATCH /api/me = %+v", got)
@@ -39,7 +37,6 @@ func TestLocales(t *testing.T) {
 	if got := decode[me](t, member.do(http.MethodGet, "/api/me", nil)); got.User.Locale != "pt-BR" {
 		t.Fatalf("GET /api/me after the change = %+v", got)
 	}
-	// It is theirs alone: the owner's is untouched, and the members list shows nobody's.
 	if got := decode[me](t, owner.do(http.MethodGet, "/api/me", nil)); got.User.Locale != "" {
 		t.Fatalf("the owner's locale = %q after a member picked one", got.User.Locale)
 	}
@@ -49,7 +46,6 @@ func TestLocales(t *testing.T) {
 		t.Fatalf("the members list shows locales: %s", body)
 	}
 
-	// An empty body changes nothing; "" goes back to the browser's.
 	if got := decode[me](t, member.do(http.MethodPatch, "/api/me", map[string]string{})); got.User.Locale != "pt-BR" {
 		t.Fatalf("PATCH /api/me {} changed the locale to %q", got.User.Locale)
 	}
@@ -57,7 +53,6 @@ func TestLocales(t *testing.T) {
 		t.Fatalf("PATCH /api/me {locale: \"\"} left %q", got.User.Locale)
 	}
 
-	// Malformed tags and unknown fields are refused, and change nothing.
 	for _, body := range []any{
 		map[string]string{"locale": "pt_BR"},
 		map[string]string{"locale": "<script>"},
@@ -68,10 +63,8 @@ func TestLocales(t *testing.T) {
 		expect(t, owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d", ws), body), http.StatusBadRequest)
 	}
 
-	// The workspace's default: its admins set it, and every member sees it.
 	path := fmt.Sprintf("/api/workspaces/%d", ws)
 	expect(t, member.do(http.MethodPatch, path, map[string]string{"locale": "pt-BR"}), http.StatusForbidden)
-	// Nobody signed in changes either.
 	expect(t, e.client().do(http.MethodPatch, path, map[string]string{"locale": "pt-BR"}), http.StatusUnauthorized)
 	expect(t, e.client().do(http.MethodPatch, "/api/me", map[string]string{"locale": "pt-BR"}), http.StatusUnauthorized)
 	m := decode[Membership](t, owner.do(http.MethodPatch, path, map[string]string{"locale": "pt-BR"}))

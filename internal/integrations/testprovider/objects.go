@@ -6,9 +6,6 @@ import (
 	"slices"
 )
 
-// Session is Stripe's Checkout Session object, with the fields the integration reads and the
-// ones of the same object that are always null here. Fields Stripe adds are not listed: a
-// reader must ignore what it doesn't know.
 type Session struct {
 	ID                      string            `json:"id"`
 	Object                  string            `json:"object"`
@@ -49,7 +46,6 @@ type Session struct {
 	URL                     *string           `json:"url"`
 }
 
-// Session statuses and payment statuses, as Stripe names them.
 const (
 	SessionOpen     = "open"
 	SessionComplete = "complete"
@@ -59,23 +55,17 @@ const (
 	PaymentPaid   = "paid"
 )
 
-// CustomerDetails is what the payer typed on Stripe's page. It is personal data: the integration
-// must never keep it, and tests plant text in it to prove that.
 type CustomerDetails struct {
 	Email string `json:"email"`
 	Name  string `json:"name"`
 }
 
-// TotalDetails is the breakdown of a session's total. It is always zero here.
 type TotalDetails struct {
 	AmountDiscount int64 `json:"amount_discount"`
 	AmountShipping int64 `json:"amount_shipping"`
 	AmountTax      int64 `json:"amount_tax"`
 }
 
-// PaymentLink is Stripe's Payment Link object. A link never expires by itself and takes no
-// client reference. At Stripe payments through it are Checkout Sessions that carry its id; the
-// fake makes one when a test calls PayLink.
 type PaymentLink struct {
 	ID              string            `json:"id"`
 	Object          string            `json:"object"`
@@ -84,25 +74,20 @@ type PaymentLink struct {
 	Currency        string            `json:"currency"`
 	Livemode        bool              `json:"livemode"`
 	Metadata        map[string]string `json:"metadata"`
-	// Restrictions is null unless restrictions[completed_sessions][limit] was set.
-	Restrictions *LinkRestrictions `json:"restrictions"`
-	SubmitType   string            `json:"submit_type"`
-	URL          string            `json:"url"`
+	Restrictions    *LinkRestrictions `json:"restrictions"`
+	SubmitType      string            `json:"submit_type"`
+	URL             string            `json:"url"`
 }
 
-// LinkRestrictions is a link's restrictions object.
 type LinkRestrictions struct {
 	CompletedSessions CompletedSessions `json:"completed_sessions"`
 }
 
-// CompletedSessions limits how many Checkout Sessions of a link may complete: Count of them
-// have, and the link deactivates when Count reaches Limit.
 type CompletedSessions struct {
 	Count int `json:"count"`
 	Limit int `json:"limit"`
 }
 
-// Event is Stripe's Event object, a snapshot: Data.Object is the object as it was.
 type Event struct {
 	ID              string       `json:"id"`
 	Object          string       `json:"object"`
@@ -115,24 +100,20 @@ type Event struct {
 	Type            string       `json:"type"`
 }
 
-// EventData holds the object of an event.
 type EventData struct {
 	Object json.RawMessage `json:"object"`
 }
 
-// EventRequest says what request caused an event. It is null for events caused by a payer.
 type EventRequest struct {
 	ID             *string `json:"id"`
 	IdempotencyKey *string `json:"idempotency_key"`
 }
 
-// clone is a copy of the event that shares nothing with it.
 func (e Event) clone() Event {
 	e.Data.Object = slices.Clone(e.Data.Object)
 	return e
 }
 
-// Body is the event as Stripe sends it to a webhook: the bytes that are signed.
 func (e Event) Body() []byte {
 	b, err := json.MarshalIndent(e, "", "  ")
 	if err != nil {
@@ -141,10 +122,8 @@ func (e Event) Body() []byte {
 	return b
 }
 
-// ObjectAs decodes the event's object into v.
 func (e Event) ObjectAs(v any) error { return json.Unmarshal(e.Data.Object, v) }
 
-// The event types the fake emits, as Stripe names them.
 const (
 	EventSessionCompleted             = "checkout.session.completed"
 	EventSessionAsyncPaymentSucceeded = "checkout.session.async_payment_succeeded"
@@ -161,17 +140,13 @@ const (
 	EventRefundCreated                = "refund.created"
 )
 
-// reply is one answer of the fake, before it is written.
 type reply struct {
-	status int
-	body   []byte
-	header http.Header
-	// drop and hang make the answer a closed connection or no answer at all.
+	status     int
+	body       []byte
+	header     http.Header
 	drop, hang bool
-	// executed is true when the request got as far as running its operation: only then is its
-	// result saved under the idempotency key.
-	executed bool
-	replayed bool
+	executed   bool
+	replayed   bool
 }
 
 func (r reply) clone() reply {
@@ -199,7 +174,6 @@ type errorObject struct {
 	Type          string  `json:"type"`
 }
 
-// errorReply is Stripe's error envelope: {"error": {type, code, message, param, ...}}.
 func errorReply(status int, typ, code, message, param string) reply {
 	e := errorObject{Message: message, Type: typ}
 	if code != "" {

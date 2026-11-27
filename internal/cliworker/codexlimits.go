@@ -7,10 +7,6 @@ import (
 	"path/filepath"
 )
 
-// codexLimits reads the newest usage limits Codex recorded in thread's session file (its
-// "rollout"), under codexHome/sessions/YYYY/MM/DD/rollout-…-<thread>.jsonl: `codex exec
-// --json` doesn't print them, but every token_count event in the file carries them. It
-// returns nil when there are none (an API-key login, or a gateway, reports none).
 func codexLimits(codexHome, thread string) []Limit {
 	if thread == "" || !sessionPattern.MatchString(thread) {
 		return nil

@@ -21,7 +21,6 @@ const teamSpace = {
   role: 'editor',
   access: 'write',
 }
-// A space they only read: its boards are never offered.
 const readOnly = {
   id: 4,
   workspace_id: 1,
@@ -134,7 +133,6 @@ test('the Apps page starts from a template, listing each with what it needs', as
   render(<Routed />)
   fireEvent.click(await screen.findByRole('link', { name: 'Start from a template' }))
   await screen.findByRole('heading', { name: 'Start from a template', level: 1 })
-  // A list of choices, each with one way in: no primary button competes on the page.
   const ways = await screen.findAllByRole('button', { name: /^Use the template/ })
   expect(ways.map((b) => b.getAttribute('aria-label'))).toEqual([
     'Use the template Equipment checkout',
@@ -171,7 +169,6 @@ test('installs into the private space by default and opens the draft with its au
   render(<Routed />)
   fireEvent.click(await screen.findByRole('button', { name: 'Use the template Expense tracker' }))
   const form = await screen.findByRole('dialog', { name: 'Use the template Expense tracker' })
-  // Private is the default; a shared space is a choice, and a template without a board asks for none.
   expect((within(form).getByLabelText('In my private space') as HTMLInputElement).checked).toBe(true)
   expect(within(form).queryByLabelText('Board for the cards it makes')).toBeNull()
   expect((within(form).getByLabelText('Name') as HTMLInputElement).value).toBe('Expense tracker')
@@ -204,23 +201,19 @@ test('once published, the install page shows the live app and no longer offers t
   })
   window.history.replaceState(null, '', '/w/1/apps/installed-2-9')
   render(<Routed />)
-  // A draft nobody has published is previewed on sample data, with the way to publish it.
   await screen.findByText('Preview · sample data')
   const panel = await screen.findByRole('region', { name: 'Publish' })
   fireEvent.click(within(panel).getByRole('button', { name: 'Publish' }))
   await within(panel).findByText(/Published as release 1/)
 
-  // Nothing is unpublished now: the live app is what the page shows, and says so.
   await screen.findByText('Live · release 1')
   expect(screen.queryByText('Preview · sample data')).toBeNull()
   expect(screen.getByText(/Nothing is unpublished: the draft is the live release/)).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Preview the draft' })).toBeNull()
   expect(within(panel).queryByRole('button', { name: /ublish/ })).toBeNull()
-  // The live screen's renderer is loaded when it is drawn (LazyAppView): its request comes a moment later.
   await waitFor(() =>
     expect(calls.some((c) => c.path === '/api/workspaces/1/spaces/2/apps/9/surface?release=1')).toBe(true),
   )
-  // And the way to the app where people use it.
   expect(screen.getByRole('link', { name: 'Open Expense tracker in Apps' }).getAttribute('href')).toBe('/w/1/apps/2-9')
 })
 
@@ -255,12 +248,10 @@ test('a template that makes cards needs a board the person may write: only those
     'Repairs · Team',
   ])
   expect(calls.some((c) => c.path.includes('/spaces/4/boards'))).toBe(false)
-  // Without a board it can't be installed.
   expect(install.disabled).toBe(true)
   fireEvent.change(board, { target: { value: '3:30' } })
   expect(install.disabled).toBe(false)
   fireEvent.click(install)
-  // The server's refusal is said in words, and nothing moves on.
   await within(form).findByText(/targets a space or board you can’t write to/)
   expect(window.location.pathname).toBe('/w/1/apps/templates')
   fireEvent.click(install)
@@ -298,7 +289,6 @@ test('a shared space is chosen explicitly, and says which roles the install give
   render(<Routed />)
   fireEvent.click(await screen.findByRole('button', { name: 'Use the template Equipment checkout' }))
   const form = await screen.findByRole('dialog', { name: 'Use the template Equipment checkout' })
-  // Private is still the default, with a note that this one is made for a team.
   expect((within(form).getByLabelText('In my private space') as HTMLInputElement).checked).toBe(true)
   expect(within(form).getByText(/made for a team in a shared space/)).toBeTruthy()
   fireEvent.click(within(form).getByLabelText('In a shared space'))
@@ -311,7 +301,6 @@ test('a shared space is chosen explicitly, and says which roles the install give
   fireEvent.click(within(form).getByRole('button', { name: 'Install as a draft' }))
   await waitFor(() => expect(window.location.pathname).toBe('/w/1/apps/installed-3-5'))
   expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ name: 'Equipment checkout' })
-  // The audience panel names who holds which role, before anything is published.
   const panel = await screen.findByRole('region', { name: 'Publish' })
   await within(panel).findByText('Ann: Builder, Publisher, Data manager')
   expect(within(panel).getByText('Everyone else: User')).toBeTruthy()
@@ -377,14 +366,12 @@ test('duplicating an app copies the definition into a space the person picks, pr
   const form = await screen.findByRole('dialog', { name: 'Duplicate Expenses' })
   expect(within(form).getByText(/no records, photos, history or roles come with it/)).toBeTruthy()
   expect((within(form).getByLabelText('Name') as HTMLInputElement).value).toBe('Copy of Expenses')
-  // The read-only space isn't a place to put it.
   const to = within(form).getByLabelText('Put the copy in') as HTMLSelectElement
   expect([...to.options].map((o) => o.textContent)).toEqual(['Team', 'Private'])
   expect(to.value).toBe('2')
   fireEvent.click(within(form).getByRole('button', { name: 'Make the copy' }))
   await waitFor(() => expect(window.location.pathname).toBe('/w/1/apps/installed-2-20'))
   expect(calls.find((c) => c.path.endsWith('/duplicate'))?.body).toEqual({ name: 'Copy of Expenses', space_id: 2 })
-  // The copy had boards the copier can't write: it asks for one before it can be published.
   await screen.findByRole('form', { name: 'Board for the cards it makes' })
 })
 
@@ -401,17 +388,13 @@ test('the templates are in Portuguese too', async () => {
 test('the apps screens lay out with logical properties, in the screens layer', () => {
   const css = readFileSync(join(process.cwd(), 'src/apps/Apps.css'), 'utf8')
   const code = css.replace(/\/\*[\s\S]*?\*\//g, '')
-  // Everything is inside one @layer screens block, so the components' rules come first.
   expect(code.trim().startsWith('@layer screens {')).toBe(true)
   expect(code.match(/@layer/g)).toHaveLength(1)
-  // The dialogs' columns are as wide as the dialog, never as their content: a table scrolls in its box.
   expect(code).toMatch(/\.apps-stack,[^{]*\{\s*grid-template-columns: minmax\(0, 1fr\);/)
   expect(code).not.toMatch(
     /(margin|padding)-(left|right)|\b(left|right):|text-align: (left|right)|border-(left|right)|\bwidth:|max-width:|\bheight:/,
   )
 })
-
-// --- An install or a copy that answers after the page went ------------------------------------
 
 test('an install that answers after the page went opens nothing', async () => {
   let answer: () => void = () => {}

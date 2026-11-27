@@ -13,8 +13,6 @@ import (
 	"testing"
 )
 
-// publishedApp makes an app with one text field, note, live in space, as the apps' own tables
-// have it.
 func (w *world) publishedApp(space int64, name string) int64 {
 	w.t.Helper()
 	def := `{"collection":{"fields":[{"name":"note","type":"string"},{"name":"count","type":"number"}]}}`
@@ -37,9 +35,6 @@ func hits(out map[string]any, field string) []string {
 	return got
 }
 
-// search_records finds the records the user may read, in the apps they may open, as the
-// conversation's owner: never another user's private space, another workspace, or the records
-// their role in an app keeps from them.
 func TestSearchRecordsIsForTheConversationsOwner(t *testing.T) {
 	w := newWorld(t)
 	team := w.publishedApp(w.shared, "Team notes")
@@ -69,30 +64,24 @@ func TestSearchRecordsIsForTheConversationsOwner(t *testing.T) {
 			t.Fatalf("bob found %q", g)
 		}
 	}
-	// Alice in her other workspace finds only what is there.
 	if got := hits(w.ok(w.aliceConv2, "search_records", map[string]any{"query": "zanzibar"}), "snippet"); len(got) != 1 || got[0] != "zanzibar in two" {
 		t.Fatalf("alice in two found %q", got)
 	}
 
-	// A space that isn't the user's is not found, as for every tool.
 	for _, space := range []int64{w.bobPrivate, w.alicePrivate2} {
 		out := w.status(http.StatusNotFound, w.aliceConv, "search_records", map[string]any{"query": "zanzibar", "space_id": space})
 		if out["error"] != "not found" {
 			t.Fatalf("space %d: %v", space, out)
 		}
 	}
-	// One space: only its records.
 	one := w.ok(w.aliceConv, "search_records", map[string]any{"query": "zanzibar", "space_id": w.shared})
 	if got := hits(one, "space_id"); len(got) != 2 {
 		t.Fatalf("alice in the team space found %q", got)
 	}
-	// The words, the arguments and the limit are checked as every search's.
 	for _, args := range []map[string]any{{"query": "x", "space_id": nil}, {"query": "x", "limit": 0}, {"query": "x", "limit": 21}} {
 		w.status(http.StatusBadRequest, w.aliceConv, "search_records", args)
 	}
 
-	// Roles: bob, with the user role, reads only the records he made, and a person with no role of
-	// an app that has roles reads none.
 	w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'builder'), (?, ?, 'reader'), (?, ?, 'user')`, team, w.alice, team, w.alice, team, w.bob)
 	if got := hits(w.ok(w.bobConv, "search_records", map[string]any{"query": "zanzibar", "space_id": w.shared}), "snippet"); len(got) != 1 || got[0] != "zanzibar from bob" {
 		t.Fatalf("bob, a user of the app, found %q", got)
@@ -106,7 +95,6 @@ func TestSearchRecordsIsForTheConversationsOwner(t *testing.T) {
 	}
 }
 
-// fakeTranscripts gives the conversations' text by the agent runtime's IDs.
 type fakeTranscripts struct {
 	mu   sync.Mutex
 	text map[int64]string
@@ -122,8 +110,6 @@ func (f *fakeTranscripts) Transcript(_ context.Context, agentID int64) (string, 
 	return text, nil
 }
 
-// search_conversations finds the owner's own conversations, in the workspace of the call, and
-// nobody else's; and only inside a conversation, not over an access token's MCP.
 func TestSearchConversationsIsForTheConversationsOwner(t *testing.T) {
 	w := newWorld(t)
 	src := &fakeTranscripts{text: map[int64]string{}}
@@ -147,13 +133,11 @@ func TestSearchConversationsIsForTheConversationsOwner(t *testing.T) {
 	if got := hits(w.ok(w.aliceConv2, "search_conversations", map[string]any{"query": "zanzibar"}), "conversation_id"); len(got) != 1 || got[0] != fmt.Sprint(w.aliceConv2) {
 		t.Fatalf("alice in two found %v", got)
 	}
-	// No space: conversations aren't in one.
 	w.status(http.StatusBadRequest, w.aliceConv, "search_conversations", map[string]any{"query": "zanzibar", "space_id": w.shared})
 	for _, args := range []map[string]any{{"query": "x", "limit": 0}, {"query": "x", "limit": 21}, {"query": strings.Repeat("a", 501)}} {
 		w.status(http.StatusBadRequest, w.aliceConv, "search_conversations", args)
 	}
 
-	// Over MCP there is no conversation: refused, and not listed there.
 	_, err := w.tools.Call(context.Background(), Caller{Workspace: w.one, User: w.alice, Token: "mine"}, "search_conversations",
 		json.RawMessage(`{"query":"zanzibar"}`))
 	var refused *Refusal
@@ -179,13 +163,9 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// A page of hits whose snippets JSON writes out at six bytes a character is cut to what fits in a
-// reply, and says where the next page starts, rather than being refused whole.
 func TestSearchRepliesFitMaxResult(t *testing.T) {
 	w := newWorld(t)
 	app := w.publishedApp(w.shared, "Team notes")
-	// A word, then 3000 characters that are escaped as six bytes each: snippets of that
-	// size, twenty of them, are over a reply.
 	body := "zanzibar " + strings.Repeat("<", 3000)
 	for range 20 {
 		w.record(app, w.alice, body)
@@ -199,17 +179,13 @@ func TestSearchRepliesFitMaxResult(t *testing.T) {
 	if !ok || int(next) != len(got) {
 		t.Fatalf("next_offset = %v after %d hits", out["next_offset"], len(got))
 	}
-	// The next page starts with the first hit left out.
 	rest := w.ok(w.aliceConv, "search_records", map[string]any{"query": "zanzibar", "limit": 20, "offset": int(next)})["results"].([]any)
 	if len(rest) == 0 {
 		t.Fatalf("the next page has %d hits", len(rest))
 	}
 
-	// The same for conversations.
 	src := &fakeTranscripts{text: map[int64]string{}}
 	w.tools.o.Search.SetConversations(src)
-	// The conversations the world made have text too, or the agent runtime would be unable to
-	// answer for them, which is an incomplete search.
 	for _, conv := range []int64{w.aliceConv, w.bobConv, w.aliceConv2, w.aliceConv} {
 		src.text[w.insert(`SELECT agent_id FROM conversations WHERE id = ?`, conv)] = "nothing"
 	}
@@ -225,7 +201,6 @@ func TestSearchRepliesFitMaxResult(t *testing.T) {
 	}
 }
 
-// A reply cut to fit never offers a next_offset a search would refuse (the schema's maximum).
 func TestFittedSearchReplyNextOffsetStaysWithinTheMaximum(t *testing.T) {
 	type hit struct {
 		Snippet string `json:"snippet"`
@@ -260,8 +235,6 @@ func TestFittedSearchReplyNextOffsetStaysWithinTheMaximum(t *testing.T) {
 
 func reflectLen(v any) int { return reflect.ValueOf(v).Len() }
 
-// An offset reads as limit and space_id do: null is not a value, "10.0" is a whole number, and
-// what the schema forbids is refused.
 func TestSearchOffsetIsReadStrictly(t *testing.T) {
 	w := newWorld(t)
 	w.publishedApp(w.shared, "Team notes")

@@ -1,8 +1,3 @@
-// Storage: what the workspace's spaces store, against the quotas the operator set
-// (docs/quotas.md). Admins see every space, the members' private ones by their owner's name;
-// a member sees their own private space and nothing of anyone else's, which the server
-// enforces. A quota of 0 is none.
-
 import type { ReactNode } from 'react'
 import { api, type MyStorage, type SpaceUsage, type StorageReport, usagePath } from '../api'
 import { type T, useFormat, useT } from '../i18n'
@@ -22,7 +17,6 @@ function AdminStorage({ workspace }: { workspace: number }) {
   const f = useFormat()
   const report = useLoad(() => api<StorageReport>(usagePath(workspace)), [workspace])
   const r = report.data
-  // The biggest first: what an admin looks for is what fills the workspace.
   const spaces = r ? [...r.spaces].sort((a, b) => b.total - a.total || a.id - b.id) : []
   return (
     <SettingsTab title={t('settings.storage.title')} help={t('settings.storage.intro')}>
@@ -130,8 +124,6 @@ function SpaceRow({ space, own }: { space: SpaceUsage; own?: boolean }) {
   )
 }
 
-// A space at or near its limit says so: nearly full from nine tenths, full at the limit. Nothing
-// otherwise, so a row with room has no status at all.
 function fullness(t: T, used: number, limit: number): ReactNode {
   if (limit <= 0) return null
   if (used >= limit) return <Badge tone="danger">{t('settings.storage.full')}</Badge>
@@ -139,7 +131,6 @@ function fullness(t: T, used: number, limit: number): ReactNode {
   return null
 }
 
-// A figure with a bar when there is a limit to measure it against.
 function Meter({ label, used, limit, text }: { label: string; used: number; limit: number; text: string }) {
   return (
     <span className="settings-meter">

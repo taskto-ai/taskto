@@ -11,26 +11,18 @@ import (
 	"modernc.org/sqlite"
 )
 
-// Hooks are what a test runs at chosen moments of a database's use, to make two things happen in
-// a fixed order that only a race could otherwise order: a change between a check and the read
-// after it. They are for tests; the server never sets one.
 type Hooks struct {
-	mu sync.Mutex
-	// beforeBegin runs just before a transaction begins on the hooked database.
+	mu          sync.Mutex
 	beforeBegin func()
-	// before maps a fragment of SQL to what runs just before a statement containing it.
-	before map[string]func()
+	before      map[string]func()
 }
 
-// BeforeBegin sets what runs, once, just before the next transaction begins.
 func (h *Hooks) BeforeBegin(fn func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.beforeBegin = fn
 }
 
-// BeforeQuery sets what runs, once, just before the next statement that contains fragment is
-// executed or queried. fn runs on the caller's goroutine and may use other connections.
 func (h *Hooks) BeforeQuery(fragment string, fn func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -60,8 +52,6 @@ func (h *Hooks) takeQuery(query string) func() {
 	return nil
 }
 
-// OpenHooked is Open on the same database with the same settings, through a driver that runs h's
-// hooks. For tests.
 func OpenHooked(ctx context.Context, path string, h *Hooks) (*sql.DB, error) {
 	dsn, err := dsn(path)
 	if err != nil {
@@ -92,13 +82,11 @@ func (c hookedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	return &hookedConn{conn, c.h}, nil
 }
 
-// hookedConn is the driver's connection, with the hooks run before what they name.
 type hookedConn struct {
 	driver.Conn
 	h *Hooks
 }
 
-// Unwrap lets the driver's own helpers reach the connection.
 func (c *hookedConn) Unwrap() driver.Conn { return c.Conn }
 
 func (c *hookedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {

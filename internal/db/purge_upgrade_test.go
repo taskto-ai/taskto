@@ -11,8 +11,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// worker is a CLI worker in container mode that notes whom it forgot, and whether that person's
-// browser was still running then.
 type worker struct {
 	mu       sync.Mutex
 	forgot   []int64
@@ -50,10 +48,6 @@ func (b *browsers) running(user int64) bool {
 	return !slices.Contains(b.forgot, user)
 }
 
-// A purge's CLI step recorded before the browser step (0058) and the CLI worker history (0059):
-// after both migrations, in that order, the cleanup runs to the end. The browser step 0058 made has
-// the user's id, which it reads; the CLI steps 0059 made from the old one, one per kind of worker,
-// wait for it and then are done.
 func TestAnOldCLIStepIsCleanedUpAfterBothMigrations(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

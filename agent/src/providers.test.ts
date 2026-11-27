@@ -15,8 +15,6 @@ import {
   redact,
 } from './providers.js'
 
-// Distinct, obviously-not-real keys: long enough for the sidecar to take them, and built from
-// parts so no scanner sees one as a secret.
 const key = (name: string) => `${name}-unit-test-key-0000`
 
 const compatible = (extra: Record<string, unknown> = {}) => ({
@@ -195,7 +193,6 @@ describe('parseConfig', () => {
           baseUrl,
         ).toContain('must use https to send an API key to another host')
       }
-      // Without a key, plain http anywhere is fine.
       expect(() => parseConfig({ providers: [compatible({ baseUrl: 'http://10.0.0.5/v1' })] })).not.toThrow()
     })
   })
@@ -327,7 +324,6 @@ describe('installProviders and redact', () => {
     const before = installProviders(models, config({ id: 'one', kind: 'script' }, compatible({ id: 'two' })))
     expect(models.getProvider('two')).toBeDefined()
 
-    // A refused config leaves what was registered as it was.
     expect(() =>
       installProviders(
         models,
@@ -354,7 +350,6 @@ describe('installProviders and redact', () => {
   })
 
   it('redacts a key it has read as it is, JSON-escaped and URL-encoded', () => {
-    // Characters that JSON and URLs write differently.
     const secret = `${key('redact')}"/+ ü`
     const path = join(dir, 'keys', 'redact')
     writeFileSync(path, `${secret}\n`)
@@ -372,8 +367,6 @@ describe('installProviders and redact', () => {
   })
 })
 
-// A fake OpenAI-compatible server that refuses every request and echoes the key it was sent, as
-// some upstreams do, to check the error that reaches the transcript.
 describe('a request that fails upstream', () => {
   let server: Server
   let baseUrl: string
@@ -449,7 +442,6 @@ describe('a request that fails upstream', () => {
   })
 
   it('says what the egress policy refused instead of a connection error', async () => {
-    // The sidecar logs each refusal; keep the test's output clean and check it did.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const models = createModels()
     installProviders(

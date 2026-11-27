@@ -19,7 +19,6 @@ describe('Icon', () => {
       const { container } = render(<Icon name="plus" size={size} />)
       const svg = container.querySelector('svg') as SVGElement
       expect(svg.getAttribute('width')).toBe(String(size))
-      // On screen: the stroke in the grid's units, scaled by size / 24.
       return (Number(svg.getAttribute('stroke-width')) * size) / 24
     })
     for (const w of widths) expect(w).toBeCloseTo(1.5)

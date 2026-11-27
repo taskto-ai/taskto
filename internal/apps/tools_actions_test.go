@@ -8,8 +8,6 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// The agent runs an app's actions through the code the action route runs: the effects they set
-// going are done by the same worker, as the user who acted, and say the agent made the change.
 func TestAgentActionsSetEffectsGoingAsTheRouteDoes(t *testing.T) {
 	f := newFX(t)
 	agent := func(u *user) Actor { return Actor{UserID: u.id, Agent: true} }
@@ -21,7 +19,6 @@ func TestAgentActionsSetEffectsGoingAsTheRouteDoes(t *testing.T) {
 	if err != nil || res.Kind != ActionInsert || res.ID != f.next || res.Revision != 1 || !res.Changed || res.EffectsQueued != 3 {
 		t.Fatalf("insert = %+v, %v", res, err)
 	}
-	// Asked again under the same operation, nothing is done twice.
 	again, err := run(agent(f.alice), "submit_inspection", map[string]any{"site": "East gate", "result": "fail", "notes": "leaking"}, "agent-op-0001")
 	if err != nil || !again.Replayed || again.ID != 0 {
 		t.Fatalf("again = %+v, %v", again, err)
@@ -34,12 +31,10 @@ func TestAgentActionsSetEffectsGoingAsTheRouteDoes(t *testing.T) {
 	if d, err := f.docs.Read(f.ctx(), f.maint, f.east(), ""); err != nil || len(d.Content) == 0 {
 		t.Fatalf("document = %v", err)
 	}
-	// The effects are the user's, made through the agent.
 	if n := f.count(`SELECT count(*) FROM app_effects WHERE app_id = ? AND user_id = ? AND acted_by_agent = 1 AND state = ?`, f.app.ID, f.alice.id, StateDone); n != 3 {
 		t.Fatalf("%d effects of the agent's, want 3", n)
 	}
 
-	// An update moves the card; one that sets nothing new queues nothing.
 	up, err := run(agent(f.alice), "resolve", map[string]any{"id": float64(res.ID), "state": "resolved"}, "")
 	if err != nil || up.Revision != 2 || !up.Changed || up.EffectsQueued != 1 {
 		t.Fatalf("resolve = %+v, %v", up, err)
@@ -53,8 +48,6 @@ func TestAgentActionsSetEffectsGoingAsTheRouteDoes(t *testing.T) {
 		t.Fatalf("a second resolve = %+v, %v", noop, err)
 	}
 
-	// Who may not, may not through the agent: a viewer's change is refused before it is made, and a
-	// member who can't see the space is told it isn't there. Nothing is queued by either.
 	queued := f.count(`SELECT count(*) FROM app_effects`)
 	rows := f.count(`SELECT count(*) FROM app_rows`)
 	if _, err := run(agent(f.bob), "submit_inspection", map[string]any{"site": "West gate", "result": "fail"}, ""); !errors.Is(err, ErrReadOnly) {
@@ -74,7 +67,6 @@ func TestAgentActionsSetEffectsGoingAsTheRouteDoes(t *testing.T) {
 	}
 }
 
-// What the agent is listed is what its user may run, and it is the live release's.
 func TestAgentActionsAreListedByTheUsersAccess(t *testing.T) {
 	f := newFX(t)
 	list, err := f.e.s.Actions(f.ctx(), Actor{UserID: f.alice.id, Agent: true}, f.shared.ID, f.app.ID)
@@ -103,8 +95,6 @@ func TestAgentActionsAreListedByTheUsersAccess(t *testing.T) {
 	}
 }
 
-// publishSecond publishes a second release of the inspections app, in which a failed inspection
-// makes only the card (in done), and returns it.
 func (f *fx) publishSecond() {
 	f.e.t.Helper()
 	def := f.inspections()
@@ -117,9 +107,6 @@ func (f *fx) publishSecond() {
 	expect(f.e.t, f.tryPublish(f.alice, f.shared, cur), http.StatusOK)
 }
 
-// The agent's action runs from the release it was listed from: one published after the list is not
-// run, nor its effects set going, unless the agent listed again; a retry of what was run is still
-// answered as the first time was.
 func TestAgentActionRunsOnlyFromTheReleaseItWasListedFrom(t *testing.T) {
 	f := newFX(t)
 	agent := Actor{UserID: f.alice.id, Agent: true}
@@ -141,7 +128,6 @@ func TestAgentActionRunsOnlyFromTheReleaseItWasListedFrom(t *testing.T) {
 	f.publishSecond()
 	rows, effects := f.count(`SELECT count(*) FROM app_rows`), f.count(`SELECT count(*) FROM app_effects`)
 
-	// Not run: it was listed from release 1 and the live one has other effects.
 	for _, op := range []string{"", "agent-op-0002"} {
 		if _, err := run(1, failed, op); !errors.Is(err, ErrReleaseOutdated) {
 			t.Fatalf("a new request from release 1 (operation %q): %v", op, err)
@@ -154,7 +140,6 @@ func TestAgentActionRunsOnlyFromTheReleaseItWasListedFrom(t *testing.T) {
 		t.Fatal("a refused request changed something")
 	}
 
-	// An exact retry of the first request is answered as it was; another under its key is refused.
 	again, err := run(1, failed, "agent-op-0001")
 	if err != nil || !again.Replayed || again.ID != 0 {
 		t.Fatalf("retry = %+v, %v", again, err)
@@ -166,7 +151,6 @@ func TestAgentActionRunsOnlyFromTheReleaseItWasListedFrom(t *testing.T) {
 		t.Fatal("a retry changed something")
 	}
 
-	// From the live release, what runs is its: one effect, not three.
 	second, err := run(2, failed, "")
 	if err != nil || second.EffectsQueued != 1 {
 		t.Fatalf("from release 2 = %+v, %v", second, err)
@@ -176,7 +160,6 @@ func TestAgentActionRunsOnlyFromTheReleaseItWasListedFrom(t *testing.T) {
 	}
 }
 
-// effects_queued is what was queued: an effect whose condition the record doesn't meet is not.
 func TestAgentActionCountsTheEffectsItQueued(t *testing.T) {
 	f := newFX(t)
 	agent := Actor{UserID: f.alice.id, Agent: true}
@@ -190,8 +173,6 @@ func TestAgentActionCountsTheEffectsItQueued(t *testing.T) {
 	}
 }
 
-// What the agent is listed is read in one piece: a role lost and a release published while the list
-// is being made are not shown as the user's.
 func TestAgentActionsAreNotListedAcrossARevokedRole(t *testing.T) {
 	f := newFX(t)
 	agent := Actor{UserID: f.alice.id, Agent: true}
@@ -206,7 +187,6 @@ func TestAgentActionsAreNotListedAcrossARevokedRole(t *testing.T) {
 		t.Fatalf("a user who lost the space was listed release %d: %v", list.Release, err)
 	}
 
-	// A release published alone is simply the one listed.
 	f = newFX(t)
 	f.e.s.hooks.afterActionsAccess = func() {
 		f.e.s.hooks.afterActionsAccess = nil
@@ -216,7 +196,6 @@ func TestAgentActionsAreNotListedAcrossARevokedRole(t *testing.T) {
 		t.Fatalf("list = %+v, %v", list, err)
 	}
 
-	// A role that only changes is read again, and the list is the new role's.
 	f = newFX(t)
 	f.e.s.hooks.afterActionsAccess = func() {
 		f.e.s.hooks.afterActionsAccess = nil
@@ -235,8 +214,6 @@ func TestAgentActionsAreNotListedAcrossARevokedRole(t *testing.T) {
 	}
 }
 
-// A request that committed is answered with its receipt when the user's access has changed or the
-// app has gone offline since; one that did not commit is refused as it would be.
 func TestAgentActionRetryIsAnsweredAfterTheAppGoesOffline(t *testing.T) {
 	f := newFX(t)
 	agent := Actor{UserID: f.alice.id, Agent: true}
@@ -254,14 +231,12 @@ func TestAgentActionRetryIsAnsweredAfterTheAppGoesOffline(t *testing.T) {
 	if err != nil || !receipt.Replayed || receipt.Kind != ActionInsert || receipt.ID != 0 || receipt.Action != "submit_inspection" {
 		t.Fatalf("the retry = %+v, %v", receipt, err)
 	}
-	// Not another request under the key, nor one that was never made.
 	if _, err := run("agent-op-0001", "West gate"); !errors.Is(err, ErrOffline) {
 		t.Fatalf("another request under the key: %v", err)
 	}
 	if _, err := run("agent-op-0002", "East gate"); !errors.Is(err, ErrOffline) {
 		t.Fatalf("a request never made: %v", err)
 	}
-	// Nor one of a user who didn't make it, which the space doesn't show them.
 	other := Actor{UserID: f.mallory.id, Agent: true}
 	if _, err := f.e.s.RunAction(f.ctx(), other, f.shared.ID, f.app.ID, ActionRun{
 		Action: "submit_inspection", ExpectedRelease: 1, Operation: "agent-op-0001", Context: map[string]any{"site": "East gate", "result": "pass"}}); !errors.Is(err, ErrNotFound) {

@@ -13,18 +13,16 @@ func TestGateLimitsEachPerson(t *testing.T) {
 	if why != allowed {
 		t.Fatalf("first = %v", why)
 	}
-	// One at a time: a second while the first runs, and it isn't counted.
 	if _, why, _ := g.enter(1); why != running {
 		t.Errorf("second at once = %v, want running", why)
 	}
 	leave()
-	leave() // ending twice is harmless
+	leave()
 	leave, why, _ = g.enter(1)
 	if why != allowed {
 		t.Fatalf("second = %v", why)
 	}
 	leave()
-	// Two this hour: the third waits for the first to age out.
 	_, why, wait := g.enter(1)
 	if why != tooMany || wait != time.Hour {
 		t.Errorf("third = %v after %v, want tooMany after 1h", why, wait)
@@ -57,7 +55,6 @@ func TestGateLimitsTheServer(t *testing.T) {
 	}
 }
 
-// A person turned away because the server is busy leaves nothing in the gate's memory.
 func TestGateForgetsThePeopleItTurnsAway(t *testing.T) {
 	g := newGate(-1, time.Hour, 1, time.Now)
 	if _, why, _ := g.enter(1); why != allowed {
@@ -73,7 +70,6 @@ func TestGateForgetsThePeopleItTurnsAway(t *testing.T) {
 	}
 }
 
-// An export that fails before it is made doesn't use one of the person's hour.
 func TestGateRefundsAnExportThatNeverBegan(t *testing.T) {
 	g := newGate(1, time.Hour, -1, time.Now)
 	leave, why, _ := g.enter(1)

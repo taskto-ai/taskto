@@ -15,9 +15,6 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// trapStripe is Stripe, with a function run each time a delivery's signature is about to be
-// verified against an integration's own secrets: the moment after the route has looked the
-// integration up and before it writes.
 type trapStripe struct {
 	stripe
 	before func()
@@ -30,7 +27,6 @@ func (p trapStripe) VerifyWebhook(h http.Header, body []byte, secrets WebhookSec
 	return p.stripe.VerifyWebhook(h, body, secrets, now)
 }
 
-// trap makes Stripe's webhook verification run before for the rest of the test.
 func trap(t *testing.T, before func()) {
 	t.Helper()
 	for i, p := range registry {
@@ -43,7 +39,6 @@ func trap(t *testing.T, before func()) {
 	t.Fatal("no stripe in the registry")
 }
 
-// countingReceiver counts the verifications the route runs with the server's decoy secret.
 type countingReceiver struct {
 	Receiver
 	calls   int
@@ -59,8 +54,6 @@ func (c *countingReceiver) VerifyWebhook(h http.Header, body []byte, secrets Web
 	return c.Receiver.VerifyWebhook(h, body, secrets, now)
 }
 
-// Unsigned traffic, from any number of addresses that each stay under their own limit, can't
-// use up an integration's quota: a valid delivery from another address still gets in.
 func TestUnsignedFloodsDoNotUseUpAnotherClientsQuota(t *testing.T) {
 	r := newRig(t)
 	s, _ := r.session(2500, "eur")
@@ -73,8 +66,6 @@ func TestUnsignedFloodsDoNotUseUpAnotherClientsQuota(t *testing.T) {
 			t.Fatalf("unsigned request %d = %d, want 404", i, rec.Code)
 		}
 	}
-	// The same flood with a signature that is wrong, one that is stale and one of another
-	// integration's secret: none of them is authentic, so none of them is counted.
 	for i := range hookIDAttempts {
 		h := http.Header{StripeSignatureHeader: {testprovider.Sign(testprovider.OtherWebhookSecret, r.clock.Now(), ev.Body())}}
 		if rec := r.post(HookPrefix+r.id, ev.Body(), h, from(i)); rec.Code != http.StatusNotFound {
@@ -90,13 +81,9 @@ func TestUnsignedFloodsDoNotUseUpAnotherClientsQuota(t *testing.T) {
 	}
 }
 
-// One webhook secret opens one integration: it is refused for a second, in this workspace or
-// another, whether it is the first's current secret or a previous one still valid, and the
-// refusal says nothing of which integration holds it.
 func TestAWebhookSecretBelongsToOneIntegration(t *testing.T) {
 	r := newRig(t)
 	_, ws2 := r.otherWorkspace(r.owner)
-	// notNamed fails when a refusal's body says whose the secret is.
 	notNamed := func(label string, body string) {
 		t.Helper()
 		if strings.Contains(body, r.id) || strings.Contains(body, r.in.Name) || strings.Contains(body, r.in.DisplayName) {
@@ -104,7 +91,6 @@ func TestAWebhookSecretBelongsToOneIntegration(t *testing.T) {
 		}
 	}
 
-	// A second integration in the same workspace, and one in another, can't take the first's.
 	same := r.owner.do(http.MethodPost, wsPath(r.ws, "integrations"), withHook(stripeBody("second"), stripeHook))
 	expectCode(t, same, http.StatusConflict, "integration_webhook_secret_reused")
 	notNamed("same workspace", same.Body.String())
@@ -116,7 +102,6 @@ func TestAWebhookSecretBelongsToOneIntegration(t *testing.T) {
 		t.Fatalf("%d integrations after refused creates, want 1 (%v)", n, err)
 	}
 
-	// Changing a second integration's secret to it is refused too, and changes nothing.
 	second := r.create(r.owner, r.ws, stripeBody("second"))
 	path := wsPath(r.ws, fmt.Sprintf("integrations/%d", second.ID))
 	rec := r.owner.do(http.MethodPatch, path, map[string]any{"secrets": map[string]string{"webhook_secret": stripeHook}})
@@ -127,8 +112,6 @@ func TestAWebhookSecretBelongsToOneIntegration(t *testing.T) {
 		t.Fatalf("a refused change altered the secrets: %v", err)
 	}
 
-	// The first integration's replaced secret is still one it verifies with, so it is taken for
-	// the overlap, and free again after.
 	expect(t, r.owner.do(http.MethodPatch, wsPath(r.ws, fmt.Sprintf("integrations/%d", r.in.ID)),
 		map[string]any{"secrets": map[string]string{"webhook_secret": stripeHookNew}}), http.StatusOK)
 	expectCode(t, r.owner.do(http.MethodPatch, path, map[string]any{"secrets": map[string]string{"webhook_secret": stripeHook}}),
@@ -138,10 +121,8 @@ func TestAWebhookSecretBelongsToOneIntegration(t *testing.T) {
 	r.clock.Advance(previousOverlap + time.Minute)
 	expect(t, r.owner.do(http.MethodPatch, path, map[string]any{"secrets": map[string]string{"webhook_secret": stripeHook}}), http.StatusOK)
 
-	// An integration can send its own current secret again (a retry whose answer was lost).
 	expect(t, r.owner.do(http.MethodPatch, path, map[string]any{"secrets": map[string]string{"webhook_secret": stripeHook}}), http.StatusOK)
 
-	// So a signature opens one integration only: the first's is refused by the second.
 	s, _ := r.session(2500, "eur")
 	r.must(r.fake.Pay(s.ID))
 	secondID := ""
@@ -155,8 +136,6 @@ func TestAWebhookSecretBelongsToOneIntegration(t *testing.T) {
 	isNotFound(t, "the first's secret against the second", d.Status, d.Response)
 }
 
-// A delivery that was verified and then overtaken by the admin, who disabled the integration or
-// replaced its secret or changed its mode, stores nothing and is refused like any other.
 func TestADeliveryInFlightWhenTheIntegrationChanges(t *testing.T) {
 	changes := map[string]func(r *rig){
 		"disabled": func(r *rig) {
@@ -174,8 +153,6 @@ func TestADeliveryInFlightWhenTheIntegrationChanges(t *testing.T) {
 			expect(t, r.owner.do(http.MethodDelete, wsPath(r.ws, fmt.Sprintf("integrations/%d", r.in.ID)), nil), http.StatusNoContent)
 		},
 	}
-	// The event that is stored, and one the server doesn't act on, which only notes that
-	// something arrived: neither may write once the integration has changed.
 	deliveries := map[string]func(r *rig) testprovider.Event{
 		"an event to store": func(r *rig) testprovider.Event {
 			s, _ := r.session(2500, "eur")
@@ -216,7 +193,6 @@ func TestADeliveryInFlightWhenTheIntegrationChanges(t *testing.T) {
 		}
 	}
 
-	// Without a change in between the same deliveries are accepted: the guard is no new refusal.
 	r := newRig(t)
 	s, _ := r.session(2500, "eur")
 	r.must(r.fake.Pay(s.ID))
@@ -229,8 +205,6 @@ func TestADeliveryInFlightWhenTheIntegrationChanges(t *testing.T) {
 	}
 }
 
-// Every way of being refused costs the same verification, against a secret of the server's own
-// when there is no usable one, and leaves nothing in the log: no id, no reason.
 func TestRefusalsDoTheSameWorkAndLeaveNoLog(t *testing.T) {
 	r := newRig(t)
 	s, _ := r.session(2500, "eur")
@@ -259,7 +233,7 @@ func TestRefusalsDoTheSameWorkAndLeaveNoLog(t *testing.T) {
 		name  string
 		id    string
 		key   string
-		decoy bool // verified against the server's own secret
+		decoy bool
 	}
 	cases := []refusal{
 		{"unknown id", token(), stripeHook, true},
@@ -303,7 +277,6 @@ func TestRefusalsDoTheSameWorkAndLeaveNoLog(t *testing.T) {
 	}
 }
 
-// A body that never arrives can't hold the connection: the read has a deadline.
 func TestAStalledBodyIsCutOff(t *testing.T) {
 	old := hookReadTimeout
 	hookReadTimeout = 200 * time.Millisecond
@@ -331,9 +304,6 @@ func TestAStalledBodyIsCutOff(t *testing.T) {
 	}
 }
 
-// An integration removed after its id was found, and before its credentials are read, is an id
-// with nothing behind it: the decoy, the standard refusal, not a server error. The seam is the
-// moment between the route's two reads, so the removal lands exactly there.
 func TestAnIntegrationRemovedDuringLookupGetsTheDecoy(t *testing.T) {
 	r := newRig(t)
 	s, _ := r.session(2500, "eur")
@@ -357,8 +327,6 @@ func TestAnIntegrationRemovedDuringLookupGetsTheDecoy(t *testing.T) {
 	}
 }
 
-// A request refused for its address's quota is bounded too: its unread body can't hold the
-// connection once the 429 is answered.
 func TestAStalledBodyOfARefusedRequestIsCutOff(t *testing.T) {
 	old := hookReadTimeout
 	hookReadTimeout = 200 * time.Millisecond

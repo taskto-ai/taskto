@@ -22,20 +22,17 @@ func TestTokenBudgetRefillsAtItsRate(t *testing.T) {
 	if ok || wait <= 0 || wait > time.Minute/TokenActionsPerMinute+time.Second {
 		t.Fatalf("over the burst: ok=%v wait=%v, want a refusal that says to wait about a second", ok, wait)
 	}
-	// Another user, and the same user in another workspace, have budgets of their own.
 	for _, other := range []budgetKey{{user: 2, workspace: 1}, {user: 1, workspace: 2}} {
 		if _, ok := b.take(other, at); !ok {
 			t.Errorf("%+v shares a budget with another", other)
 		}
 	}
-	// A refusal spends nothing, and a second later one action is back.
 	if _, ok := b.take(key, at.Add(time.Second)); !ok {
 		t.Error("no action after a second")
 	}
 	if _, ok := b.take(key, at.Add(time.Second)); ok {
 		t.Error("two actions after a second")
 	}
-	// A long rest refills the bucket to the burst and no further.
 	later := at.Add(time.Hour)
 	for i := range TokenActionBurst {
 		if _, ok := b.take(key, later); !ok {
@@ -59,7 +56,6 @@ func TestTokenBudgetForgetsBucketsThatRefilled(t *testing.T) {
 	}
 }
 
-// Only an actor with a token is limited: a person's session never is.
 func TestOnlyTokensSpendTheBudget(t *testing.T) {
 	s := New(nil, nil)
 	s.budget = &tokenBudget{}
@@ -76,7 +72,6 @@ func TestOnlyTokensSpendTheBudget(t *testing.T) {
 	if !errors.As(err, &limited) || !IsRateLimited(err) || limited.retryAfter() < 1 {
 		t.Fatalf("over the budget: %v", err)
 	}
-	// The agent of a conversation (no token) and a session are not limited.
 	for _, a := range []Actor{{UserID: 1}, {UserID: 1, Agent: true}} {
 		for range 3 * TokenActionBurst {
 			if err := s.spendTokenAction(a, 1); err != nil {
@@ -84,7 +79,6 @@ func TestOnlyTokensSpendTheBudget(t *testing.T) {
 			}
 		}
 	}
-	// act refuses before it looks at anything else.
 	if _, err := s.act(context.Background(), access.Space{ID: 1, WorkspaceID: 1}, token, 1, ClientAction{}); !IsRateLimited(err) {
 		t.Errorf("act over the budget = %v", err)
 	}

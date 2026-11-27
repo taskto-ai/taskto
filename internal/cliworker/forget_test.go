@@ -16,7 +16,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// waitEvent waits for an event of type typ on turn, and fails if the turn ends first.
 func waitEvent(t *testing.T, turn *cliworker.Turn, typ cliworker.EventType, text string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -46,21 +45,14 @@ func gone(t *testing.T, path string) {
 	}
 }
 
-// Forgetting a user while a turn of theirs runs: the turn is stopped, and Forget returns only
-// once it has ended, so nothing of the user is written into the directory that goes. Without
-// that, the CLI keeps running in a directory that is removed under it and writes its session
-// and refreshed credentials back after Forget returned.
 func TestForgetStopsARunningTurnBeforeTheFilesGo(t *testing.T) {
 	h := newHarness(t, nil)
-	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
-	// The CLI takes a moment to stop and saves a file into its directory as it goes, as a real
-	// one saves its session: Forget must wait for that, and remove the directory after it.
+	h.w.SetGroupWaitForTest(-1)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 60_000, TermWriteMS: 300}, true)
 	turn, _, err := h.w.Start(spec("running", 1, cliworker.Claude, "work"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The CLI is running its tool: it has started, on this login.
 	waitEvent(t, turn, cliworker.EventTool, "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -78,13 +70,11 @@ func TestForgetStopsARunningTurnBeforeTheFilesGo(t *testing.T) {
 	gone(t, dirs.Root)
 }
 
-// A sign-in in progress is stopped and waited for as well: one that ends while the files go could
-// write its credentials back.
 func TestForgetWaitsForASignInBeforeTheFilesGo(t *testing.T) {
 	for _, cli := range []cliworker.CLI{cliworker.Claude, cliworker.Codex} {
 		t.Run(string(cli), func(t *testing.T) {
 			h := newHarness(t, nil)
-			h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
+			h.w.SetGroupWaitForTest(-1)
 			dirs := h.user(t, 1, cli, clitest.Scenario{TermWriteMS: 300}, false)
 			l, err := h.w.StartLogin(1, cli, "")
 			if err != nil {
@@ -108,19 +98,15 @@ func TestForgetWaitsForASignInBeforeTheFilesGo(t *testing.T) {
 	}
 }
 
-// A sign-in that was cancelled and replaced by a new one is still a CLI that may be running (the
-// login of the account is the new one): Forget waits for it too.
 func TestForgetWaitsForACancelledSignInThatANewOneReplaced(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
-	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
+	h.w.SetGroupWaitForTest(-1)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{TermWriteMS: 1500}, false)
 	old, err := h.w.StartLogin(1, cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.w.CancelLogin(1, cliworker.Claude, "")
-	// The replacement stops at once; only the cancelled one takes its time (it read its
-	// scenario when it started).
 	clitest.WriteScenario(t, dirs.Config(cliworker.Claude), clitest.Scenario{})
 	replacement, err := h.w.StartLogin(1, cliworker.Claude, "")
 	if err != nil {
@@ -149,18 +135,15 @@ func TestForgetWaitsForACancelledSignInThatANewOneReplaced(t *testing.T) {
 	gone(t, dirs.Root)
 }
 
-// A helper request in flight (here a slow status check, which writes into the directory as it
-// ends) is waited for too.
 func TestForgetWaitsForAHelperRequestBeforeTheFilesGo(t *testing.T) {
 	h := newHarness(t, nil)
-	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
+	h.w.SetGroupWaitForTest(-1)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{StatusSleepMS: 1500}, true)
 	answered := make(chan struct{})
 	go func() {
 		defer close(answered)
 		_, _ = h.w.Status(context.Background(), 1, cliworker.Claude, "")
 	}()
-	// The check is running: the fake says so by the file it writes first.
 	eventually(t, "the status check didn't start", func() bool {
 		_, err := os.Stat(filepath.Join(dirs.Config(cliworker.Claude), clitest.StatusStarted))
 		return err == nil
@@ -170,7 +153,6 @@ func TestForgetWaitsForAHelperRequestBeforeTheFilesGo(t *testing.T) {
 	if err := h.w.Forget(ctx, 1); err != nil {
 		t.Fatal(err)
 	}
-	// Whatever the check did on its way out, nothing of it is left once it ends.
 	select {
 	case <-answered:
 	case <-time.After(20 * time.Second):
@@ -179,11 +161,9 @@ func TestForgetWaitsForAHelperRequestBeforeTheFilesGo(t *testing.T) {
 	gone(t, dirs.Root)
 }
 
-// A turn waiting for a place when the user is forgotten never starts: it would make the
-// directory again and run on a login that was just removed.
 func TestForgetEndsAQueuedTurnWithoutStartingIt(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.MaxTurnsPerUser = 1 })
-	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
+	h.w.SetGroupWaitForTest(-1)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 60_000, TermWriteMS: 200}, true)
 	first, _, err := h.w.Start(spec("first", 1, cliworker.Claude, "work"))
 	if err != nil {
@@ -211,9 +191,6 @@ func TestForgetEndsAQueuedTurnWithoutStartingIt(t *testing.T) {
 	gone(t, dirs.Root)
 }
 
-// Nothing starts for a forgotten user: a turn, a sign-in or a status check would each make
-// their directory again, with a login's files in it. Another user is not affected, and the
-// refusal is the same through the worker's API (container mode).
 func TestNothingStartsForAForgottenUser(t *testing.T) {
 	h := newHarness(t, nil)
 	r := serve(t, h)
@@ -242,7 +219,6 @@ func TestNothingStartsForAForgottenUser(t *testing.T) {
 	}
 	gone(t, dirs.Root)
 
-	// Forgetting is still idempotent, and others go on.
 	if err := h.w.Forget(ctx, 1); err != nil {
 		t.Errorf("forgetting again: %v", err)
 	}
@@ -254,8 +230,6 @@ func TestNothingStartsForAForgottenUser(t *testing.T) {
 	}
 }
 
-// A worker that restarts remembers who was forgotten: a turn that a replay or a late request
-// brings after it must not make the directory again.
 func TestForgottenUserSurvivesARestart(t *testing.T) {
 	h := newHarness(t, nil)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
@@ -274,9 +248,6 @@ func TestForgottenUserSurvivesARestart(t *testing.T) {
 	gone(t, dirs.Root)
 }
 
-// Reconcile takes back the marks a restore of the server's data made wrong, and only those: the
-// marks of users that are live, of numbers that come next or later, and none made after the
-// server read the database (a purge running now).
 func TestReconcileTakesBackOnlyTheMarksARestoreMadeWrong(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
@@ -285,11 +256,9 @@ func TestReconcileTakesBackOnlyTheMarksARestoreMadeWrong(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// 2 is a person whose account is back; 3 is gone for good; 4 and 5 come next and later; 5's
-	// purge ran after the server read its database.
 	time.Sleep(20 * time.Millisecond)
 	snapshot := time.Now()
-	time.Sleep(20 * time.Millisecond) // the mark's time is on the filesystem's clock
+	time.Sleep(20 * time.Millisecond)
 	if err := h.w.Forget(ctx, 5); err != nil {
 		t.Fatal(err)
 	}
@@ -305,11 +274,10 @@ func TestReconcileTakesBackOnlyTheMarksARestoreMadeWrong(t *testing.T) {
 			t.Errorf("user %d refused = %v, want %v", user, got, want)
 		}
 	}
-	// A mark can't be read: the user stays refused rather than started.
 	if err := os.Chmod(filepath.Join(h.layout.Root, ".worker"), 0); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(filepath.Join(h.layout.Root, ".worker"), 0o700) //nolint:errcheck // the temporary directory is removed anyway
+	defer func() { _ = os.Chmod(filepath.Join(h.layout.Root, ".worker"), 0o700) }()
 	if os.Geteuid() != 0 && !refused(6) {
 		t.Error("a mark that can't be looked up counted as no mark")
 	}

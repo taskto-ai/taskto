@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 
-// The record of a sign-out not finished yet: only a whole, well-formed record is acted on, and one
-// account's never stands in another's way.
-
 import { beforeEach, expect, test } from 'vitest'
 import {
   confirmSignOut,
@@ -37,13 +34,11 @@ test('a record that is not a whole one is not acted on, and another account’s 
   localStorage.setItem(
     KEY,
     JSON.stringify([
-      // Cut short, or written by something else.
       { user: 1 },
       { user: 1, session: 's1', phase: 'gone', keep: false, approved: [] },
       { user: 1, session: 's1', phase: 'requested', keep: 'no', approved: [] },
       { user: 1, session: 's1', phase: 'requested', keep: false, approved: [['r1', { version: 'x' }]] },
       { user: 0, session: '', phase: 'requested', keep: false, approved: [] },
-      // Whole: the second person's.
       { user: 2, session: 's2', phase: 'confirmed', keep: true, approved: [] },
     ]),
   )

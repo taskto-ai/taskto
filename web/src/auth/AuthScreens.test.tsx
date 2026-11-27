@@ -13,13 +13,11 @@ afterEach(async () => {
   cleanup()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
-  ackDeletion() // a date a test left behind
+  ackDeletion()
   window.history.replaceState(null, '', '/')
   await setPreferences({ user: null })
 })
 
-// A field's error, as a screen reader reaches it: the text of the field's description once the field
-// is marked invalid (Field says it in its own live region; it is not an alert as well).
 async function fieldError(label: string) {
   const field = screen.getByLabelText(label)
   await vi.waitFor(() => expect(field.getAttribute('aria-invalid')).toBe('true'))
@@ -36,8 +34,6 @@ const both = {
 }
 const ssoOnly = { password: false, sso: [{ id: 'authentik', name: 'Authentik' }] }
 
-// location.assign can't be spied on in jsdom (navigating isn't implemented): the page's
-// location is replaced for the test, keeping what the screens read.
 function stubAssign() {
   const assign = vi.fn()
   const { pathname, search, hash, href } = window.location
@@ -119,7 +115,6 @@ test('the reason a sign-in failed shows in the language, and leaves the address'
   expect(window.location.search).toBe('')
   unmount()
 
-  // A reload doesn't show it again, and a code this web app doesn't know says the sign-in failed.
   render(<LoginScreen onDone={() => {}} />)
   await screen.findByLabelText('Password')
   expect(screen.queryByRole('alert')).toBeNull()
@@ -150,7 +145,7 @@ test('an invite offers the providers and comes back to the invite', async () => 
   const assign = stubAssign()
   render(invite())
   await screen.findByRole('button', { name: 'Continue with Google' })
-  screen.getByLabelText('Your name') // the password form stays, under the buttons
+  screen.getByLabelText('Your name')
   fireEvent.click(screen.getByRole('button', { name: 'Continue with Authentik' }))
   await vi.waitFor(() => expect(assign).toHaveBeenCalledWith('https://auth.example.com/authorize?state=fake'))
   expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ next: '/invite#fake-invite-token' })
@@ -172,7 +167,6 @@ test('a login-methods failure that is not a 404 says so and a retry fetches agai
   })
   render(<LoginScreen onDone={() => {}} />)
   await screen.findByText(/Couldn't find out how you can sign in/)
-  // No password form is guessed at.
   expect(screen.queryByLabelText('Password')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
   await screen.findByRole('button', { name: 'Continue with Authentik' })
@@ -244,7 +238,6 @@ test('a login that asks for a code is not logged in until the code is given', as
   fillLogin()
   await screen.findByRole('heading', { name: 'Two-factor login' })
   expect(onDone).not.toHaveBeenCalled()
-  // The password isn't kept in the page.
   expect(screen.queryByLabelText('Password')).toBeNull()
 
   const code = screen.getByLabelText('Code from your app, or a recovery code')
@@ -330,7 +323,6 @@ test('a reset link for an account with two-factor login asks for a code and is n
     { challenge: 'fake-challenge', code: '123456' },
   ])
 
-  // The link is used up: back is the login, not the password form.
   fireEvent.click(screen.getByRole('button', { name: 'Go to the login' }))
   expect(assign).toHaveBeenCalledWith('/')
 })
@@ -341,8 +333,6 @@ function fillInviteLogin() {
   fireEvent.click(screen.getByRole('button', { name: /Log in/ }))
 }
 
-// An existing account is asked to log in first on an invite: with two-factor login on, the code
-// comes before the invite is accepted.
 test('an invite taken with an account that has two-factor login asks for the code, then accepts', async () => {
   const joined = { ...owner, workspaces: [{ id: 7 }] }
   const onDone = vi.fn()
@@ -362,7 +352,6 @@ test('an invite taken with an account that has two-factor login asks for the cod
   await screen.findByRole('heading', { name: 'Log in to join' })
   fillInviteLogin()
   await screen.findByRole('heading', { name: 'Two-factor login' })
-  // Not accepted, and not told it is signed in, before the code.
   expect(calls.filter((c) => c.path === '/api/invites/accept')).toHaveLength(1)
   expect(onDone).not.toHaveBeenCalled()
 
@@ -372,8 +361,6 @@ test('an invite taken with an account that has two-factor login asks for the cod
   expect(calls.filter((c) => c.path === '/api/invites/accept').at(-1)?.body).toEqual({ token: 'fake-invite-token' })
 })
 
-// The code is used up once it passed: if accepting fails after it, trying again accepts, and
-// doesn't ask for the code again.
 test('an invite whose acceptance fails after the code retries the acceptance only', async () => {
   const joined = { ...owner, workspaces: [{ id: 7 }] }
   const onDone = vi.fn()
@@ -427,7 +414,6 @@ test('forgotten password: the address is asked for, and the answer never says wh
   render(<LoginScreen onDone={done} />)
   fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'ana@example.com' } })
   fireEvent.click(screen.getByRole('button', { name: 'Forgot your password?' }))
-  // The address typed on the login form carries over.
   const email = screen.getByLabelText('Email') as HTMLInputElement
   expect(email.value).toBe('ana@example.com')
   fireEvent.click(screen.getByRole('button', { name: 'Email me a link' }))
@@ -464,7 +450,6 @@ test('after an account is deleted the login says when it is erased, once', async
   const first = render(<LoginScreen onDone={() => {}} />)
   await screen.findByText(/Your account was deleted\. It is switched off now and will be erased for good on .*2026/)
   first.unmount()
-  // The notice is told once: a reload shows the plain login.
   render(<LoginScreen onDone={() => {}} />)
   await screen.findByLabelText('Password')
   expect(screen.queryByText(/Your account was deleted/)).toBeNull()
@@ -476,7 +461,6 @@ test('a sign-in screen already up when the deletion is answered still says when 
   render(<LoginScreen onDone={() => {}} />)
   await screen.findByLabelText('Password')
   expect(screen.queryByText(/Your account was deleted/)).toBeNull()
-  // A 401 had mounted it; now the deletion succeeds.
   act(() => rememberDeletion('2026-12-08T10:00:00.000Z'))
   await screen.findByText(/Your account was deleted\. It is switched off now and will be erased for good on .*2026/)
 })
@@ -502,12 +486,10 @@ const NOTICE = /Your account was deleted/
 test('the deletion notice is not used up by a sign-in screen that is still loading the methods', async () => {
   sessionStorage.clear()
   rememberDeletion('2026-12-08T10:00:00.000Z')
-  // The methods never arrive: the screen shows nothing yet, and the person reloads.
   fakeFetch({ 'GET /api/login/methods': () => new Promise<never>(() => {}) })
   const first = render(<LoginScreen onDone={() => {}} />)
   expect(screen.queryByText(NOTICE)).toBeNull()
   first.unmount()
-  // After the reload the methods come, and the notice is shown at last.
   fakeFetch({ 'GET /api/login/methods': { body: both } })
   render(<LoginScreen onDone={() => {}} />)
   await screen.findByText(/will be erased for good on .*2026/)
@@ -535,14 +517,12 @@ test('the deletion notice waits for a page that can be seen, in this tab or the 
   fakeFetch({ 'GET /api/login/methods': { body: both } })
   const first = render(<LoginScreen onDone={() => {}} />)
   await screen.findByText(/will be erased for good on .*2026/)
-  // Drawn in a background tab, where nobody has read it: it is kept.
   expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
   first.unmount()
   fakeFetch({ 'GET /api/login/methods': { body: both } })
   render(<LoginScreen onDone={() => {}} />)
   await screen.findByText(/will be erased for good on .*2026/)
   expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
-  // Once the page is seen it is used up, and what is on the screen stays there.
   state = 'visible'
   act(() => {
     document.dispatchEvent(new Event('visibilitychange'))
@@ -560,7 +540,6 @@ test('a sign-in screen that is gone no longer waits for the page to be seen', as
   const screenUp = render(<LoginScreen onDone={() => {}} />)
   await screen.findByText(/will be erased for good on .*2026/)
   screenUp.unmount()
-  // The page is seen after the screen left: nobody read the notice, so it is kept.
   state = 'visible'
   document.dispatchEvent(new Event('visibilitychange'))
   expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
@@ -573,7 +552,6 @@ test('a deletion answered while the forgot-password step is up is told when the 
   fireEvent.click(await screen.findByRole('button', { name: 'Forgot your password?' }))
   await screen.findByRole('button', { name: 'Email me a link' })
   act(() => rememberDeletion('2026-12-08T10:00:00.000Z'))
-  // Not on the screen that is up: kept.
   expect(screen.queryByText(NOTICE)).toBeNull()
   expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
   fireEvent.click(screen.getByRole('button', { name: 'Back to login' }))
@@ -583,7 +561,6 @@ test('a deletion answered while the forgot-password step is up is told when the 
 
 test('a signed-in person is never told a deletion notice nobody saw', async () => {
   sessionStorage.clear()
-  // A date left by a hidden tab that went to an invite instead of the login.
   rememberDeletion('2026-12-08T10:00:00.000Z')
   const joined = { ...owner, workspaces: [{ id: 7 }] }
   const onDone = vi.fn()
@@ -602,11 +579,9 @@ test('a signed-in person is never told a deletion notice nobody saw', async () =
 test('a deletion remembered after the notice was shown is not lost with it', async () => {
   sessionStorage.clear()
   rememberDeletion('2026-12-08T10:00:00.000Z')
-  ackDeletion('2026-12-01T10:00:00.000Z') // an earlier notice's acknowledgement
+  ackDeletion('2026-12-01T10:00:00.000Z')
   expect(peekDeletion()).toBe('2026-12-08T10:00:00.000Z')
 })
-
-// --- The rework on the component library: what it adds to the screens.
 
 test('the password can be shown and hidden again, and the button says which it does', async () => {
   fakeFetch({ 'GET /api/login/methods': { body: { password: true, sso: [] } } })
@@ -660,7 +635,6 @@ test('a wrong code is said under the code field, which is marked invalid', async
   expect(code.autocomplete).toBe('one-time-code')
   fireEvent.change(code, { target: { value: '000000' } })
   fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
-  // The message is the field's description, so it is said with the field, and only there.
   expect(await fieldError(codeLabel)).toContain('code is wrong')
   expect(screen.queryByRole('alert')).toBeNull()
 })
@@ -705,7 +679,6 @@ test('setup: where the token is found is the field’s help, with the log line�
   fireEvent.change(token, { target: { value: ' right-token ' } })
   fireEvent.click(screen.getByRole('button', { name: 'Create the owner' }))
   await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(owner))
-  // The token is sent trimmed, as before.
   expect(calls.at(-1)?.body).toMatchObject({ setup_token: 'right-token', workspace_name: 'Home' })
 })
 
@@ -716,7 +689,6 @@ test('a reset whose two passwords differ says so under the second, and sends not
   const again = screen.getByLabelText('New password again')
   fireEvent.change(again, { target: { value: 'fake-new-password-124' } })
   expect(await fieldError('New password again')).toContain("The passwords don't match.")
-  // Not an alert as well: a live alert on every character typed would be said again and again.
   expect(screen.queryByRole('alert')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Set the password' }))
   expect(calls.some((c) => c.method === 'POST')).toBe(false)
@@ -770,8 +742,6 @@ test('an invite for someone signed in names the account, joins with one button, 
   await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(joined, owner))
   expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ token: 'fake-invite-token' })
 })
-
-// --- A password is never carried over shown, and the form's guards each hold on their own.
 
 test('a password shown on the invite’s new-account form is not shown on the log-in form that follows', async () => {
   fakeFetch({
@@ -834,9 +804,7 @@ test('a reset whose passwords differ: its button is off, and the form refuses on
   render(<ResetPasswordScreen token="fake-reset-token" onDone={() => {}} />)
   fireEvent.change(await screen.findByLabelText('New password'), { target: { value: 'fake-new-password-123' } })
   fireEvent.change(screen.getByLabelText('New password again'), { target: { value: 'fake-new-password-124' } })
-  // The button can't be pressed…
   expect((screen.getByRole('button', { name: 'Set the password' }) as HTMLButtonElement).disabled).toBe(true)
-  // …and a submit that comes another way (Enter in a browser that ignores a disabled default) sends nothing.
   const form = screen.getByLabelText('New password').closest('form')
   if (!form) throw new Error('no form')
   fireEvent.submit(form)
@@ -897,8 +865,6 @@ test('an error about a field goes once that field is edited, and stays while ano
   expect(screen.queryByText(/setup token/i, { selector: '.ui-field-error *' })).toBeNull()
 })
 
-// --- One request at a time, whatever submits the form (not only its button).
-
 const formOf = (label: string) => {
   const form = screen.getByLabelText(label).closest('form')
   if (!form) throw new Error(`no form around ${label}`)
@@ -936,7 +902,6 @@ test('setup submitted twice while the first is on its way sends one request, and
   await vi.waitFor(() => expect(calls.filter((c) => c.path === '/api/setup')).toHaveLength(1))
   answer({ status: 403, body: { error: 'wrong token', code: 'setup_token' } })
   await fieldError('Setup token')
-  // Settled: the next submit goes.
   fireEvent.submit(formOf('Setup token'))
   await vi.waitFor(() => expect(calls.filter((c) => c.path === '/api/setup')).toHaveLength(2))
 })
@@ -963,7 +928,6 @@ test('after a login answers, a submit while the app is still opening the account
     'GET /api/login/methods': { body: { password: true, sso: [] } },
     'POST /api/login': { body: owner },
   })
-  // The app takes its time with the session (its preferences, the offline data): the screen stays.
   const onDone = vi.fn()
   render(<LoginScreen onDone={onDone} />)
   fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'owner@example.com' } })
@@ -986,7 +950,6 @@ test('a single sign-on start pressed twice before the page draws it, on one prov
   render(<LoginScreen onDone={() => {}} />)
   const google = await screen.findByRole('button', { name: 'Continue with Google' })
   const authentik = screen.getByRole('button', { name: 'Continue with Authentik' })
-  // Both presses land before React draws the first one's loading state.
   act(() => {
     google.click()
     google.click()

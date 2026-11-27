@@ -40,7 +40,6 @@ const registry = (over: Partial<IntegrationRegistry> = {}): IntegrationRegistry 
     },
   ],
   currencies: ['COP', 'EUR', 'JPY', 'USD'],
-  // The server's own decimals, which the page uses: the browser's table says 0 for the peso.
   exponents: { COP: 2, EUR: 2, JPY: 0, USD: 2 },
   max_amount_minor: 1_000_000_000_000,
   webhooks_available: false,
@@ -86,11 +85,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-// An integration's row: the list item its name is the title of.
 const findRow = async (name: string) =>
   (await screen.findByText(name, { selector: '.ui-row-title' })).closest('li') as HTMLElement
 
-// The dialog a form is in, whose footer has the form's buttons.
 const dialogOf = (form: HTMLElement) => form.closest('dialog') as HTMLElement
 
 const sent = (calls: Call[], method: string, path: string) =>
@@ -109,7 +106,6 @@ test('an integration is listed by what it is, with its secrets only said to be s
   const row = await findRow('Shop')
   expect(within(row).getByText(/Stripe · Payments · Test mode/)).toBeTruthy()
   expect(within(row).getByText(/Secret key set · Webhook signing secret not set/)).toBeTruthy()
-  // The same number of smallest units is not the same sum in euros and in yen.
   expect(within(row).getByText(/€5,000\.00 and ¥500,000 per payment/)).toBeTruthy()
   expect(within(row).getByText('Allowed in: Shop floor')).toBeTruthy()
   expect(within(row).getByText(/No public URL: webhooks are unavailable/)).toBeTruthy()
@@ -120,7 +116,6 @@ test('an amount is written with the server’s decimals, not the browser’s', a
   fakeFetch(routes([{ ...shop, currencies: ['COP'], max_amount_minor: 500000 }]))
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
   const row = await findRow('Shop')
-  // The server counts pesos in hundredths; Intl alone would say 500,000 whole pesos.
   expect(within(row).getByText(/COP\s?5,000\.00 per payment/)).toBeTruthy()
 })
 
@@ -158,7 +153,6 @@ test('an admin connects a Stripe account: the key is sent once and the form is c
   fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'shop' } })
   fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'fake-key-for-the-form' } })
   fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '500000' } })
-  // A currency is needed before the form can be sent.
   const add = within(dialogOf(form)).getByRole('button', { name: 'Add' }) as HTMLButtonElement
   expect(add.disabled).toBe(true)
   fireEvent.click(within(form).getByRole('checkbox', { name: 'EUR' }))
@@ -236,7 +230,6 @@ test('an admin chooses the spaces, and only the ones that can be allowed are off
   await findRow('Shop')
   chooseFromMenu('More actions for Shop', 'Spaces')
   const form = screen.getByRole('form', { name: 'Spaces of Shop' })
-  // An archived space the integration isn't allowed in can't be chosen.
   expect(within(form).queryByRole('checkbox', { name: /Old/ })).toBeNull()
   expect((within(form).getByRole('checkbox', { name: 'Shop floor' }) as HTMLInputElement).checked).toBe(true)
   fireEvent.click(within(form).getByRole('checkbox', { name: 'Private (private)' }))
@@ -268,7 +261,6 @@ test('a provider change drops what was typed for the last one, and a check says 
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
   fireEvent.click(await screen.findByRole('button', { name: 'Connect an account' }))
   const form = screen.getByRole('form', { name: 'New integration' })
-  // A webhook secret typed for Stripe is not sent to Square, which has no such field.
   fireEvent.change(within(form).getByLabelText('Webhook signing secret'), {
     target: { value: 'fake-hook-for-the-form' },
   })
@@ -409,9 +401,7 @@ test('a save the server refuses keeps the dialog and what was typed, and the err
   fireEvent.click(within(form).getByRole('checkbox', { name: 'EUR' }))
   fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Add' }))
   const alert = await within(form).findByRole('alert')
-  // The secret by its label, not its code.
   expect(alert.textContent).toContain("The Secret key doesn't look like this provider's")
-  // Focused, so it is scrolled into view and read, wherever the long form was scrolled to.
   await waitFor(() => expect(alert.closest('.settings-form-error')).toBe(document.activeElement))
   expect(screen.getByRole('form', { name: 'New integration' })).toBe(form)
   const key = within(form).getByLabelText('Secret key') as HTMLInputElement
@@ -481,7 +471,6 @@ test('after a removal, and after the first account is in, the keyboard goes to t
   const heading = screen.getByRole('heading', { level: 2, name: 'Connected accounts' })
   await waitFor(() => expect(document.activeElement).toBe(heading))
 
-  // The empty state's button opens the form; once the account is in, that button is gone.
   fireEvent.click(await screen.findByRole('button', { name: 'Connect an account' }))
   const form = screen.getByRole('form', { name: 'New integration' })
   fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'shop' } })

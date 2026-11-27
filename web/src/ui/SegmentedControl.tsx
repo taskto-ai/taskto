@@ -1,8 +1,3 @@
-// A choice of one among a few, shown side by side (Write or Preview; List or Board). Underneath it
-// is a group of the browser's own radio buttons, so the arrow keys move the choice, Tab enters
-// and leaves the group as one stop, and a screen reader says "1 of 2, selected". It is for a
-// choice of view or mode; a form's choice among many is a Select.
-
 import { type ReactNode, useId } from 'react'
 import { Icon, type IconName } from './Icon'
 import './SegmentedControl.css'
@@ -15,13 +10,11 @@ export interface Segment<V extends string> {
 }
 
 export interface SegmentedControlProps<V extends string> {
-  // The group's name for a screen reader: what is being chosen.
   label: string
   options: readonly Segment<V>[]
   value: V
   onChange: (value: V) => void
   size?: 'md' | 'sm'
-  // The radios' name, for a form; one is made otherwise.
   name?: string
   disabled?: boolean
   className?: string

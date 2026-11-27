@@ -1,8 +1,3 @@
-// A2UI's inputs draw a <label> beside their <input> without linking the two, so a screen reader
-// reads an unnamed field. This gives each such input the name of the label drawn with it: the
-// label and the inputs share a parent (a text field, a date or time input), or the label heads a
-// group of choices. It never changes an input that already has a name.
-
 import { holds, type Rule, type Values } from './rules'
 
 let counter = 0
@@ -18,13 +13,9 @@ export function linkLabels(root: ParentNode): void {
     for (const control of controls) {
       if (control.id && label.htmlFor === control.id) continue
       if (control.hasAttribute('aria-label') || control.hasAttribute('aria-labelledby')) continue
-      // A control with a label of its own (one of taskto.ai's fields, such as a typed signature's
-      // name beside its confirming check box) is named already: another label in the same parent
-      // isn't its name.
       if ((control as HTMLInputElement).labels?.length) continue
       control.setAttribute('aria-labelledby', label.id)
     }
-    // A set of chips or checkboxes is one group, named by the label above it.
     const group = parent.querySelector<HTMLElement>('.a2ui-choice-picker')
     if (group && !group.hasAttribute('aria-labelledby') && !group.hasAttribute('aria-label')) {
       group.setAttribute('role', 'group')
@@ -33,8 +24,6 @@ export function linkLabels(root: ParentNode): void {
   }
 }
 
-// Keeps a screen's inputs named as it changes (a screen opens, an input appears). Returns what
-// stops it.
 export function keepLabelsLinked(root: HTMLElement): () => void {
   linkLabels(root)
   const observer = new MutationObserver(() => linkLabels(root))
@@ -42,13 +31,6 @@ export function keepLabelsLinked(root: HTMLElement): () => void {
   return () => observer.disconnect()
 }
 
-// What a screen's form calls each field of the app, by the field's name: the label of the input that
-// holds it. An input says its field either itself (a location or a signature input names its
-// `field`) or through the data it is bound to, which a button's action context hands to the field of
-// the same name ({"notes": {"path": "/draft/notes"}}). Only what the person can see counts: the
-// inputs of the screen that is open, and not those a Show hides, so an error never names a label
-// that isn't on the screen; the first of several inputs for one field is the one named. A field with
-// no such input has no label here, and an error about it names the field.
 export function fieldLabels(
   components: Iterable<[string, { type?: string; properties: Record<string, unknown> }]>,
   read: (path: string) => unknown,
@@ -83,7 +65,6 @@ export function fieldLabels(
     visit(p.trigger)
     visit(p.content)
   }
-  // Without the root (the screen isn't whole) nothing is known to be hidden.
   if (byId.has('root')) visit('root')
   else for (const [id] of byId) visit(id)
 

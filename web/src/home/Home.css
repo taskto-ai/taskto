@@ -1,9 +1,4 @@
-/* Home: the widgets' grid and their frames, the customize mode under them, and the setup checklist.
-   What a widget draws inside its frame is the app's renderer's. */
-
 @layer screens {
-  /* One column on a phone, as many as fit on a wider screen. A widget keeps its own height: a short
-     one is not stretched to the tallest beside it. */
   .ui-home-widgets {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr));
@@ -12,8 +7,6 @@
     margin: 0;
     padding: 0;
     list-style: none;
-    /* The grid's own width says how many columns there are, not the window's: beside the sidebar
-       a tablet has room for one. */
     container-type: inline-size;
   }
 
@@ -25,14 +18,12 @@
     grid-column: 1 / -1;
   }
 
-  /* A medium widget takes two columns where there are two: two 17rem columns and the gap. */
   @container (min-width: 35rem) {
     .ui-home-cell[data-size="medium"] {
       grid-column: span 2;
     }
   }
 
-  /* While Home loads, a row of widgets: one where the grid has one column. */
   @container (max-width: 34.99rem) {
     .ui-home-cell-skeleton + .ui-home-cell-skeleton {
       display: none;
@@ -80,7 +71,6 @@
     gap: var(--space-1);
   }
 
-  /* A long screen scrolls inside its frame rather than making the widget a page of its own. */
   .ui-home-widget-body {
     max-block-size: 22rem;
     overflow: auto;
@@ -93,7 +83,6 @@
     margin-inline-start: calc(var(--space-2) * -1);
   }
 
-  /* Customize: a column of sections under the widgets. */
   .ui-home-customize {
     display: grid;
     gap: var(--space-8);
@@ -137,7 +126,6 @@
     gap: var(--space-1);
   }
 
-  /* The setup checklist: a panel with its progress, and a row per step. */
   .ui-checklist {
     display: grid;
     gap: var(--space-4);
@@ -186,7 +174,6 @@
     color: var(--color-text-muted);
   }
 
-  /* The rows sit on the panel's own padding: they reach its edges. */
   .ui-checklist .ui-rows {
     margin-inline: calc(var(--space-5) * -1);
     margin-block-end: calc(var(--space-4) * -1);

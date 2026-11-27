@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// A new install has no history of CLI workers: no worker ever ran, so a purge has nothing of
-// theirs to wait for.
 func TestCLIWorkerHistoryIsEmptyOnANewInstall(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
@@ -26,11 +24,6 @@ func TestCLIWorkerHistoryIsEmptyOnANewInstall(t *testing.T) {
 	}
 }
 
-// An install from before the history was kept may have run either worker for its accounts: the
-// upgrade says so (unknown), and a purge step recorded then waits for both. The upgrade works from
-// before the browser step's migration (0058), which runs first and copies the old step's target as
-// the browser step's, and from after it: either way the browser step keeps the user's id, which is
-// what its code reads, and the CLI step becomes one per kind of worker.
 func TestCLIWorkerHistoryOfAnOlderInstallIsUnknown(t *testing.T) {
 	for _, from := range []int{53, 58} {
 		t.Run(fmt.Sprintf("from %04d", from), func(t *testing.T) {
@@ -41,7 +34,6 @@ func TestCLIWorkerHistoryOfAnOlderInstallIsUnknown(t *testing.T) {
 			}
 			queries := []string{
 				`INSERT INTO users (id, email, name, password_hash) VALUES (1, 'a@example.com', 'A', 'x')`,
-				// made, by a clock ahead of this one, after the upgrade's now
 				`INSERT INTO users (id, email, name, password_hash, created_at) VALUES (2, 'b@example.com', 'B', 'x', '2999-01-01T00:00:00.000Z')`,
 				`INSERT INTO purge_cleanups (user_id, kind, target, attempts, last_error) VALUES (7, 'cli_home', '7', 3, 'cli_worker_failed')`,
 				`INSERT INTO purge_cleanups (user_id, kind, target) VALUES (7, 'providers', 'feed:7')`,
@@ -81,7 +73,6 @@ func TestCLIWorkerHistoryOfAnOlderInstallIsUnknown(t *testing.T) {
 	}
 }
 
-// textColumn is the one text column query returns, row by row.
 func textColumn(t *testing.T, sqlDB *sql.DB, query string) []string {
 	t.Helper()
 	rows, err := sqlDB.QueryContext(context.Background(), query)

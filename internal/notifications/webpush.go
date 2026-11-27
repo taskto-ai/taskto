@@ -26,32 +26,16 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// The two standards a push is made of, with the standard library only:
-//
-//   - VAPID (RFC 8292): the server signs a short-lived ES256 token naming the push service it
-//     sends to and itself, and sends its public key with it. A push service accepts a message only
-//     from the key the browser subscribed with.
-//   - Message encryption (RFC 8291, "aes128gcm"): the message is encrypted to the browser's own key
-//     (p256dh) and secret (auth), so the push service, which carries it, can't read it. One record.
-
 const (
-	// recordSize is the size of the one record a message is encrypted in; a push service takes at
-	// least 4096 bytes.
-	recordSize = 4096
-	// keyIDSize is the sender's public key, an uncompressed P-256 point, which the header carries.
-	keyIDSize = 65
-	// headerSize is the salt, the record size, the key ID's length and the key ID.
-	headerSize = 16 + 4 + 1 + keyIDSize
-	// maxPlaintext is what fits in one record: the header, the delimiter, the tag.
+	recordSize   = 4096
+	keyIDSize    = 65
+	headerSize   = 16 + 4 + 1 + keyIDSize
 	maxPlaintext = recordSize - headerSize - 1 - 16
-	// authSize is the length of a browser's auth secret.
-	authSize = 16
+	authSize     = 16
 )
 
 var b64 = base64.RawURLEncoding
 
-// encrypt encrypts plaintext for the browser with public key uaPublic (an uncompressed P-256
-// point) and auth secret authSecret, as the body of a push request.
 func encrypt(uaPublic, authSecret, plaintext []byte) ([]byte, error) {
 	asPrivate, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
@@ -64,8 +48,6 @@ func encrypt(uaPublic, authSecret, plaintext []byte) ([]byte, error) {
 	return encryptWith(asPrivate, salt, uaPublic, authSecret, plaintext)
 }
 
-// encryptWith is encrypt with the sender's one-time key and the salt given, which the tests use to
-// check the standard's own example.
 func encryptWith(asPrivate *ecdh.PrivateKey, salt, uaPublic, authSecret, plaintext []byte) ([]byte, error) {
 	if len(plaintext) > maxPlaintext {
 		return nil, errors.New("notifications: the message is too long for one record")
@@ -83,8 +65,6 @@ func encryptWith(asPrivate *ecdh.PrivateKey, salt, uaPublic, authSecret, plainte
 	}
 	asPublic := asPrivate.PublicKey().Bytes()
 
-	// RFC 8291 section 3.4: the input keying material mixes the shared secret with the browser's
-	// auth secret and both public keys.
 	prkKey, err := hkdf.Extract(sha256.New, shared, authSecret)
 	if err != nil {
 		return nil, err
@@ -94,7 +74,6 @@ func encryptWith(asPrivate *ecdh.PrivateKey, salt, uaPublic, authSecret, plainte
 	if err != nil {
 		return nil, err
 	}
-	// RFC 8188 section 2.2 and 2.3: the content encryption key and the nonce.
 	prk, err := hkdf.Extract(sha256.New, ikm, salt)
 	if err != nil {
 		return nil, err
@@ -115,7 +94,6 @@ func encryptWith(asPrivate *ecdh.PrivateKey, salt, uaPublic, authSecret, plainte
 	if err != nil {
 		return nil, err
 	}
-	// 0x02 closes the last (here the only) record.
 	sealed := gcm.Seal(nil, nonce, append(append([]byte{}, plaintext...), 0x02), nil)
 
 	out := make([]byte, 0, headerSize+len(sealed))
@@ -126,18 +104,13 @@ func encryptWith(asPrivate *ecdh.PrivateKey, salt, uaPublic, authSecret, plainte
 	return append(out, sealed...), nil
 }
 
-// vapidKey is the server's VAPID key pair.
 type vapidKey struct {
 	private *ecdsa.PrivateKey
-	// public is the uncompressed point, which browsers subscribe with and the Authorization
-	// header carries.
-	public []byte
+	public  []byte
 }
 
-// vapidAD binds the sealed private key to its place.
 var vapidAD = []byte("taskto push_vapid v1")
 
-// loadVAPID reads the key pair, making and keeping one if the server has none yet.
 func loadVAPID(ctx context.Context, db *sql.DB, key *serverkey.Key) (*vapidKey, error) {
 	read := func() (*vapidKey, error) {
 		var pub, sealed []byte
@@ -167,7 +140,6 @@ func loadVAPID(ctx context.Context, db *sql.DB, key *serverkey.Key) (*vapidKey, 
 	if err != nil {
 		return nil, err
 	}
-	// Two starts at once make one key: the first insert wins and both read it back.
 	if _, err := db.ExecContext(ctx, `INSERT INTO push_vapid (id, public_key, private_sealed) VALUES (1, ?, ?) ON CONFLICT (id) DO NOTHING`,
 		priv.PublicKey().Bytes(), sealed); err != nil {
 		return nil, err
@@ -175,14 +147,10 @@ func loadVAPID(ctx context.Context, db *sql.DB, key *serverkey.Key) (*vapidKey, 
 	return read()
 }
 
-// publicKey is the public key as browsers take it (applicationServerKey): base64url.
 func (k *vapidKey) publicKey() string { return b64.EncodeToString(k.public) }
 
-// tokenLifetime is how long a token is good for; a push service accepts at most 24 hours.
 const tokenLifetime = 12 * time.Hour
 
-// authorization is the Authorization header of a push to endpoint (RFC 8292): a token for its
-// origin, and the public key.
 func (k *vapidKey) authorization(endpoint *url.URL, subject string, now time.Time) (string, error) {
 	header, _ := json.Marshal(map[string]string{"typ": "JWT", "alg": "ES256"})
 	claims, err := json.Marshal(map[string]any{
@@ -199,7 +167,6 @@ func (k *vapidKey) authorization(endpoint *url.URL, subject string, now time.Tim
 	if err != nil {
 		return "", err
 	}
-	// ES256 is r and s, 32 bytes each, not DER.
 	var sig struct{ R, S *big.Int }
 	if _, err := asn1.Unmarshal(der, &sig); err != nil {
 		return "", err
@@ -210,9 +177,6 @@ func (k *vapidKey) authorization(endpoint *url.URL, subject string, now time.Tim
 	return "vapid t=" + signing + "." + b64.EncodeToString(raw) + ", k=" + k.publicKey(), nil
 }
 
-// origin is an address's origin as RFC 8292 wants the token's audience: the serialized origin
-// (RFC 6454), with the scheme and host in lower case and the port left out when it is the scheme's
-// default. A push service compares it with its own, and refuses a token whose audience differs.
 func origin(u *url.URL) string {
 	scheme, host := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname())
 	if strings.Contains(host, ":") {

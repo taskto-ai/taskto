@@ -12,14 +12,6 @@ import (
 	"github.com/go-git/go-billy/v5"
 )
 
-// rootFS is a billy.Filesystem over an *os.Root, so go-git's own file access (objects,
-// refs, the index) goes through the space's os.Root like everything else: it can't follow
-// a link out of the space, whatever names it builds. Every name is taken relative to
-// prefix inside the root (".git" for the repository).
-//
-// It does what go-git's storage needs, the way billy's osfs does it: creating a file or
-// renaming one onto a path creates the missing parent directories. Whatever permissions
-// go-git asks for, files and directories are for the server's user only.
 type rootFS struct {
 	root   *os.Root
 	prefix string
@@ -93,7 +85,7 @@ func (f rootFS) ReadDir(name string) ([]os.FileInfo, error) {
 	for _, e := range entries {
 		info, err := e.Info()
 		if errors.Is(err, fs.ErrNotExist) {
-			continue // removed since it was listed
+			continue
 		}
 		if err != nil {
 			return nil, err
@@ -113,7 +105,6 @@ func (f rootFS) Symlink(target, link string) error {
 
 func (f rootFS) Readlink(link string) (string, error) { return f.root.Readlink(f.name(link)) }
 
-// Chmod lets go-git make loose objects read-only, as git does.
 func (f rootFS) Chmod(name string, mode os.FileMode) error {
 	return f.root.Chmod(f.name(name), mode)
 }
@@ -122,11 +113,8 @@ func (f rootFS) Chroot(name string) (billy.Filesystem, error) {
 	return rootFS{root: f.root, prefix: f.name(name)}, nil
 }
 
-// Root is only used by go-git to describe paths; every access goes through the os.Root.
 func (f rootFS) Root() string { return filepath.Join(f.root.Name(), filepath.FromSlash(f.prefix)) }
 
-// rootFile is an open file of a rootFS. Its Name is the name it was opened with, which
-// go-git passes back to Rename and Remove.
 type rootFile struct {
 	*os.File
 	name string
@@ -134,13 +122,11 @@ type rootFile struct {
 
 func (f rootFile) Name() string { return f.name }
 
-// Lock and Unlock are no-ops: the Store lets one writer at a time into a space's
-// repository, and nothing else in the server writes there.
 func (f rootFile) Lock() error   { return nil }
 func (f rootFile) Unlock() error { return nil }
 
 func randomSuffix() string {
 	b := make([]byte, 8)
-	_, _ = rand.Read(b) // crypto/rand.Read never fails
+	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }

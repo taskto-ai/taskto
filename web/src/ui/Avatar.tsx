@@ -1,7 +1,3 @@
-// A person's (or a workspace's) initials in a circle, or a square for a workspace, in the hue their
-// name picks (the labels' hues, labelHue). Its name is the person's, for a screen reader; where the
-// name is written beside it, it is `decorative` and says nothing.
-
 import { hueClass, labelHue } from './Label'
 import './Avatar.css'
 import './Label.css'
@@ -12,24 +8,17 @@ export interface AvatarProps {
   shape?: 'round' | 'square'
   decorative?: boolean
   className?: string
-  // The letters to show in place of the name's initials: from initialsAmong, where several
-  // avatars side by side must not look alike.
   letters?: string
 }
 
 const SIZE_CLASS = { sm: 'ui-avatar-sm', md: '', lg: 'ui-avatar-lg' } as const
 
-// A text's characters as a reader sees them (grapheme clusters): "é" written as "e" and an accent
-// is one, and so is an emoji made of several (a person at a computer). Where the browser can't
-// tell, its code points.
 const segmenter =
   typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null
 function characters(text: string): string[] {
   return segmenter ? Array.from(segmenter.segment(text), (s) => s.segment) : Array.from(text)
 }
 
-// Up to two letters: the first of the first word and of the last, as written (a whole character,
-// so an accented letter or an emoji is not cut in half).
 export function initials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean)
   if (words.length === 0) return ''
@@ -38,10 +27,6 @@ export function initials(name: string): string {
   return letters.toUpperCase()
 }
 
-// Two letters for each of several names shown together (a sidebar's pinned apps), told apart by
-// their letters and not by hue alone: a name of several words, the first letters of its first and
-// last; a name of one word, its first two. Names that would still look alike take, after their
-// first letter, the first later one that sets each apart. Whole characters, as initials().
 export function initialsAmong(names: readonly string[]): string[] {
   const chars = (name: string) => characters(name.replace(/\s+/g, ''))
   const base = names.map((name) => {
@@ -50,14 +35,10 @@ export function initialsAmong(names: readonly string[]): string[] {
     return chars(name).slice(0, 2).join('').toUpperCase()
   })
   const unique = (letters: string) => base.indexOf(letters) === base.lastIndexOf(letters)
-  // What each name may show: its usual letters, then its first with each later one.
   const choices = names.map((name, i) => {
     const own = chars(name)
     return [...new Set([base[i], ...own.slice(2).map((c) => (own[0] + c).toUpperCase())])]
   })
-  // The letters taken so far: every name's own that is unique, then each one given out. The names
-  // with the fewest choices choose first (in their order when equal), so a short name's only
-  // letters stay its own; the answer keeps the names' order.
   const used = new Set(base.filter(unique))
   const out = base.slice()
   const rest = names.map((_, i) => i).filter((i) => !unique(base[i]))

@@ -13,18 +13,6 @@ import (
 	"taskto.ai/taskto/internal/ratelimit"
 )
 
-// Changing a password, and reset links (docs/api.md#passwords).
-//
-//   - A user changes their own password with the current one. The routes act on the caller
-//     only: there is no user in the path or the body.
-//   - An admin makes a reset link for a member, shown once, to send them: the admin passes the
-//     link on, as with invites. Where the server can send email, anyone can also ask for a
-//     link to their own address from the login page (mailer.go). Whoever has the link can set
-//     the password, so an admin may make one only for a member of nothing but workspaces they
-//     administer; an admin of one workspace can't take over an account that reaches another.
-//   - Either way the user's sessions all end, and the browser that set the new password gets
-//     a new one. Access tokens stay: they are listed in Settings, and revoked there.
-
 var (
 	errWrongPassword   = errors.New("the current password is wrong")
 	errPasswordChanged = errors.New("the password changed meanwhile: try again")
@@ -34,7 +22,6 @@ var (
 )
 
 func (s *Service) passwordRoutes(mux *http.ServeMux) {
-	// RequireUser and RequireAdmin take no access tokens; refuseTokens says so up front.
 	mux.Handle("POST /api/me/password", refuseTokens(s.RequireUser(http.HandlerFunc(s.handleChangePassword)).ServeHTTP))
 	mux.Handle("POST /api/workspaces/{workspace}/members/{user}/password-reset",
 		refuseTokens(s.RequireAdmin(http.HandlerFunc(s.handleCreateReset)).ServeHTTP))
@@ -64,8 +51,6 @@ func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	// A wrong current password counts as a failed login: a session someone else got hold of
-	// is no faster a way to guess the password than the login form.
 	ip := s.clientIP(r)
 	limits := []struct {
 		l   *ratelimit.Limiter
@@ -84,7 +69,6 @@ func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// An account made by signing in with a provider has no password to match.
 	var match bool
 	if hash != "" {
 		match, err = s.hasher.verify(r.Context(), req.Current, hash)
@@ -101,7 +85,6 @@ func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	if !match {
 		audit.Log(r.Context(), s.db, audit.Event{Actor: u.ID, Action: audit.PasswordChangeFailed,
 			TargetType: audit.TargetUser, Target: u.ID})
-		// 403, not 401: the session is fine, and 401 would send the web app to the login.
 		writeError(w, http.StatusForbidden, apierr.CodeWrongPassword, errWrongPassword.Error())
 		return
 	}
@@ -125,7 +108,6 @@ func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleCreateReset(w http.ResponseWriter, r *http.Request) {
-	// A link nobody could use: with passwords off, using one is refused too.
 	if s.opts.DisablePasswordLogin {
 		passwordLoginDisabled(w)
 		return
@@ -158,7 +140,6 @@ func (s *Service) handleCreateReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.InfoContext(r.Context(), "password reset link made", "user_id", userID, "by", admin.ID, "workspace_id", m.WorkspaceID)
-	// The only time the token is shown: the database keeps its hash.
 	writeJSON(w, http.StatusCreated, map[string]string{"token": token, "expires_at": expires})
 }
 
@@ -182,7 +163,6 @@ func (s *Service) handleUseReset(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteError(w, e)
 		return
 	}
-	// Checked before hashing, which is slow; useReset checks again in its transaction.
 	if _, err := s.resetUser(r.Context(), s.db, req.Token); err != nil {
 		s.failReset(w, r, err)
 		return
@@ -198,14 +178,10 @@ func (s *Service) handleUseReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.InfoContext(r.Context(), "password set with a reset link; the user's sessions are signed out", "user_id", u.ID)
-	// With two-factor login on, the link earns a challenge, not a session: the same second step
-	// as a password login's, which replaces the browser's session once it passes. Until then the
-	// browser keeps the one it had (the account's own sessions ended with the reset).
 	if out.challenge != "" {
 		writeChallenge(w, out)
 		return
 	}
-	// As at login: the browser's earlier session, whoever's it was, ends.
 	if old := s.sessionToken(r); old != "" {
 		if err := s.deleteSession(r.Context(), old); err != nil {
 			slog.WarnContext(r.Context(), "auth: deleting the replaced session", "err", err)
@@ -227,8 +203,6 @@ func (s *Service) failReset(w http.ResponseWriter, r *http.Request, err error) {
 	serverError(w, r, err)
 }
 
-// readEmptyBody accepts no body, or an empty JSON object, and answers 400 to anything else:
-// a route that acts on its path takes nothing from the body.
 func readEmptyBody(w http.ResponseWriter, r *http.Request) bool {
 	if r.ContentLength == 0 {
 		return true
@@ -237,14 +211,11 @@ func readEmptyBody(w http.ResponseWriter, r *http.Request) bool {
 	return readJSON(w, r, &req)
 }
 
-// limited answers 429 with when to try again.
 func limited(w http.ResponseWriter, wait time.Duration, code apierr.Code, msg string) {
 	setRetryAfter(w, wait)
 	writeError(w, http.StatusTooManyRequests, code, msg)
 }
 
-// changePassword replaces userID's password hash, if it is still current, ends all their
-// sessions and reset links, and returns a new session for the browser that changed it.
 func (s *Service) changePassword(ctx context.Context, userID int64, current, newHash string) (string, error) {
 	var token string
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -263,13 +234,11 @@ func (s *Service) changePassword(ctx context.Context, userID int64, current, new
 			TargetType: audit.TargetUser, Target: userID})
 	})
 	if err == nil {
-		s.endLive(userID, "") // the sessions that were open are gone, and their live connections go
+		s.endLive(userID, "")
 	}
 	return token, err
 }
 
-// signOutEverywhere ends userID's sessions and reset links within tx, and returns a new
-// session.
 func (s *Service) signOutEverywhere(ctx context.Context, tx *sql.Tx, userID int64) (string, error) {
 	if err := s.endSignIns(ctx, tx, userID); err != nil {
 		return "", err
@@ -277,16 +246,11 @@ func (s *Service) signOutEverywhere(ctx context.Context, tx *sql.Tx, userID int6
 	return s.insertSession(ctx, tx, userID)
 }
 
-// endSignIns ends userID's sessions, reset links and half-done logins, and a two-factor
-// enrolment that wasn't confirmed, within tx.
 func (s *Service) endSignIns(ctx context.Context, tx *sql.Tx, userID int64) error {
 	for _, q := range []string{
 		`DELETE FROM sessions WHERE user_id = ?`,
 		`DELETE FROM password_resets WHERE user_id = ?`,
-		// A login that had the old password and is waiting on its code doesn't survive the change.
 		`DELETE FROM login_challenges WHERE user_id = ?`,
-		// Nor does a secret shown to someone who may have had the old password and not been
-		// confirmed yet: whoever knows the new one enrols again.
 		`DELETE FROM user_totp WHERE user_id = ? AND enabled_at IS NULL`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, userID); err != nil {
@@ -296,11 +260,6 @@ func (s *Service) endSignIns(ctx context.Context, tx *sql.Tx, userID int64) erro
 	return nil
 }
 
-// createReset makes a reset link for userID, a member of workspaceID, by the admin by, in
-// place of any earlier one. It fails with errNotFound if userID isn't a member,
-// errResetOwn for the admin's own account, errResetElsewhere if userID belongs to a
-// workspace by doesn't administer, and errAccountDisabled if by has been disabled since the
-// request was authenticated.
 func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64) (token, expires string, err error) {
 	now := s.now()
 	expires = stamp(now.Add(s.opts.ResetTTL))
@@ -317,8 +276,6 @@ func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64
 		} else if !all {
 			return errResetElsewhere
 		}
-		// Read here, in the transaction that holds the write lock: a request that passed the
-		// middleware before the admin was disabled must not make a link that takes over an account.
 		if off, err := s.isDisabled(ctx, tx, by); err != nil {
 			return err
 		} else if off {
@@ -333,7 +290,6 @@ func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64
 		if err != nil {
 			return err
 		}
-		// Never the link or its token: only that an admin made one, and for whom.
 		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: by, Action: audit.PasswordResetCreated,
 			TargetType: audit.TargetUser, Target: userID})
 	})
@@ -343,10 +299,6 @@ func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64
 	return token, expires, nil
 }
 
-// administersAll reports whether by is an admin of every workspace userID belongs to: the
-// rule for acting on someone's sign-in (a reset link, clearing their second factor, disabling the
-// account), so that an admin of one workspace can't take over or lock out an account that reaches
-// another.
 func administersAll(ctx context.Context, tx *sql.Tx, by, userID int64) (bool, error) {
 	var elsewhere bool
 	err := tx.QueryRowContext(ctx, `
@@ -363,8 +315,6 @@ type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// resetUser returns the user a reset token is for, or errResetInvalid if it is unknown or
-// expired, and errAccountDisabled for a disabled account: no way back in but being enabled.
 func (s *Service) resetUser(ctx context.Context, q querier, token string) (User, error) {
 	var u User
 	var disabled bool
@@ -382,10 +332,6 @@ func (s *Service) resetUser(ctx context.Context, q querier, token string) (User,
 	return u, err
 }
 
-// useReset sets the password of the user a reset token is for, once: it ends their sessions,
-// half-done logins and reset links, this one included, and returns them with what the new
-// password earns: a session, or for a user with two-factor login on a challenge (a link is
-// no second factor, so it can't skip the code).
 func (s *Service) useReset(ctx context.Context, token, passwordHash string) (User, signIn, error) {
 	var u User
 	var out signIn

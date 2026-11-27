@@ -22,37 +22,11 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// Unversioned files: large files, audio and video, and heavy binaries such as archives,
-// disk images and design files stay out of git's objects.
-//
-// A file that isn't Markdown is unversioned when it is over Options.LargeFileSize bytes,
-// or is of a kind AlwaysUnversioned names, whatever its size. Git still records it, as a small
-// pointer at its path in Git LFS's format (version, sha256 oid, size), so listing,
-// moving, deleting, conflicts (its version is the pointer's blob ID), its history and
-// search by name work as for any file. Its bytes are in the space's directory, in Git
-// LFS's local layout:
-//
-//	.git/lfs/objects/<oid[0:2]>/<oid[2:4]>/<oid>
-//
-// and the working tree holds the pointer, so git sees a clean checkout. Uploads are
-// written to .git/lfs/tmp first, then renamed into place by the change that commits
-// their pointer.
-//
-// Only the current content is kept: after every change that can drop a reference, the
-// objects main no longer points to are removed (gc). Reading or restoring an older
-// version whose bytes are gone is ErrNotKept. A file that was in git and becomes
-// unversioned (it grows past the limit, or is renamed to a kind that always is) leaves
-// git: its older versions are rewritten into pointers too, and their bytes dropped
-// (rewrite.go).
-
-// Defaults of the unversioned files' limits.
 const (
-	DefaultLargeFileSize      = 50 << 20 // 50 MiB
-	DefaultMaxUnversionedSize = 20 << 30 // 20 GiB
+	DefaultLargeFileSize      = 50 << 20
+	DefaultMaxUnversionedSize = 20 << 30
 )
 
-// ErrNotKept is for the bytes of an unversioned file's older version: only the current
-// one is kept.
 var ErrNotKept = errors.New("only the current version of an unversioned file is kept")
 
 var (
@@ -61,61 +35,36 @@ var (
 	tmpDir     = path.Join(lfsDir, "tmp")
 )
 
-// tmpMaxAge is how old an upload's staged file is before gc removes it: one that old was
-// left by a process that stopped mid-upload.
 const tmpMaxAge = 24 * time.Hour
 
-// mediaTypes are the audio and video files, by lower-case extension, with the media type
-// a download of them is served as. Extensions other files use too stay out: .ts is
-// TypeScript far more often than an MPEG transport stream.
 var mediaTypes = map[string]string{
-	// Video.
 	".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
 	".mkv": "video/x-matroska", ".avi": "video/x-msvideo", ".wmv": "video/x-ms-wmv",
 	".flv": "video/x-flv", ".mpg": "video/mpeg", ".mpeg": "video/mpeg", ".ogv": "video/ogg",
 	".3gp": "video/3gpp",
-	// Audio.
 	".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".wav": "audio/wav",
 	".flac": "audio/flac", ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg",
 	".weba": "audio/webm", ".wma": "audio/x-ms-wma", ".aif": "audio/aiff", ".aiff": "audio/aiff",
 	".amr": "audio/amr",
 }
 
-// heavyTypes are the other kinds of file that are unversioned whatever their size, by
-// lower-case extension: binaries that are usually large and that git can't store any
-// smaller than they are, since they are compressed already or change all over at every
-// save. Only extensions that are clearly such files are here: fonts, executables, PDFs
-// and office documents are often small, and stay versioned under the size limit. A
-// double extension counts by its last part: .tar.gz is .gz.
 var heavyTypes = map[string]bool{
-	// Archives and compressed files.
 	".zip": true, ".7z": true, ".rar": true, ".tar": true, ".gz": true, ".tgz": true,
 	".xz": true, ".txz": true, ".bz2": true, ".tbz2": true, ".zst": true, ".lz4": true,
-	// Disk and virtual-machine images.
 	".iso": true, ".dmg": true, ".img": true, ".vmdk": true, ".vdi": true, ".vhd": true,
 	".vhdx": true, ".qcow2": true,
-	// Installer packages.
 	".msi": true, ".pkg": true, ".deb": true, ".rpm": true, ".apk": true, ".ipa": true,
-	// Raw camera images.
 	".raw": true, ".dng": true, ".cr2": true, ".cr3": true, ".nef": true, ".arw": true,
 	".orf": true, ".raf": true, ".rw2": true,
-	// Layered images, design and 3D files.
 	".psd": true, ".psb": true, ".tif": true, ".tiff": true, ".ai": true, ".indd": true,
 	".sketch": true, ".fig": true, ".xcf": true, ".kra": true, ".blend": true,
-	// Model weights.
 	".gguf": true, ".safetensors": true,
 }
 
-// IsMedia reports whether name is an audio or video file, by its extension, whatever its
-// case.
 func IsMedia(name string) bool { return MediaType(name) != "" }
 
-// MediaType is the media type of an audio or video file, by its extension; "" for other
-// files.
 func MediaType(name string) string { return mediaTypes[extension(name)] }
 
-// extension is name's last extension, in lower case: "" for a name that is only one, such
-// as a dotfile named .zip.
 func extension(name string) string {
 	base := path.Base(name)
 	ext := path.Ext(base)
@@ -125,15 +74,11 @@ func extension(name string) string {
 	return strings.ToLower(ext)
 }
 
-// AlwaysUnversioned reports whether name is a kind of file that is unversioned whatever
-// its size: audio, video (IsMedia) and the heavy binaries of heavyTypes, by its extension,
-// whatever its case. It is the one place that decides it; docs/api.md lists them.
 func AlwaysUnversioned(name string) bool {
 	ext := extension(name)
 	return mediaTypes[ext] != "" || heavyTypes[ext]
 }
 
-// UnversionedExtensions are the extensions AlwaysUnversioned holds, sorted.
 func UnversionedExtensions() []string {
 	exts := make([]string, 0, len(mediaTypes)+len(heavyTypes))
 	for e := range mediaTypes {
@@ -146,16 +91,12 @@ func UnversionedExtensions() []string {
 	return slices.Compact(exts)
 }
 
-// LargeFileSize is the size over which a file is unversioned.
 func (s *Store) LargeFileSize() int64 { return s.opts.LargeFileSize }
 
-// unversioned reports whether a file named name of size bytes is kept out of git.
 func (s *Store) unversioned(name string, size int64) bool {
 	return !IsMarkdown(name) && (size > s.opts.LargeFileSize || AlwaysUnversioned(name))
 }
 
-// becomesUnversioned reports whether the file name, versioned at the blob cur, is
-// unversioned at the blob next.
 func (r *repo) becomesUnversioned(name string, cur, next plumbing.Hash) (bool, error) {
 	if IsMarkdown(name) {
 		return false, nil
@@ -168,7 +109,6 @@ func (r *repo) becomesUnversioned(name string, cur, next plumbing.Hash) (bool, e
 	return is != nil, err
 }
 
-// pointer is what git holds for an unversioned file: its bytes' SHA-256 and size.
 type pointer struct {
 	oid  string
 	size int64
@@ -176,14 +116,12 @@ type pointer struct {
 
 const pointerVersion = "version https://git-lfs.github.com/spec/v1\n"
 
-// maxPointerSize bounds a pointer's encoding: blobs bigger than it aren't read to check.
 const maxPointerSize = 200
 
 func (p pointer) encode() []byte {
 	return fmt.Appendf(nil, "%soid sha256:%s\nsize %d\n", pointerVersion, p.oid, p.size)
 }
 
-// parsePointer returns the pointer b encodes, exactly as encode writes it.
 func parsePointer(b []byte) (pointer, bool) {
 	rest, ok := bytes.CutPrefix(b, []byte(pointerVersion))
 	if !ok {
@@ -207,7 +145,6 @@ func parsePointer(b []byte) (pointer, bool) {
 		return pointer{}, false
 	}
 	p.size = n
-	// One encoding per pointer: no leading zeros, signs or anything else ParseInt allows.
 	return p, bytes.Equal(p.encode(), b)
 }
 
@@ -223,14 +160,8 @@ func isOID(s string) bool {
 	return true
 }
 
-// objectPath is where the bytes of oid are, in the space's directory.
 func objectPath(oid string) string { return path.Join(objectsDir, oid[:2], oid[2:4], oid) }
 
-// describe returns the entry of the file name whose blob is h, and the pointer the blob
-// holds if the file is unversioned (nil otherwise). Only blobs that can be pointers are
-// read: those of at most maxPointerSize bytes. A Markdown document is never unversioned,
-// but its older versions can be pointers, once taken out of history (rewrite.go): Put
-// refuses Markdown that reads as a pointer, so that one never is anything else.
 func (r *repo) describe(name string, h plumbing.Hash) (Entry, *pointer, error) {
 	size, err := r.st.EncodedObjectSize(h)
 	if err != nil {
@@ -265,7 +196,6 @@ func (r *repo) blobBytes(h plumbing.Hash) ([]byte, error) {
 	return io.ReadAll(rd)
 }
 
-// openObject opens the bytes of p, or returns ErrNotKept for bytes gc has removed.
 func (r *repo) openObject(p *pointer, name string) (*os.File, error) {
 	f, err := r.root.Open(objectPath(p.oid))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -279,17 +209,12 @@ func (r *repo) hasObject(oid string) bool {
 	return err == nil && fi.Mode().IsRegular()
 }
 
-// staged is an upload's bytes, written to .git/lfs/tmp before a change adopts them.
 type staged struct {
 	root *os.Root
 	tmp  string
 	ptr  pointer
 }
 
-// stage copies src into a new file under sp's .git/lfs/tmp, hashing it as it goes, without
-// holding the space's lock: a long upload doesn't stop anyone reading the space. More than
-// limit bytes is ErrTooLarge. The repository is created first, if needed, so .git is never
-// made by anything but openRepo. The caller discards the result.
 func (s *Store) stage(sp access.Space, name string, src io.Reader, limit int64) (*staged, error) {
 	if err := s.ensureRepo(sp); err != nil {
 		return nil, err
@@ -314,10 +239,6 @@ func (s *Store) stage(sp access.Space, name string, src io.Reader, limit int64) 
 	return sg, nil
 }
 
-// openStaged makes the file stage copies into. It holds the space's lock as a reader while it
-// makes the directories and the file, only: a removal (RemoveSpace) comes before it, and the
-// space is refused, or after it, and takes the file with the rest. The bytes are then copied into
-// a file that may already be unlinked, which leaves nothing behind.
 func (s *Store) openStaged(sp access.Space) (*staged, *os.File, error) {
 	st := s.lockSpace(sp, false, true)
 	defer st.mu.RUnlock()
@@ -341,16 +262,13 @@ func (s *Store) openStaged(sp access.Space) (*staged, *os.File, error) {
 	return sg, f, nil
 }
 
-// bytes reads the staged file back, for one that turns out to belong in git.
 func (sg *staged) bytes() ([]byte, error) { return sg.root.ReadFile(sg.tmp) }
 
-// discard removes the staged file, unless a change adopted it.
 func (sg *staged) discard() {
 	_ = sg.root.Remove(sg.tmp)
 	_ = sg.root.Close()
 }
 
-// adopt moves the staged bytes to their object path, unless the space already has them.
 func (r *repo) adopt(sg *staged) error {
 	dst := objectPath(sg.ptr.oid)
 	if r.hasObject(sg.ptr.oid) {
@@ -363,7 +281,6 @@ func (r *repo) adopt(sg *staged) error {
 	return r.root.Rename(sg.tmp, dst)
 }
 
-// ensureRepo creates sp's repository if it has none.
 func (s *Store) ensureRepo(sp access.Space) error {
 	st := s.lockSpace(sp, true, false)
 	defer st.mu.Unlock()
@@ -378,17 +295,14 @@ func (s *Store) ensureRepo(sp access.Space) error {
 	return nil
 }
 
-// unversionedSize is the bytes of the space's unversioned files, all of them on disk.
 func (r *repo) unversionedSize() (int64, error) {
 	var n int64
 	err := r.objects(func(_ string, size int64) { n += size })
 	return n, err
 }
 
-// objects calls fn for every object file on disk, with its oid and size.
 func (r *repo) objects(fn func(oid string, size int64)) error { return walkObjects(r.root.FS(), fn) }
 
-// walkObjects is objects for the space whose directory is fsys.
 func walkObjects(fsys fs.FS, fn func(oid string, size int64)) error {
 	err := fs.WalkDir(fsys, objectsDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() {
@@ -409,8 +323,6 @@ func walkObjects(fsys fs.FS, fn func(oid string, size int64)) error {
 	return err
 }
 
-// gc removes the objects main doesn't point to, the folders they leave empty, and staged
-// uploads older than tmpMaxAge. A failure leaves what it couldn't remove for the next gc.
 func (r *repo) gc() error {
 	var have []string
 	if err := r.objects(func(oid string, _ int64) { have = append(have, oid) }); err != nil {
@@ -438,7 +350,7 @@ func (r *repo) gc() error {
 	}
 	entries, err := fs.ReadDir(r.root.FS(), tmpDir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil // nothing was ever staged
+		return nil
 	} else if err != nil {
 		return err
 	}
@@ -450,7 +362,6 @@ func (r *repo) gc() error {
 	return nil
 }
 
-// pointers returns the oids main's files point to.
 func (r *repo) pointers() (map[string]bool, error) {
 	used := map[string]bool{}
 	head, err := r.head()

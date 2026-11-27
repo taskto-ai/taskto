@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// providersFile writes a providers file and a client secret file next to it, and returns the
-// file's path; %SECRET% in json stands for the secret file's path.
 func providersFile(t *testing.T, json string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -95,7 +93,6 @@ func TestLoadSSOProvidersRefusals(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want one with %q", err, tt.want)
 			}
-			// The error names fields, never values: no secret, client id or issuer in it.
 			for _, leak := range []string{"fake-secret-value", `"c"`, "idp.example.com"} {
 				if strings.Contains(err.Error(), leak) {
 					t.Fatalf("the error quotes %q: %v", leak, err)

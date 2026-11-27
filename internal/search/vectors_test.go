@@ -13,7 +13,6 @@ import (
 	"taskto.ai/taskto/internal/knowledge"
 )
 
-// bruteNearest is nearest without the vector cache: the reference.
 func (x *Index) bruteNearest(t *testing.T, in, key string, qv []float32, limit int) []near {
 	t.Helper()
 	return rank(must[[]near](t)(x.nearestBrute(ctx, in, key, qv)), limit)
@@ -21,19 +20,15 @@ func (x *Index) bruteNearest(t *testing.T, in, key string, qv []float32, limit i
 
 func TestVectorCacheMatchesBruteForce(t *testing.T) {
 	w := newWorld(t)
-	account := w.setModel() // and consents to it for the team space
+	account := w.setModel()
 	key := Embeddings{Account: account, Model: fakeModel}.key()
 	mine := w.private[w.alice]
 	w.consent(w.owner, w.secret)
 	w.consent(w.alice, mine)
-	// 100 dimensions: dot32's eight lanes and the four left over.
 	const dims = 100
 	w.fillVectors(w.team, key, 1200, 4, dims, 1)
 	w.fillVectors(w.secret, key, 400, 7, dims, 2)
 	w.fillVectors(mine, key, 200, 1, dims, 3)
-	// Passages of another size are never compared, and the first of a document's passages
-	// most like the query is its passage: a document whose three passages are two equal
-	// vectors and a third, and the same vector in another document, a tie broken by ID.
 	r := rand.New(rand.NewPCG(4, 4))
 	w.fillVectors(w.team, key, 6, 3, 50, 5)
 	same := randomVector(r, dims)
@@ -61,7 +56,6 @@ func TestVectorCacheMatchesBruteForce(t *testing.T) {
 			for _, q := range queries {
 				for _, limit := range []int{10, hybridDepth} {
 					want := x.bruteNearest(t, in, key, q, limit)
-					// Twice: loading the cache, then from it.
 					for range 2 {
 						got := must[[]near](t)(x.nearest(ctx, w.ws, in, key, q, limit))
 						if len(want) == 0 || !slices.Equal(got, want) {
@@ -71,8 +65,6 @@ func TestVectorCacheMatchesBruteForce(t *testing.T) {
 				}
 			}
 		}
-		// The document with two equal passages: the first; and the tie between documents,
-		// by ID.
 		got := must[[]near](t)(x.nearest(ctx, w.ws, spacesJSON(t, w.team), key, same, 2))
 		if got[0].similarity != got[1].similarity || got[0].doc != ties[0] || got[0].seq != 1 || got[1].doc != ties[1] {
 			t.Fatalf("ties: %+v", got)
@@ -90,7 +82,6 @@ func TestVectorCacheMatchesBruteForce(t *testing.T) {
 		x.vectors = nil
 		check(t, x)
 	})
-	// Room for some of the spaces only: the others are read from SQLite, in the same search.
 	t.Run("partly", func(t *testing.T) {
 		x.vectors = newVectorCache(1 << 40)
 		must[[]near](t)(x.nearest(ctx, w.ws, spacesJSON(t, w.team), key, same, 1))
@@ -128,38 +119,29 @@ func TestVectorCacheBudget(t *testing.T) {
 		s := x.vectors.spaces[sp.ID]
 		return s != nil && s.snap != nil
 	}
-	// 200 passages of 64 dimensions, in 100 documents.
 	const size = 200*(4*64+chunkOverhead) + 100*docOverhead
 
-	// Room for one space: the one searched last.
 	x.vectors = newVectorCache(size + size/2)
 	search(w.team)
 	search(w.secret)
 	if cached(w.team) || !cached(w.secret) || x.vectors.used != size {
 		t.Fatalf("one space: team %v, secret %v, %d bytes", cached(w.team), cached(w.secret), x.vectors.used)
 	}
-	// Both in one search: the one cached stays, the other is read from SQLite, rather than
-	// each search dropping one for the other.
 	search(w.team, w.secret)
 	search(w.team, w.secret)
 	if cached(w.team) || !cached(w.secret) || x.vectors.used != size {
 		t.Fatalf("both: team %v, secret %v, %d bytes", cached(w.team), cached(w.secret), x.vectors.used)
 	}
-	// A space bigger than the budget is never cached, and isn't loaded again on every
-	// search: only once there is more room.
 	x.vectors = newVectorCache(size / 2)
 	search(w.team)
 	if cached(w.team) || x.vectors.used != 0 || x.vectors.spaces[w.team.ID].tooBig <= size/2 {
 		t.Fatalf("too big: %+v", x.vectors.spaces[w.team.ID])
 	}
-	// Loading it again would record what it reached, more than the budget: it isn't.
 	x.vectors.spaces[w.team.ID].tooBig = size / 2
 	search(w.team)
 	if x.vectors.spaces[w.team.ID].tooBig != size/2 {
 		t.Fatal("loaded again without more room")
 	}
-	// But not for ever: it may have shrunk. Most of its passages go, and once tooBigRetry has
-	// passed, the next search loads it, and it fits.
 	if _, err := w.e.idx.db.Exec(`DELETE FROM search_chunks WHERE doc_id IN
 		(SELECT id FROM search_docs WHERE space_id = ? ORDER BY id LIMIT 90)`, w.team.ID); err != nil {
 		t.Fatal(err)
@@ -176,9 +158,6 @@ func TestVectorCacheBudget(t *testing.T) {
 	}
 }
 
-// TestVectorCacheConcurrent runs searches of overlapping spaces, with room for some of them
-// only, while their vectors are invalidated: run with -race. Afterwards, the cache's account
-// of its memory is right, and it finds what brute force does.
 func TestVectorCacheConcurrent(t *testing.T) {
 	w := newWorld(t)
 	account := w.setModel()
@@ -238,8 +217,6 @@ func TestVectorCacheConcurrent(t *testing.T) {
 	}
 }
 
-// meaning searches the whole workspace as u, which must be a hybrid search, and returns
-// the documents found by meaning, as space/path.
 func (w *world) meaning(u *user, q string) []string {
 	w.e.t.Helper()
 	rec := w.search(u, nil, q)
@@ -260,8 +237,6 @@ func (w *world) meaning(u *user, q string) []string {
 
 func docPath(sp access.Space, path string) string { return fmt.Sprintf("%d/%s", sp.ID, path) }
 
-// TestVectorCacheFollowsChanges checks that whatever changes the vectors a search may
-// compare changes what it finds at once, with the vector cache warm, and without it.
 func TestVectorCacheFollowsChanges(t *testing.T) {
 	for _, cache := range []bool{true, false} {
 		t.Run(map[bool]string{true: "cached", false: "off"}[cache], func(t *testing.T) {
@@ -275,7 +250,7 @@ func testVectorsFollowChanges(t *testing.T, cache bool) {
 	if !cache {
 		w.e.idx.vectors = nil
 	}
-	account := w.setModel() // and consents to it for the team space
+	account := w.setModel()
 	mine := w.private[w.alice]
 	w.consent(w.alice, mine)
 	want := func(u *user, q string, paths ...string) {
@@ -289,8 +264,6 @@ func testVectorsFollowChanges(t *testing.T, cache bool) {
 		}
 	}
 	bobs := w.private[w.bob]
-	// embed syncs the spaces with git, as a search or the background worker would, and
-	// embeds what is waiting.
 	embed := func() {
 		t.Helper()
 		for _, sp := range []access.Space{w.team, mine, bobs} {
@@ -304,22 +277,18 @@ func testVectorsFollowChanges(t *testing.T, cache bool) {
 	embed()
 	want(w.alice, "vehicle", fleet, garage)
 
-	// A new document: found once it is embedded.
 	harbour := docPath(w.team, "harbour.md")
 	w.put(w.owner, w.team, "harbour.md", "# Harbour\n\nThe maritime log.\n")
 	want(w.alice, "vehicle", fleet, garage)
 	embed()
 	want(w.alice, "vehicle", fleet, garage, harbour)
 
-	// A document changed: not found by its old vectors, and by its new ones once made.
 	doc := must[knowledge.Doc](t)(w.e.kb.Read(ctx, w.team, "fleet.md", ""))
 	must[knowledge.Result](t)(w.e.kb.Put(ctx, w.team, "fleet.md", []byte("# Fleet\n\nA ship on the ocean.\n"), doc.Version, by, ""))
 	want(w.alice, "vehicle", garage, harbour)
 	embed()
 	want(w.alice, "vehicle", fleet, garage, harbour)
 
-	// Consent withdrawn: the space's vectors are gone at once; given again, it is found once
-	// embedded again, never by the vectors from before.
 	expect(t, w.alice.do(http.MethodPut, embeddingURL(mine), map[string]bool{"enabled": false}), http.StatusOK)
 	want(w.alice, "vehicle", fleet, harbour)
 	w.consent(w.alice, mine)
@@ -327,8 +296,6 @@ func testVectorsFollowChanges(t *testing.T, cache bool) {
 	embed()
 	want(w.alice, "vehicle", fleet, garage, harbour)
 
-	// The model turned off and set again, the same: its vectors were dropped, and the
-	// documents are found once embedded again.
 	settings := fmt.Sprintf("/api/workspaces/%d/search/settings", w.ws)
 	expect(t, w.owner.do(http.MethodPut, settings, map[string]any{"embeddings": nil}), http.StatusOK)
 	expect(t, w.owner.do(http.MethodPut, settings,
@@ -337,9 +304,6 @@ func testVectorsFollowChanges(t *testing.T, cache bool) {
 	embed()
 	want(w.alice, "vehicle", fleet, garage, harbour)
 
-	// The endpoint changed (the account's base URL): a space whose consent is for the old
-	// one isn't compared with a query embedded by the new one, though its vectors are kept;
-	// the team space, consented to the new one, is once embedded by it.
 	other := newFakeEmbeddings(t)
 	expect(t, w.owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d/providers/%d", w.ws, account),
 		map[string]string{"base_url": other.srv.URL + "/v1"}), http.StatusOK)
@@ -350,12 +314,10 @@ func testVectorsFollowChanges(t *testing.T, cache bool) {
 	}
 	embed()
 	want(w.alice, "vehicle", fleet, harbour)
-	// Back to the endpoint the private space consented to: it is compared again.
 	expect(t, w.owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d/providers/%d", w.ws, account),
 		map[string]string{"base_url": w.e.embed.srv.URL + "/v1"}), http.StatusOK)
 	want(w.alice, "vehicle", garage)
 
-	// A member who loses access to a space: its documents aren't found any more.
 	w.consent(w.bob, bobs)
 	w.consent(w.owner, w.team)
 	w.put(w.bob, bobs, "bike.md", "# Bike\n\nMy own vehicle.\n")
@@ -364,15 +326,12 @@ func testVectorsFollowChanges(t *testing.T, cache bool) {
 	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", w.ws, w.team.ID, w.bob.id), nil),
 		http.StatusNoContent)
 	want(w.bob, "vehicle", docPath(bobs, "bike.md"))
-	// fuse leaves out a document of another space too: the vectors compared are already
-	// only those of the spaces searched, cached for other members or not.
 	key := Embeddings{Account: account, Model: fakeModel}.key()
 	qv := normalize(fakeVector("vehicle"))
 	if found := must[[]near](t)(w.e.idx.nearest(ctx, w.ws, spacesJSON(t, bobs), key, qv, 10)); len(found) != 1 {
 		t.Fatalf("bob's spaces: %+v", found)
 	}
 
-	// A space deleted: its vectors aren't compared, even by a search that still names it.
 	in := spacesJSON(t, w.team, mine)
 	if n := len(must[[]near](t)(w.e.idx.nearest(ctx, w.ws, in, key, qv, 10))); n != 3 {
 		t.Fatalf("%d documents found before the space was deleted, want 3", n)

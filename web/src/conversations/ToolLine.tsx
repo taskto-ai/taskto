@@ -1,8 +1,3 @@
-// A tool the agent used, as one compact line: a check (or a spinner while it runs), what it did,
-// and the tool's name in the mono face. A CLI's turn has its output as plain text under the line,
-// open while the CLI works and folded once it is done, unless the person opened, closed or
-// scrolled it; an app the agent saved is launched inline or linked to.
-
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react'
 import { CLI_PRODUCTS } from '../api'
 import { appPath } from '../apps/route'
@@ -14,23 +9,12 @@ import { Spinner } from '../ui/Spinner'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { type AppRef, CLI_TOOL, HELP_TOOL, type ToolUse } from './transcript'
 
-// The A2UI renderer is most of the app's code: loaded when a conversation shows an app, its chunk
-// fetched together with the preview's (the preview draws it lazily), not one after the other.
 const AppPreview = lazy(() => {
   void import('../apps/AppView').catch(() => {})
   return import('../apps/AppPreview').then((m) => ({ default: m.AppPreview }))
 })
 
-export function ToolLine({
-  tool,
-  workspace,
-  launched,
-}: {
-  tool: ToolUse
-  workspace: number
-  // Whether its app shows launched here; otherwise the line links to it.
-  launched: boolean
-}) {
+export function ToolLine({ tool, workspace, launched }: { tool: ToolUse; workspace: number; launched: boolean }) {
   const t = useT()
   const line = (
     <>
@@ -40,7 +24,6 @@ export function ToolLine({
   )
   return (
     <div className="ui-chat-tool">
-      {/* A CLI's work is plain text lines, shown as such: never Markdown, never HTML. */}
       {tool.output ? (
         <CliOutput running={Boolean(tool.running)} output={tool.output} line={line} />
       ) : (
@@ -61,8 +44,6 @@ export function ToolLine({
   )
 }
 
-// A CLI's output under its line: open while it works, folded once it is done, but only if the
-// person never touched it: what they opened, closed or scrolled stays as they left it.
 function CliOutput({ running, output, line }: { running: boolean; output: string; line: ReactNode }) {
   const [open, setOpen] = useState(running)
   const touched = useRef(false)
@@ -74,8 +55,6 @@ function CliOutput({ running, output, line }: { running: boolean; output: string
       className="ui-chat-tool-output"
       open={open}
       onToggle={(e) => {
-        // The browser says so when it follows `open` too: only a change the page didn't ask for is
-        // the person's.
         const now = e.currentTarget.open
         if (now !== open) {
           touched.current = true
@@ -102,7 +81,6 @@ function CliOutput({ running, output, line }: { running: boolean; output: string
   )
 }
 
-// An app the agent saved, launched in the conversation, in its own frame.
 function InlineApp({ workspace, app }: { workspace: number; app: AppRef }) {
   const t = useT()
   return (
@@ -119,8 +97,6 @@ function InlineApp({ workspace, app }: { workspace: number; app: AppRef }) {
   )
 }
 
-// What a tool call shows as: a CLI's turn as that CLI's work, any other as the tool it used, its
-// name in the mono face.
 function toolLabel(t: T, tool: ToolUse): ReactNode {
   if (tool.name === HELP_TOOL) return t('conversations.tool.help')
   if (tool.name !== CLI_TOOL)

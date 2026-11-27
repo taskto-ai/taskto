@@ -47,7 +47,6 @@ func TestCleanElemShortensAtACharacterAndKeepsTheExtension(t *testing.T) {
 	if len(noExt) > 50 || !utf8.ValidString(noExt) {
 		t.Errorf("cleanElem = %q (%d bytes)", noExt, len(noExt))
 	}
-	// An "extension" that is most of the name isn't kept whole.
 	if got := cleanElem("a."+strings.Repeat("x", 300), maxElemBytes); len(got) > maxElemBytes {
 		t.Errorf("a long extension: %d bytes", len(got))
 	}
@@ -71,8 +70,8 @@ func TestNamesAreUniqueEvenIgnoringCase(t *testing.T) {
 
 func TestNamesNeverMakeAFileOfAFolder(t *testing.T) {
 	n := newNames()
-	file := n.claim("documents", "a_", "x.md") // a folder a_
-	clash := n.claim("documents", "a_")        // then a file of the same name
+	file := n.claim("documents", "a_", "x.md")
+	clash := n.claim("documents", "a_")
 	if file != "documents/a_/x.md" || clash == "documents/a_" {
 		t.Errorf("file = %q, clash = %q", file, clash)
 	}
@@ -82,7 +81,6 @@ func TestNamesNeverMakeAFileOfAFolder(t *testing.T) {
 	if strings.HasPrefix(got, "documents/a_/") {
 		t.Errorf("a folder over a file: %q", got)
 	}
-	// The folder keeps its new name for the files that follow.
 	first := strings.Split(got, "/")[1]
 	if a, b := n.claim("documents", "a_", "y.md"), n.claim("documents", "a_", "z.md"); strings.Split(a, "/")[1] != first || strings.Split(b, "/")[1] != first {
 		t.Errorf("one folder, three names: %q %q %q", got, a, b)
@@ -98,8 +96,6 @@ func TestSuffixKeepsWithinTheLimit(t *testing.T) {
 	}
 }
 
-// A long run of dots before a long "extension" is cut to nothing: the name falls back to one that
-// can be a file, never an empty element (which would make a folder entry of a file).
 func TestCleanElemNeverCutsANameToNothing(t *testing.T) {
 	for _, in := range []string{
 		strings.Repeat(".", 130) + strings.Repeat("x", 30),
@@ -113,15 +109,13 @@ func TestCleanElemNeverCutsANameToNothing(t *testing.T) {
 		}
 		n := newNames()
 		n.claim("documents", in)
-		again := n.claim("documents", in) // the suffixed name is a name too
+		again := n.claim("documents", in)
 		if parts := strings.Split(again, "/"); len(parts) != 2 || parts[1] == "" || len(parts[1]) > maxElemBytes {
 			t.Errorf("claim of a repeated %.20q… = %q", in, again)
 		}
 	}
 }
 
-// Two names that a file system treats as one (an accent written as one character or two, a
-// different case) are two entries in the zip, and still two once unpacked there.
 func TestNamesAreUniqueByNormalizationAndCase(t *testing.T) {
 	n := newNames()
 	nfc, nfd := "café.md", "café.md"
@@ -142,11 +136,9 @@ func TestNamesAreUniqueByNormalizationAndCase(t *testing.T) {
 	}
 }
 
-// Folders that are different in the knowledge base stay different when their names are cleaned to
-// the same name, or fold to the same name, and a folder's files stay together.
 func TestNamesKeepDistinctFoldersApart(t *testing.T) {
 	n := newNames()
-	a := n.claim("documents", "a:b", "x.md") // "a:b" is cleaned to "a_b"
+	a := n.claim("documents", "a:b", "x.md")
 	b := n.claim("documents", "a_b", "x.md")
 	c := n.claim("documents", "A_B", "x.md")
 	again := n.claim("documents", "a:b", "y.md")

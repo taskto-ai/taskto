@@ -1,12 +1,3 @@
-// gotest-report prints `go test -json` output the way people read it: one line per package
-// (ok or FAIL, with its time), then the whole output of every test that failed, of every test
-// still running when its package died (a panic or a timeout), and of every package that
-// failed outside a test or didn't build. CI's Go job runs it on the JSON it keeps as an
-// artifact, so a failure that happens once in a while can be read from the log.
-//
-// Usage: go run .github/scripts/gotest-report.go go-test.json
-//
-// Standard library only, and outside ./... on purpose: it is CI's glue, not the product.
 package main
 
 import (
@@ -19,11 +10,10 @@ import (
 	"strings"
 )
 
-// event is one line of `go test -json` (cmd/test2json), build events included.
 type event struct {
 	Action     string
 	Package    string
-	ImportPath string // build-output and build-fail
+	ImportPath string
 	Test       string
 	Elapsed    float64
 	Output     string
@@ -32,14 +22,14 @@ type event struct {
 type test struct {
 	pkg, name string
 	out       strings.Builder
-	done      bool // passed, failed or skipped
+	done      bool
 	failed    bool
 }
 
 type pkg struct {
 	name    string
-	out     strings.Builder // output outside any test
-	result  string          // pass, fail or skip; "" while running
+	out     strings.Builder
+	result  string
 	elapsed float64
 	tests   []*test
 	byName  map[string]*test
@@ -83,7 +73,6 @@ func report(r io.Reader, w io.Writer) error {
 		line := sc.Bytes()
 		var e event
 		if err := json.Unmarshal(line, &e); err != nil || e.Action == "" {
-			// go test prints some lines outside JSON (a vet failure, for one): keep them.
 			fmt.Fprintf(w, "%s\n", line)
 			continue
 		}
@@ -129,8 +118,6 @@ func report(r io.Reader, w io.Writer) error {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		// A line too long to read (one test printing 64 MB without a newline): report what
-		// was read before it rather than nothing.
 		fmt.Fprintf(w, "gotest-report: stopped reading: %v; what follows covers the lines before it\n\n", err)
 	}
 
@@ -152,7 +139,7 @@ func report(r io.Reader, w io.Writer) error {
 	}
 
 	sort.Strings(buildFailed)
-	didntBuild := map[string]bool{} // "pkg [pkg.test]" names the package first
+	didntBuild := map[string]bool{}
 	for _, ip := range buildFailed {
 		if f := strings.Fields(ip); len(f) > 0 {
 			didntBuild[f[0]] = true
@@ -170,8 +157,6 @@ func report(r io.Reader, w io.Writer) error {
 		}
 		listed := didntBuild[name]
 		for _, t := range p.tests {
-			// A test still running when its package failed is the one a panic or a timeout
-			// stopped; its parent tests are running too, so only the innermost are printed.
 			if t.failed || (!t.done && !hasRunningChild(p, t)) {
 				state := "FAIL"
 				if !t.done {
@@ -182,7 +167,6 @@ func report(r io.Reader, w io.Writer) error {
 				fmt.Fprintf(w, "\n===== %s: %s %s =====\n%s", state, name, t.name, t.out.String())
 			}
 		}
-		// The package's own output: a panic's stack, a timeout, TestMain, a race report.
 		out := strings.TrimSpace(p.out.String())
 		switch {
 		case out != "" && (!listed || hasDetail(out)):
@@ -198,7 +182,6 @@ func report(r io.Reader, w io.Writer) error {
 	return nil
 }
 
-// hasRunningChild says whether a subtest of t was still running too.
 func hasRunningChild(p *pkg, t *test) bool {
 	for _, c := range p.tests {
 		if !c.done && strings.HasPrefix(c.name, t.name+"/") {
@@ -208,7 +191,6 @@ func hasRunningChild(p *pkg, t *test) bool {
 	return false
 }
 
-// hasDetail says whether a package's own output says more than "FAIL" and its exit status.
 func hasDetail(out string) bool {
 	for _, l := range strings.Split(out, "\n") {
 		l = strings.TrimSpace(l)

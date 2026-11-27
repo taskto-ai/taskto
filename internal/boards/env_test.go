@@ -18,7 +18,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// Test passwords: obviously fake, and long enough for the account rules.
 const fakePassword = "fake-test-password"
 
 type env struct {
@@ -27,13 +26,9 @@ type env struct {
 	s        *Service
 	h        http.Handler
 	accounts *auth.Service
-	// hooks run what a test sets at chosen moments of the database's use.
-	hooks *db.Hooks
+	hooks    *db.Hooks
 }
 
-// newEnv serves the account, space and board routes, as the server does.
-
-// setupToken is the first-run setup token the tests' server is given.
 var setupToken = auth.NewSetupToken()
 
 func newEnv(t *testing.T) *env {
@@ -58,7 +53,6 @@ func newEnv(t *testing.T) *env {
 	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux), accounts: accounts, hooks: hooks}
 }
 
-// user is a logged-in browser.
 type user struct {
 	e      *env
 	id     int64
@@ -113,7 +107,6 @@ type meReply struct {
 	Workspaces []auth.Membership
 }
 
-// setup creates the owner and their workspace.
 func (e *env) setup() (*user, int64) {
 	e.t.Helper()
 	owner := &user{e: e}
@@ -126,7 +119,6 @@ func (e *env) setup() (*user, int64) {
 	return owner, me.Workspaces[0].WorkspaceID
 }
 
-// join invites a new person to workspace, as admin, and returns them logged in.
 func (e *env) join(admin *user, workspace int64, name string, role auth.Role) *user {
 	e.t.Helper()
 	email := strings.ToLower(name) + "@example.com"
@@ -180,24 +172,11 @@ func cardPath(s access.Space, board, card int64, rest string) string {
 	return boardPath(s, board, fmt.Sprintf("/cards/%d%s", card, rest))
 }
 
-// in returns s as addressed through workspace ws, which may not be its own.
 func in(ws int64, s access.Space) access.Space {
 	s.WorkspaceID = ws
 	return s
 }
 
-// world is a workspace with people in every relation to its spaces and boards:
-//
-//   - owner: admin, editor of shared and archived;
-//   - admin2: admin, member of no shared space;
-//   - alice: editor of shared and archived;
-//   - bob: viewer of shared;
-//   - mallory: a member of the workspace, of no shared space;
-//   - gone: was an editor of shared, then removed from the workspace;
-//   - stranger: admin of another workspace, other, with its own shared space.
-//
-// shared has two team boards, team and team2; archived (an archived space) has one,
-// old. Each has a card.
 type world struct {
 	e                                       *env
 	ws, other                               int64
@@ -207,7 +186,7 @@ type world struct {
 	alicePrivate, ownerPrivate              access.Space
 	team, team2, old, alicePersonal         Board
 	teamCard, team2Card, oldCard, aliceCard Card
-	agentIDs                                int64 // the last agent runtime ID conversation used
+	agentIDs                                int64
 }
 
 func newWorld(t *testing.T) *world {
@@ -286,7 +265,6 @@ func (w *world) card(u *user, s access.Space, c Card) Thread {
 	return decode[Thread](w.e.t, rec)
 }
 
-// cards lists a board's cards with a query string ("" or "?column=todo&...").
 func (w *world) cards(u *user, s access.Space, b Board, query string) []Card {
 	w.e.t.Helper()
 	rec := u.do(http.MethodGet, boardPath(s, b.ID, "/cards"+query), nil)
@@ -302,8 +280,6 @@ func titles(cards []Card) []string {
 	return out
 }
 
-// conversation records a conversation of u in workspace ws, as the conversation API does,
-// and returns its ID as a card links it.
 func (w *world) conversation(u *user, ws int64) string {
 	w.e.t.Helper()
 	w.agentIDs++

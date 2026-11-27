@@ -9,7 +9,10 @@ import (
 
 const isolationSupported = false
 
-type isolationState struct{} //nolint:unused // isolation needs Linux
+type Isolation struct {
+	UIDBase       int
+	Passwd, Group string
+}
 
 func (w *Worker) asUser(_ *exec.Cmd, _ int64) error {
 	if w.cfg.Isolation != nil {

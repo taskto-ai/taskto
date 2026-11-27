@@ -13,15 +13,13 @@ import (
 	"taskto.ai/taskto/internal/knowledge"
 )
 
-// GlossaryFile is the document, at the root of a space, whose list items are its terms.
 const GlossaryFile = "glossary.md"
 
 const (
-	maxTerms   = 500 // per dictation, from every space
-	maxTermLen = 60  // characters
+	maxTerms   = 500
+	maxTermLen = 60
 )
 
-// Docs reads the knowledge base: *knowledge.Store.
 type Docs interface {
 	Read(ctx context.Context, sp access.Space, name, at string) (knowledge.Doc, error)
 }
@@ -31,9 +29,6 @@ var (
 	mdLink   = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
 )
 
-// ParseGlossary returns the terms of a glossary document: each list item's leading words,
-// up to the first ":", " — ", " – " or " - ", without bold, italic or code markers.
-// Front matter and fenced code are skipped.
 func ParseGlossary(md []byte) []string {
 	lines := strings.Split(strings.ReplaceAll(string(md), "\r\n", "\n"), "\n")
 	start := 0
@@ -70,7 +65,6 @@ func ParseGlossary(md []byte) []string {
 	return terms
 }
 
-// termOf is the term an item's text starts with, or "".
 func termOf(item string) string {
 	item = mdLink.ReplaceAllString(item, "$1")
 	for _, sep := range []string{":", " — ", " – ", " - ", "—", "–"} {
@@ -91,9 +85,6 @@ func termOf(item string) string {
 	return item
 }
 
-// glossary returns the terms of every space in workspaceID that userID can read, at most
-// maxTerms, without duplicates. A space whose glossary can't be read is skipped and logged:
-// a dictation goes on without it.
 func glossary(ctx context.Context, c *access.Checker, docs Docs, userID, workspaceID int64) []string {
 	spaces, err := c.Readable(ctx, userID, workspaceID)
 	if err != nil {

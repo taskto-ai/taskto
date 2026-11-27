@@ -13,24 +13,6 @@ import (
 	"unicode/utf8"
 )
 
-// Rules are the one small language an app has for conditions: whether a component is shown (the
-// Show component) and whether a field is required (Field.RequiredWhen). A rule is data, never
-// code, and nothing in it is evaluated as an expression. It is one of
-//
-//	{"field": "kind", "op": "eq", "value": "other"}    one field compared with one literal
-//	{"all": [rule, …]}                                 every rule holds
-//	{"any": [rule, …]}                                 at least one holds
-//
-// op is eq, ne, lt, lte, gt or gte; the ordering ones are for number, date and time fields. The
-// literal is of the field's type (a choice's must be one of its options). A field with no value
-// equals nothing: eq, lt, lte, gt and gte are false for it, ne is true. The rules' size is
-// bounded (maxRuleDepth, maxRuleNodes, maxRuleList), and the server and the browser evaluate
-// them the same way (web/src/apps/rules.ts, held to the same cases by testdata/rules.json).
-//
-// A rule hides an input for people; it is never what decides what a row may hold. The server
-// enforces conditional requirements on every insert and update, whatever the screen showed.
-
-// The operators of a rule's comparison.
 const (
 	OpEq  = "eq"
 	OpNe  = "ne"
@@ -42,15 +24,12 @@ const (
 
 var ruleOps = []string{OpEq, OpNe, OpLt, OpLte, OpGt, OpGte}
 
-// Bounds of a rule.
 const (
-	maxRuleDepth = 3  // all and any inside all and any, each counted once
-	maxRuleNodes = 16 // comparisons and combinations in all
-	maxRuleList  = 8  // the rules inside one all or any
+	maxRuleDepth = 3
+	maxRuleNodes = 16
+	maxRuleList  = 8
 )
 
-// Rule is a condition over the fields of one row (or one form). Exactly one form is set: a
-// comparison (Field, Op, Value), All or Any.
 type Rule struct {
 	Field string `json:"field,omitempty"`
 	Op    string `json:"op,omitempty"`
@@ -59,8 +38,6 @@ type Rule struct {
 	Any   []Rule `json:"any,omitempty"`
 }
 
-// UnmarshalJSON reads a rule strictly: a key that isn't one of a rule's is an error, so a
-// misspelt rule never silently means something else.
 func (r *Rule) UnmarshalJSON(b []byte) error {
 	type plain Rule
 	dec := json.NewDecoder(bytes.NewReader(b))
@@ -76,7 +53,6 @@ func (r *Rule) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// ruleFromValue reads a rule from a decoded JSON value (a component's prop).
 func ruleFromValue(v any) (Rule, error) {
 	if _, ok := v.(map[string]any); !ok {
 		return Rule{}, fmt.Errorf("a rule is an object")
@@ -92,8 +68,6 @@ func ruleFromValue(v any) (Rule, error) {
 	return r, nil
 }
 
-// check validates the rule against the collection's fields: every field declared, every
-// operator and literal fitting the field's type, and the rule within its bounds.
 func (r Rule) check(c Collection) error {
 	nodes := 0
 	return r.checkAt(c, 1, &nodes)
@@ -157,9 +131,6 @@ func (r Rule) checkAt(c Collection, depth int, nodes *int) error {
 	return nil
 }
 
-// literal checks v as a rule's literal for the field and returns it in the form rows store.
-// Unlike a stored value it must be exactly of the field's type (no numbers as text), and a
-// choice's must be one of its options.
 func (f Field) literal(v any) (any, error) {
 	switch f.Type {
 	case TypeString, TypeBarcode:
@@ -202,12 +173,8 @@ func (f Field) literal(v any) (any, error) {
 	return nil, fmt.Errorf("has an unknown type")
 }
 
-// timePattern is a time of day, HH:MM on a 24-hour clock.
 var timePattern = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 
-// holds reports whether the rule is true of the row. A value of another type than its field's
-// (a row from before the field was retyped) counts as no value. The rule is taken to have
-// been checked against the collection; one that wasn't (a field it doesn't know) is false.
 func (c Collection) holds(r Rule, row map[string]any) bool {
 	switch {
 	case r.All != nil:
@@ -281,15 +248,12 @@ func compareFloat(a, b float64) int {
 	return 0
 }
 
-// stored returns v as a value of the field's type with its limits not applied: the form rows
-// hold it in.
 func (f Field) stored(v any) (any, bool, error) {
 	f.MaxLength, f.Min, f.Max, f.Options, f.MaxFiles, f.asStored = math.MaxInt, nil, nil, nil, math.MaxInt, true
-	f.Format = "" // a code stored under another format is still the text it was
+	f.Format = ""
 	return f.parse(v)
 }
 
-// sameRule reports whether two rules are the same (both absent included).
 func sameRule(a, b *Rule) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -297,7 +261,6 @@ func sameRule(a, b *Rule) bool {
 	return reflect.DeepEqual(*a, *b)
 }
 
-// ruleFields lists the fields a rule reads.
 func ruleFields(r Rule) []string {
 	var out []string
 	var walk func(Rule)

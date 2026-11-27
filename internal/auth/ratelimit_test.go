@@ -25,7 +25,6 @@ func TestClientIP(t *testing.T) {
 	} {
 		r := httptest.NewRequest("GET", "/", nil)
 		r.RemoteAddr = remote
-		// Without trusted proxies, X-Forwarded-For is never read.
 		r.Header.Set("X-Forwarded-For", "198.51.100.99")
 		if got := (&Service{}).clientIP(r); got != want {
 			t.Errorf("clientIP(%q) = %q, want %q", remote, got, want)

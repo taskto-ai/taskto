@@ -63,7 +63,6 @@ func snippetText(r Result) (text, matched string) {
 	return all.String(), strings.TrimSpace(hits.String())
 }
 
-// indexedCommit is the commit the index has for sp.
 func (e *env) indexedCommit(sp access.Space) string {
 	e.t.Helper()
 	var c string
@@ -90,7 +89,6 @@ func TestIndexFollowsChanges(t *testing.T) {
 		t.Fatalf("mode = %q, notice %q", res.Mode, res.Notice)
 	}
 
-	// Update.
 	updated := must[knowledge.Result](t)(kb.Put(ctx, sp, "notes/plan.md", []byte("# Yearly plan\n\nWe plant vineyards.\n"), created.Doc.Version, by, ""))
 	wantPaths(t, w.find(sp, "orchard"))
 	res = w.find(sp, "vineyards")
@@ -99,7 +97,6 @@ func TestIndexFollowsChanges(t *testing.T) {
 		t.Fatalf("result = %+v", r)
 	}
 
-	// Move a document, then its folder.
 	must[knowledge.Result](t)(kb.Move(ctx, sp, "notes/plan.md", "notes/plan-2026.md", "", by, ""))
 	wantPaths(t, w.find(sp, "vineyards"), "notes/plan-2026.md")
 	must[knowledge.Result](t)(kb.Put(ctx, sp, "notes/todo.md", []byte("prune the vineyards"), "", by, ""))
@@ -109,7 +106,6 @@ func TestIndexFollowsChanges(t *testing.T) {
 	}
 	wantPaths(t, w.find(sp, "notes"))
 
-	// Delete.
 	deleted := must[knowledge.Result](t)(kb.Delete(ctx, sp, "archive/plan-2026.md", "", by, ""))
 	wantPaths(t, w.find(sp, "vineyards"), "archive/todo.md")
 	if c := w.e.indexedCommit(sp); c != deleted.Commit {
@@ -130,7 +126,6 @@ func TestIndexSyncsInTheBackground(t *testing.T) {
 	defer stop()
 	for i := range 3 {
 		res := must[knowledge.Result](t)(w.e.kb.Put(ctx, w.team, fmt.Sprintf("d%d.md", i), []byte("background"), "", by, ""))
-		// No search: the change itself has the space synced.
 		waitFor(t, "the index to reach the change", func() bool { return w.e.indexedCommit(w.team) == res.Commit })
 	}
 }
@@ -141,8 +136,6 @@ func TestCatchUpAfterCrash(t *testing.T) {
 	must[knowledge.Result](t)(w.e.kb.Put(ctx, sp, "a.md", []byte("alpha"), "", by, ""))
 	wantPaths(t, w.find(sp, "alpha"), "a.md")
 
-	// Changes the index doesn't hear of: another Store on the same data directory, as if
-	// the server had stopped before syncing, or someone had committed with their own tools.
 	other := knowledge.New(w.e.dataDir, knowledge.Options{})
 	must[knowledge.Result](t)(other.Put(ctx, sp, "b.md", []byte("bravo"), "", by, ""))
 	last := must[knowledge.Result](t)(other.Delete(ctx, sp, "a.md", "", by, ""))
@@ -155,8 +148,6 @@ func TestCatchUpAfterCrash(t *testing.T) {
 		t.Fatalf("index at %s, want %s", c, last.Commit)
 	}
 
-	// A sync that stopped half-way: its row is gone, and it left a document main doesn't
-	// have and another at a version main has moved past. The next sync starts over.
 	db := w.e.idx.db
 	for _, q := range []string{
 		`DELETE FROM search_spaces WHERE space_id = ?`,
@@ -179,8 +170,6 @@ func TestCatchUpAfterCrash(t *testing.T) {
 	wantPaths(t, w.find(sp, "stale"))
 	wantPaths(t, w.find(sp, "bravo"), "b.md")
 
-	// More files than one transaction writes, made while the server was down: startup
-	// catches up without a search.
 	for i := range syncBatch + 20 {
 		must[knowledge.Result](t)(other.Put(ctx, sp, fmt.Sprintf("bulk/%03d.md", i), []byte("bulk"), "", by, ""))
 	}
@@ -210,9 +199,6 @@ func TestSyncBatchesByBytes(t *testing.T) {
 		if !resync || len(batches) < 2 {
 			return
 		}
-		// Every batch after the first finds the space marked partial, so a sync that
-		// stopped here would start over; and searches meanwhile still see what was
-		// indexed before.
 		var partial bool
 		_ = w.e.idx.db.QueryRowContext(ctx, `SELECT partial FROM search_spaces WHERE space_id = ?`, sp.ID).Scan(&partial)
 		if !partial {
@@ -243,8 +229,6 @@ func TestSyncBatchesByBytes(t *testing.T) {
 		wantPaths(t, w.find(sp, name+"text"), name+".md")
 	}
 
-	// A sync that stopped half-way, leaving a row main doesn't have: the next one starts
-	// over from main's files, though main hasn't moved, and drops it.
 	err := w.e.idx.write(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `UPDATE search_spaces SET partial = 1 WHERE space_id = ?`, sp.ID); err != nil {
 			return err
@@ -269,8 +253,6 @@ func TestHybridPagesDontRepeatOrSkip(t *testing.T) {
 	w := newWorld(t)
 	w.setModel()
 	sp := w.team
-	// Documents whose full-text and semantic ranks disagree, more of them than one page
-	// reads of either ranking at shallow offsets.
 	for i := range 90 {
 		body := strings.Repeat("kumquat ", i%7+1) + strings.Repeat(fmt.Sprintf("filler%d ", i%13), i%11+1)
 		must[knowledge.Result](t)(w.e.kb.Put(ctx, sp, fmt.Sprintf("d%02d.md", i), []byte(body), "", by, ""))
@@ -307,8 +289,6 @@ func TestSearchDoesntWaitLongForARunningSync(t *testing.T) {
 	wantPaths(t, w.find(sp, "kumquat"), "old.md")
 	must[knowledge.Result](t)(w.e.kb.Put(ctx, sp, "new.md", []byte("kumquat new"), "", by, ""))
 
-	// A long sync of the space is running: the search answers from what is indexed, soon,
-	// and says so.
 	w.e.idx.syncWait = 50 * time.Millisecond
 	unlock := must[func()](t)(w.e.idx.lock(ctx, sp.ID))
 	start := time.Now()
@@ -334,12 +314,10 @@ func TestSearchLeavesLargeCatchUpsToTheWorker(t *testing.T) {
 	for _, name := range []string{"a", "b", "c"} {
 		must[knowledge.Result](t)(w.e.kb.Put(ctx, sp, name+".md", []byte("kumquat "+name), "", by, ""))
 	}
-	// Made as if outside the server: the worker hasn't heard of it.
 	w.e.idx.dirtyMu.Lock()
 	clear(w.e.idx.dirty)
 	w.e.idx.dirtyMu.Unlock()
 
-	// More than one batch changed: the search doesn't sync it, says so, and hands it over.
 	res := w.find(sp, "kumquat")
 	if len(res.Results) != 0 || !strings.HasPrefix(res.Notice, noticeBehind) {
 		t.Fatalf("%+v", res)
@@ -363,8 +341,6 @@ func TestNoNextPagePastTheDeepestOffset(t *testing.T) {
 	sp := w.team
 	must[knowledge.Result](t)(w.e.kb.Put(ctx, sp, "real.md", []byte("bulk"), "", by, ""))
 	must[string](t)(w.e.idx.Sync(ctx, sp))
-	// More matches than the deepest page reaches, straight into the index (a commit each
-	// would be slow); the space's indexed commit is unchanged, so no sync undoes them.
 	err := w.e.idx.write(ctx, func(tx *sql.Tx) error {
 		for i := range MaxOffset + 10 {
 			var id int64
@@ -388,7 +364,6 @@ func TestNoNextPagePastTheDeepestOffset(t *testing.T) {
 	if res := search(MaxOffset-1, 1); res.NextOffset == nil || *res.NextOffset != MaxOffset {
 		t.Fatalf("next %v, want %d", res.NextOffset, MaxOffset)
 	}
-	// More results follow, but past the deepest offset: no next page, which would be refused.
 	if res := search(MaxOffset, 5); len(res.Results) != 5 || res.NextOffset != nil {
 		t.Fatalf("%d results, next %v", len(res.Results), res.NextOffset)
 	}
@@ -419,8 +394,6 @@ func TestUploadSnippets(t *testing.T) {
 	check(ModeHybrid)
 }
 
-// Unversioned files (audio and video, large files) are found by their names like any
-// upload, and follow their moves.
 func TestUnversionedFilesByName(t *testing.T) {
 	w := newWorld(t)
 	sp := w.team
@@ -434,9 +407,6 @@ func TestUnversionedFilesByName(t *testing.T) {
 	wantPaths(t, w.find(sp, "zebra"), "talks/zebra-keynote.mp4")
 }
 
-// A file that leaves git history gives every commit from its first version a new ID, and
-// the commit the index reflects is gone: the index catches up from main's files, and its
-// results name commits that exist.
 func TestIndexCatchesUpAfterHistoryRewrite(t *testing.T) {
 	w := newWorld(t)
 	kb, sp := w.e.kb, w.team
@@ -445,7 +415,6 @@ func TestIndexCatchesUpAfterHistoryRewrite(t *testing.T) {
 	wantPaths(t, w.find(sp, "lemurs"), "notes/lemur.md")
 	old := w.e.indexedCommit(sp)
 
-	// Renamed to a kind that is always unversioned: its old versions leave history.
 	moved := must[knowledge.Result](t)(kb.Move(ctx, sp, "art/cover.dat", "art/cover.psd", "", by, ""))
 	if _, err := kb.Read(ctx, sp, "notes/lemur.md", old); !errors.Is(err, knowledge.ErrNotFound) {
 		t.Fatalf("the indexed commit is still there: %v", err)
@@ -506,22 +475,17 @@ func TestRanking(t *testing.T) {
 		}
 	}
 
-	// Uploads by path only.
 	wantPaths(t, w.find(sp, "zebra"))
 	wantPaths(t, w.find(sp, "report"), "files/report.pdf")
-	// Titles: front matter first.
 	if res := w.find(sp, "front matter"); len(res.Results) != 1 || res.Results[0].Title != "Front matter title" {
 		t.Fatalf("front matter: %+v", res.Results)
 	}
-	// Prefixes, every word, phrases.
 	wantPaths(t, w.find(sp, "kumq"), paths(res)...)
 	wantPaths(t, w.find(sp, "kumquat citrus"), "guides/kumquat.md")
 	wantPaths(t, w.find(sp, `"small citrus fruit"`), "guides/kumquat.md")
 	wantPaths(t, w.find(sp, `"fruit citrus"`))
-	// Accents don't matter.
 	wantPaths(t, w.find(sp, "kùmquat jäm"), "notes/many.md")
 
-	// FTS5's syntax is never interpreted, so nothing is a syntax error.
 	for _, q := range []string{`kumquat AND`, `NEAR(kumquat jam)`, `path:kumquat`, `kumquat*`, `"kumquat`, `-kumquat`, `(kumquat`, `^kumquat`} {
 		if _, err := w.e.idx.Search(ctx, w.ws, []access.Space{sp}, Query{Text: q}); err != nil {
 			t.Fatalf("%q: %v", q, err)
@@ -534,7 +498,6 @@ func TestRanking(t *testing.T) {
 		}
 	}
 
-	// Pages.
 	var all []string
 	for offset := 0; ; {
 		res := must[Results](t)(w.e.idx.Search(ctx, w.ws, []access.Space{sp}, Query{Text: "kumquat", Limit: 1, Offset: offset}))
@@ -549,9 +512,6 @@ func TestRanking(t *testing.T) {
 	}
 }
 
-// TestCrossUser checks that a search only ever finds what the caller may read: the
-// workspace's search over their readable spaces, and a space's only if they can read it,
-// in full-text and hybrid search alike.
 func TestCrossUser(t *testing.T) {
 	w := newWorld(t)
 	for u, sp := range w.private {
@@ -572,10 +532,6 @@ func TestCrossUser(t *testing.T) {
 		w.bob:     {w.private[w.bob].ID, w.team.ID},
 		w.mallory: {w.private[w.mallory].ID},
 	}
-	// check searches for q as everyone. q matches byMeaning alone, or by full text; model
-	// says whether the workspace has an embeddings model, optedIn whether every private
-	// space's owner opted in. A private space is found by meaning, and searched
-	// semantically, only once its owner opted in.
 	check := func(q string, byMeaning, model, optedIn bool) {
 		t.Helper()
 		for u, canRead := range readable {
@@ -622,17 +578,13 @@ func TestCrossUser(t *testing.T) {
 				}
 			}
 		}
-		// Someone who left the workspace has no search in it; nor does anyone outside it.
 		expect(t, w.search(w.stranger, nil, q), http.StatusNotFound)
 		expect(t, w.search(w.stranger, ptr(w.private[w.stranger]), q), http.StatusNotFound)
 		expect(t, w.search(&user{e: w.e}, nil, q), http.StatusUnauthorized)
 	}
 	check("kumquat", false, false, false)
 
-	// With semantic search, by meaning alone ("car" is in no document): private spaces
-	// only once their owner opted in.
 	w.setModel()
-	// The shared spaces' editor consents for them, the archived one too.
 	w.consent(w.owner, w.secret)
 	w.consent(w.owner, w.old)
 	w.e.embedAll()
@@ -645,15 +597,12 @@ func TestCrossUser(t *testing.T) {
 	check("car", true, true, true)
 	check("kumquat", false, true, true)
 
-	// Search's own guard: spaces of another workspace, or without read access, are never
-	// looked in, whatever a caller passes.
 	foreign := w.team
 	foreign.WorkspaceID++
 	closed := w.secret
 	closed.Access = access.None
 	res := must[Results](t)(w.e.idx.Search(ctx, w.ws, []access.Space{foreign, closed}, Query{Text: "kumquat"}))
 	wantPaths(t, res)
-	// Nothing searched: nothing to say about semantic search either.
 	if res.Mode != ModeFullText || res.Notice != "" {
 		t.Fatalf("no space searched: %+v", res)
 	}
@@ -665,7 +614,6 @@ func embeddingURL(sp access.Space) string {
 	return fmt.Sprintf("/api/workspaces/%d/spaces/%d/search/embedding", sp.WorkspaceID, sp.ID)
 }
 
-// spaceChunks counts sp's vectors.
 func (e *env) spaceChunks(sp access.Space) int {
 	e.t.Helper()
 	var n int
@@ -679,7 +627,7 @@ func (e *env) spaceChunks(sp access.Space) int {
 
 func TestSpacesEmbeddedOnlyWithConsent(t *testing.T) {
 	w := newWorld(t)
-	w.setModel() // and consents to it for the team space
+	w.setModel()
 	mine := w.private[w.alice]
 	w.put(w.alice, mine, "fleet.md", "# Fleet\n\nMy zucchini automobile notes.\n")
 	w.put(w.owner, w.team, "fleet.md", "# Fleet\n\nThe team automobile.\n")
@@ -689,9 +637,6 @@ func TestSpacesEmbeddedOnlyWithConsent(t *testing.T) {
 	}
 	w.e.embedAll()
 
-	// Off by default, private and shared alike: only the team space, consented to, is
-	// embedded; the others aren't waiting, and a search of only them doesn't send the
-	// query out.
 	if w.e.embed.sent("zucchini") || w.e.embed.sent("mangosteen") || w.e.spaceChunks(mine) != 0 ||
 		w.e.spaceChunks(w.secret) != 0 || w.e.spaceChunks(w.team) == 0 {
 		t.Fatalf("chunks: private %d, secret %d, team %d", w.e.spaceChunks(mine), w.e.spaceChunks(w.secret), w.e.spaceChunks(w.team))
@@ -710,7 +655,6 @@ func TestSpacesEmbeddedOnlyWithConsent(t *testing.T) {
 		t.Fatal("a search of only spaces without consent sent the query")
 	}
 
-	// A private space: only its owner sees or changes it; for anyone else it isn't there.
 	for _, u := range []*user{w.owner, w.bob, w.mallory} {
 		expect(t, u.do(http.MethodGet, embeddingURL(mine), nil), http.StatusNotFound)
 		expect(t, u.do(http.MethodPut, embeddingURL(mine), map[string]bool{"enabled": true}), http.StatusNotFound)
@@ -721,13 +665,10 @@ func TestSpacesEmbeddedOnlyWithConsent(t *testing.T) {
 		c.Endpoint == nil || c.Endpoint.BaseURL != w.e.embed.srv.URL+"/v1" || c.Endpoint.Model != fakeModel {
 		t.Fatalf("before consent: %+v", c)
 	}
-	// A shared space: its editors change it, its viewers see it, others don't.
 	expect(t, w.bob.do(http.MethodGet, embeddingURL(w.team), nil), http.StatusOK)
 	expectCode(t, w.bob.do(http.MethodPut, embeddingURL(w.team), map[string]bool{"enabled": false}), http.StatusForbidden, "consent_forbidden", nil)
 	expect(t, w.mallory.do(http.MethodGet, embeddingURL(w.team), nil), http.StatusNotFound)
 	expect(t, w.mallory.do(http.MethodPut, embeddingURL(w.secret), map[string]bool{"enabled": true}), http.StatusNotFound)
-	// Being a workspace admin changes nothing: as a viewer of a space, the owner can't
-	// consent for it, and once out of it, can't see it.
 	viewing := w.createShared("Viewing")
 	member := fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", w.ws, viewing.ID, w.owner.id)
 	expect(t, w.owner.do(http.MethodPatch, member, map[string]string{"role": "viewer"}), http.StatusNoContent)
@@ -736,7 +677,6 @@ func TestSpacesEmbeddedOnlyWithConsent(t *testing.T) {
 	expect(t, w.owner.do(http.MethodGet, embeddingURL(viewing), nil), http.StatusNotFound)
 	expect(t, w.owner.do(http.MethodPut, embeddingURL(viewing), map[string]bool{"enabled": true}), http.StatusNotFound)
 
-	// Opted in: embedded, and found by meaning.
 	rec := w.alice.do(http.MethodPut, embeddingURL(mine), map[string]bool{"enabled": true})
 	expect(t, rec, http.StatusOK)
 	if c := decode[Consent](t, rec); !c.Enabled || c.GivenBy == nil || *c.GivenBy != w.alice.id {
@@ -750,7 +690,6 @@ func TestSpacesEmbeddedOnlyWithConsent(t *testing.T) {
 		t.Fatalf("private, on: %+v", res)
 	}
 
-	// Opted out: its vectors are gone, and it is full text again.
 	expect(t, w.alice.do(http.MethodPut, embeddingURL(mine), map[string]bool{"enabled": false}), http.StatusOK)
 	if n := w.e.spaceChunks(mine); n != 0 {
 		t.Fatalf("%d chunks left after opting out", n)
@@ -762,7 +701,6 @@ func TestSpacesEmbeddedOnlyWithConsent(t *testing.T) {
 		t.Fatalf("%d documents embedded after opting out", n)
 	}
 
-	// Opting out while a document is being embedded: its vectors aren't kept.
 	expect(t, w.alice.do(http.MethodPut, embeddingURL(mine), map[string]bool{"enabled": true}), http.StatusOK)
 	w.e.embedAll()
 	w.put(w.alice, mine, "boat.md", "# Boat\n\nA sea vessel.\n")
@@ -784,8 +722,6 @@ func TestSpacesEmbeddedOnlyWithConsent(t *testing.T) {
 		t.Fatalf("%d chunks kept from an embedding finished after opting out", n)
 	}
 
-	// An admin repoints the account at another server: nothing goes there, no document and
-	// no query, until a member of the space consents again, to it.
 	c := decode[Consent](t, w.bob.do(http.MethodGet, embeddingURL(w.team), nil))
 	if !c.Enabled || c.Endpoint == nil {
 		t.Fatalf("team: %+v", c)
@@ -806,13 +742,11 @@ func TestSpacesEmbeddedOnlyWithConsent(t *testing.T) {
 	if changed.Enabled || changed.GivenBy == nil || changed.Endpoint.BaseURL != other.srv.URL+"/v1" {
 		t.Fatalf("after the base URL changed: %+v", changed)
 	}
-	// Consent to the endpoint shown before the change isn't consent to the new one.
 	rec = w.alice.do(http.MethodPut, embeddingURL(w.team), map[string]any{"enabled": true, "endpoint": c.Endpoint})
 	expectCode(t, rec, http.StatusConflict, "consent_endpoint_changed", nil)
 	if c := decode[Consent](t, w.bob.do(http.MethodGet, embeddingURL(w.team), nil)); c.Enabled || *c.GivenAt != *changed.GivenAt {
 		t.Fatalf("after consent to the old endpoint: %+v", c)
 	}
-	// Alice, an editor, consents to it: the space is embedded again, by it alone.
 	rec = w.alice.do(http.MethodPut, embeddingURL(w.team), map[string]any{"enabled": true, "endpoint": changed.Endpoint})
 	expect(t, rec, http.StatusOK)
 	if c := decode[Consent](t, rec); !c.Enabled || *c.GivenBy != w.alice.id {
@@ -826,7 +760,6 @@ func TestSpacesEmbeddedOnlyWithConsent(t *testing.T) {
 		t.Fatalf("consented again: %+v", res)
 	}
 
-	// Without a model, there is nothing to consent to.
 	expect(t, w.owner.do(http.MethodPut, settings, map[string]any{"embeddings": nil}), http.StatusOK)
 	expectCode(t, w.alice.do(http.MethodPut, embeddingURL(w.team), map[string]bool{"enabled": true}), http.StatusConflict, "consent_no_model", nil)
 }
@@ -852,7 +785,6 @@ func TestSemanticSearch(t *testing.T) {
 	expect(t, set(w.alice, account, fakeModel), http.StatusForbidden)
 	expect(t, set(w.owner, account, "no-such-model"), http.StatusBadRequest)
 	expect(t, set(w.owner, account+100, fakeModel), http.StatusBadRequest)
-	// A personal account never serves the workspace.
 	rec := w.alice.do(http.MethodPost, "/api/me/providers", map[string]any{
 		"name": "mine", "base_url": w.e.embed.srv.URL + "/v1", "api_key": fakeKey, "models": []map[string]string{{"id": "chat"}},
 	})
@@ -870,7 +802,6 @@ func TestSemanticSearch(t *testing.T) {
 
 	w.put(w.owner, w.team, "fleet.md", "# Fleet\n\nOur automobile maintenance schedule.\n")
 	w.put(w.owner, w.team, "harbour.md", "# Harbour\n\nThe maritime log, and nothing else.\n")
-	// Not embedded yet: hybrid, but it says what it can't find yet.
 	res := w.find(w.team, "car")
 	if res.Mode != ModeHybrid || res.Notice != fmt.Sprintf(noticePending, 2) ||
 		!slices.Equal(res.Notices, []Notice{{Code: NoticePending, Count: 2}}) || len(res.Results) != 0 {
@@ -893,7 +824,6 @@ func TestSemanticSearch(t *testing.T) {
 		t.Fatalf("maritime: %+v", res.Results)
 	}
 
-	// A change is embedded again; until then its old vectors aren't used.
 	doc := must[knowledge.Doc](t)(w.e.kb.Read(ctx, w.team, "fleet.md", ""))
 	must[knowledge.Result](t)(w.e.kb.Put(ctx, w.team, "fleet.md", []byte("# Fleet\n\nSea, sea and sea: a ship on the ocean.\n"), doc.Version, by, ""))
 	if res := w.find(w.team, "car"); slices.Contains(paths(res), "fleet.md") {
@@ -910,7 +840,6 @@ func TestSemanticSearch(t *testing.T) {
 		t.Fatalf("sea: %+v", res.Results)
 	}
 
-	// The query's embedding fails: full text, and it says so.
 	w.e.embed.fail.Store(true)
 	res = w.find(w.team, "maritime")
 	if res.Mode != ModeFullText || res.Notice != noticeFailed || len(res.Results) != 1 {
@@ -918,9 +847,6 @@ func TestSemanticSearch(t *testing.T) {
 	}
 	w.e.embed.fail.Store(false)
 
-	// The operator tightens the egress policy to public addresses (the endpoint is on
-	// 127.0.0.1): the query's embedding is refused before it connects, and the search says
-	// why; so is setting a model again.
 	open := w.e.idx.client
 	w.e.idx.client = egress.MustParse("public").Client(time.Minute)
 	calls := w.e.embed.calls.Load()
@@ -938,7 +864,6 @@ func TestSemanticSearch(t *testing.T) {
 	}
 	w.e.idx.client = open
 
-	// Removing the model drops the vectors.
 	expect(t, w.owner.do(http.MethodPut, settings, map[string]any{"embeddings": nil}), http.StatusOK)
 	var chunks int
 	_ = w.e.idx.db.QueryRowContext(ctx, `SELECT count(*) FROM search_chunks`).Scan(&chunks)
@@ -948,7 +873,6 @@ func TestSemanticSearch(t *testing.T) {
 	if res := w.find(w.team, "car"); res.Mode != ModeFullText || res.Notice != noticeOff {
 		t.Fatalf("after removing the model: %+v", res)
 	}
-	// And so does deleting its account.
 	expect(t, set(w.owner, account, fakeModel), http.StatusOK)
 	w.e.embedAll()
 	if res := w.find(w.team, "car"); res.Mode != ModeHybrid {
@@ -969,7 +893,6 @@ func TestFullTextOnlyWithoutAModel(t *testing.T) {
 	if res.Mode != ModeFullText || res.Notice != noticeOff || !slices.Equal(res.Notices, []Notice{{Code: NoticeOff}}) || len(res.Results) != 1 {
 		t.Fatalf("%s", rec.Body)
 	}
-	// Queries that can't be run say why, with a code.
 	expectCode(t, w.search(w.bob, nil, " "), http.StatusBadRequest, "search_query_required", nil)
 	expectCode(t, w.search(w.bob, nil, strings.Repeat("x", MaxQueryLen+1)), http.StatusBadRequest,
 		"search_query_too_long", map[string]any{"max": float64(MaxQueryLen)})
@@ -1003,7 +926,6 @@ func TestEmbeddingRetries(t *testing.T) {
 	if tries != 1 || after <= clock.UTC().Format(timeFormat) {
 		t.Fatalf("tries %d, after %s", tries, after)
 	}
-	// It waits, even once the endpoint is back.
 	w.e.embed.fail.Store(false)
 	if n := must[int](t)(w.e.idx.embedPending(ctx)); n != 0 {
 		t.Fatalf("tried %d before its time", n)
@@ -1028,7 +950,6 @@ func TestAFailureDoesntDelayANewerVersion(t *testing.T) {
 		done <- err
 	}()
 	waitFor(t, "the worker to call the endpoint", func() bool { return w.e.embed.calls.Load() > 1 })
-	// Changed while its old version is being embedded, which then fails.
 	doc := must[knowledge.Doc](t)(w.e.kb.Read(ctx, w.team, "fleet.md", ""))
 	must[knowledge.Result](t)(w.e.kb.Put(ctx, w.team, "fleet.md", []byte("a sedan"), doc.Version, by, ""))
 	must[string](t)(w.e.idx.Sync(ctx, w.team))
@@ -1112,8 +1033,6 @@ func TestDocTitle(t *testing.T) {
 	}
 }
 
-// A write whose context ends inside its transaction is rolled back before write returns, so no
-// connection is left busy for the next writer or for closing the database.
 func TestWriteCancelledInsideItsTransactionLeavesNoConnectionBusy(t *testing.T) {
 	e := newEnv(t)
 	for range 200 {
@@ -1132,7 +1051,6 @@ func TestWriteCancelledInsideItsTransactionLeavesNoConnectionBusy(t *testing.T) 
 	}
 }
 
-// A write whose caller gave up after its last statement is rolled back, not committed.
 func TestWriteCancelledAfterItsLastStatementIsRolledBack(t *testing.T) {
 	e := newEnv(t)
 	ctx, cancel := context.WithCancel(context.Background())

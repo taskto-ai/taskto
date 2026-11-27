@@ -17,7 +17,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// serve serves h's worker on a Unix socket and returns a client of it.
 func serve(t *testing.T, h *harness) *cliworker.Remote {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "cw")
@@ -36,7 +35,6 @@ func serve(t *testing.T, h *harness) *cliworker.Remote {
 	return cliworker.NewRemote(socket)
 }
 
-// The server's client of a worker in its own process does what the worker does in-process.
 func TestRemoteWorker(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { delete(c.Bins, cliworker.Grok) })
 	r := serve(t, h)
@@ -45,7 +43,6 @@ func TestRemoteWorker(t *testing.T) {
 	if !r.Available(cliworker.Claude) || r.Available(cliworker.Grok) {
 		t.Fatal("available CLIs")
 	}
-	// A login, through its code.
 	info, err := r.StartLogin(1, cliworker.Claude, "")
 	if err != nil || info.State != cliworker.LoginWaiting || !info.NeedsCode {
 		t.Fatalf("login = %+v %v", info, err)
@@ -69,7 +66,6 @@ func TestRemoteWorker(t *testing.T) {
 	if _, err := r.StartLogin(1, cliworker.Grok, ""); !errors.Is(err, cliworker.ErrUnavailable) {
 		t.Fatalf("unavailable: %v", err)
 	}
-	// Another account of the same CLI is a login of its own.
 	if st, err := r.Status(ctx, 1, cliworker.Claude, "2"); err != nil || st.LoggedIn {
 		t.Fatalf("second account's status = %+v %v", st, err)
 	}
@@ -87,7 +83,6 @@ func TestRemoteWorker(t *testing.T) {
 		t.Fatal("a slot that isn't one was accepted")
 	}
 
-	// A turn, its events, re-attaching, and another user's clash.
 	s := spec("remote", 1, cliworker.Claude, "over the socket")
 	turn, attached, err := r.StartTurn(s)
 	if err != nil || attached {
@@ -124,7 +119,6 @@ func TestRemoteWorker(t *testing.T) {
 		t.Fatal("a bad spec was accepted")
 	}
 
-	// Stop, over the socket.
 	clitest.WriteScenario(t, h.layout.User(1).Config(cliworker.Claude), clitest.Scenario{SleepMS: 30_000})
 	long, _, err := r.StartTurn(spec("long", 1, cliworker.Claude, "slow"))
 	if err != nil {
@@ -153,7 +147,6 @@ func TestRemoteWorker(t *testing.T) {
 		t.Fatal("still signed in")
 	}
 
-	// A deleted account is forgotten, over the socket too.
 	if err := r.Forget(ctx, 1); err != nil {
 		t.Fatal(err)
 	}

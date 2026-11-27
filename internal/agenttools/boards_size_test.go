@@ -10,7 +10,6 @@ import (
 	"taskto.ai/taskto/internal/boards"
 )
 
-// checkFits fails unless out, as the tools socket sends it, is within MaxResult.
 func checkFits(t *testing.T, what string, out map[string]any) {
 	t.Helper()
 	b, err := json.Marshal(out)
@@ -19,8 +18,6 @@ func checkFits(t *testing.T, what string, out map[string]any) {
 	}
 }
 
-// A card or comment the tools just changed is answered even when its body, escaped as
-// JSON, is more than a result may be: the body is cut and the reply says so.
 func TestCardRepliesFitTheResultLimit(t *testing.T) {
 	w := newWorld(t)
 	space := map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal}
@@ -33,11 +30,10 @@ func TestCardRepliesFitTheResultLimit(t *testing.T) {
 		}
 		return out
 	}
-	// "<" is six bytes escaped, a newline two: both make 32 KiB more than 64 KiB.
 	for name, filler := range map[string]string{"angle": "<", "newline": "\n", "quote": `"`} {
 		t.Run(name, func(t *testing.T) {
 			big := strings.Repeat(filler, 32<<10)
-			bigText := "x" + big[1:] // a body that isn't only white space
+			bigText := "x" + big[1:]
 			if filler != "\n" {
 				bigText = big
 			}
@@ -92,14 +88,12 @@ func TestCardRepliesFitTheResultLimit(t *testing.T) {
 		})
 	}
 
-	// A small card is answered whole, with no mark.
 	card := w.ok(w.aliceConv, "create_card", with(map[string]any{"title": "Small", "body": "<ok>"}))
 	if _, marked := card["body_truncated"]; marked || card["body"] != "<ok>" {
 		t.Fatalf("small card = %v", card)
 	}
 }
 
-// With many boards, the archived ones, which come last, are reached by pages.
 func TestListBoardsPages(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -163,15 +157,11 @@ func TestListBoardsPages(t *testing.T) {
 		t.Fatalf("%d active boards", len(ids))
 	}
 
-	// An after that is not in the list (the archived ones are not, without archived) or not
-	// an id is refused, and for a space the user can't read it is "not found" first.
 	w.status(400, w.aliceConv, "list_boards", map[string]any{"space_id": w.shared, "after": archivedIDs[0]})
 	w.status(400, w.aliceConv, "list_boards", map[string]any{"space_id": w.shared, "after": -1})
 	w.status(404, w.aliceConv, "list_boards", map[string]any{"space_id": w.bobPrivate, "after": archivedIDs[0]})
 }
 
-// A card with the most docs validation allows, each with the longest escaped path, is
-// answered too: the last docs are left out, and the reply says so.
 func TestCardRepliesFitWithManyLongDocs(t *testing.T) {
 	w := newWorld(t)
 	var docs []string
@@ -205,8 +195,6 @@ func TestCardRepliesFitWithManyLongDocs(t *testing.T) {
 	}
 }
 
-// The docs kept leave room for the body's cut marker: with the docs that fit and no body
-// just under the limit, the reply is still within it.
 func TestFitCardLeavesRoomForTheCutMarker(t *testing.T) {
 	var docs []string
 	for i := range 40 {
@@ -221,8 +209,6 @@ func TestFitCardLeavesRoomForTheCutMarker(t *testing.T) {
 		}
 		return len(out)
 	}
-	// The title pads the card with no body to 3 bytes under the limit: it fits, but no
-	// body, even one cut to its marker, would.
 	bare := card
 	bare.Body = ""
 	card.Title = strings.Repeat("x", MaxResult-3-size(bare)+1)
@@ -244,7 +230,6 @@ func TestFitCardLeavesRoomForTheCutMarker(t *testing.T) {
 	}
 }
 
-// show_card counts the 16 KiB cut's mark in the size it fits, whatever the card's size.
 func TestShowCardFitsWithItsCutMark(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
@@ -259,8 +244,6 @@ func TestShowCardFitsWithItsCutMark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Titles of every length from 1 to 200 characters step the reply a byte at a time
-	// across the limit, past the point where the marks fit exactly.
 	for n := 1; n <= 200; n++ {
 		title := strings.Repeat("x", n)
 		card, err = w.tools.o.Boards.UpdateCard(ctx, actor, w.alicePrivate, w.alicePersonal, card.ID, boards.CardChanges{Version: card.Version, Title: &title})
@@ -275,8 +258,6 @@ func TestShowCardFitsWithItsCutMark(t *testing.T) {
 	}
 }
 
-// A card whose docs alone are more than a result may be does not leave list_cards with an
-// empty page: it is shown with the last docs left out, marked, and next moves past it.
 func TestListCardsPageAlwaysHasACard(t *testing.T) {
 	w := newWorld(t)
 	space := map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal}
@@ -284,7 +265,6 @@ func TestListCardsPageAlwaysHasACard(t *testing.T) {
 	for i := range 50 {
 		docs = append(docs, fmt.Sprintf("%02d/%s.md", i, strings.Repeat("<", 240)))
 	}
-	// Two cards with 72 KiB of docs each (and a body list_cards cuts), around small ones.
 	var created []int64
 	for _, c := range []struct {
 		title string
@@ -342,13 +322,11 @@ func TestListCardsPageAlwaysHasACard(t *testing.T) {
 		t.Fatalf("pages gave cards %v, want %v", got, created)
 	}
 
-	// The stored card is untouched.
 	stored, err := w.tools.o.Boards.ShowCard(context.Background(), boards.Actor{UserID: w.alice}, w.alicePrivate, w.alicePersonal, created[0])
 	if err != nil || len(stored.Docs) != len(docs) {
 		t.Fatalf("stored docs = %d, %v", len(stored.Docs), err)
 	}
 
-	// A card that is the whole list and doesn't fit alone is shown cut, with nothing after it.
 	only := map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal, "text": "Big one"}
 	out := w.ok(w.aliceConv, "list_cards", only)
 	checkFits(t, "list_cards", out)
@@ -359,7 +337,6 @@ func TestListCardsPageAlwaysHasACard(t *testing.T) {
 		t.Fatalf("a last card is followed by next: %v", out["next"])
 	}
 
-	// after must be a card of the list, and the board must be the caller's to read.
 	w.status(400, w.aliceConv, "list_cards", map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal, "after": 999999})
 	w.status(400, w.aliceConv, "list_cards", map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal, "after": -1})
 	w.status(404, w.aliceConv, "list_cards", map[string]any{"space_id": w.bobPrivate, "board_id": w.bobPersonal, "after": created[0]})

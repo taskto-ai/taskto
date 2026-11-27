@@ -15,15 +15,10 @@ import (
 	"taskto.ai/taskto/internal/auth"
 )
 
-// auditRoutes mounts the admins' view of the audit log (docs/api.md#audit-log).
 func auditRoutes(mux *http.ServeMux, accounts *auth.Service, sqlDB *sql.DB) {
 	mux.Handle("GET /api/workspaces/{workspace}/audit", accounts.RequireAdmin(auditList(sqlDB)))
 }
 
-// auditList is GET /api/workspaces/{workspace}/audit: the events of the workspace the caller
-// administers, newest first. The workspace comes from the membership RequireAdmin checked, never
-// from the path or the query, and audit.ListWorkspace refuses to run without one: no filter can
-// reach another workspace's events or those of no workspace.
 func auditList(sqlDB *sql.DB) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m, ok := auth.MembershipFrom(r.Context())
@@ -54,7 +49,6 @@ func auditList(sqlDB *sql.DB) http.Handler {
 	})
 }
 
-// auditQuery reads the filters of the list; msg says what is wrong with them, if anything.
 func auditQuery(v url.Values) (q audit.Query, code apierr.Code, msg string) {
 	code = apierr.CodeBadRequest
 	q.Action, q.TargetType, q.Cursor = v.Get("action"), v.Get("target_type"), v.Get("cursor")
@@ -94,9 +88,6 @@ func auditQuery(v url.Values) (q audit.Query, code apierr.Code, msg string) {
 
 var errTimeRange = errors.New("audit: a time bound outside the years 1000 to 9999")
 
-// optionalTime reads a time bound; "" is no bound. The log stores times as text with a four-digit
-// year, which compares as time only within the years 1000 to 9999, and the zero time (the year
-// 1) means "no bound" to audit.Query, so a bound outside those years is refused, not guessed.
 func optionalTime(s string) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, nil

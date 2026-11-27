@@ -15,31 +15,6 @@ import (
 	"time"
 )
 
-// In container mode the worker is its own process (`taskto cli-worker`, as root, in a
-// container of its own) and the server reaches it over HTTP on a Unix socket only the
-// server's user can open. Handler is its side; Remote is the server's. The worker does no
-// auth of its own: whoever can open the socket is the server.
-//
-//	GET    /available                        → {"claude": true, …}
-//	POST   /logins           {user, cli, slot?}     → LoginInfo
-//	GET    /logins/{user}/{cli}?slot=               → LoginInfo, or 404
-//	POST   /logins/{user}/{cli}/code?slot= {code}   → 204
-//	DELETE /logins/{user}/{cli}?slot=               → 204
-//	GET    /status/{user}/{cli}?slot=               → AuthStatus
-//	POST   /logout           {user, cli, slot?}     → 204
-//	POST   /forget           {user}                 → 204 (everything kept for a deleted account)
-//	POST   /reconcile        {live, next, before}   → 204 (takes back the marks of users a restore made wrong)
-//
-// slot is the account's (Slot); empty or left out, the first.
-//	POST   /turns            TurnSpec        → {"attached": bool}
-//	GET    /turns/{id}                       → TurnSpec, or 404
-//	GET    /turns/{id}/events?after=N        → {"events": […], "done": bool}, waiting up to 25 s for one
-//	POST   /turns/{id}/stop                  → 204
-//	GET    /permissions?user=U&conversation=C → {"requests": [PermissionRequest…]}
-//	POST   /permissions/answer {user, conversation, id, allow} → 204
-//
-// Refusals are {"error", "code"}, the code naming the sentinel error (see remoteErrors).
-
 var remoteErrors = map[string]error{
 	"unavailable":    ErrUnavailable,
 	"turn_clash":     ErrTurnClash,
@@ -53,10 +28,8 @@ var remoteErrors = map[string]error{
 	"busy":           ErrBusy,
 }
 
-// remoteWait bounds how long an events request waits for a new event.
 const remoteWait = 25 * time.Second
 
-// Handler serves the worker's API.
 func (w *Worker) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /available", func(rw http.ResponseWriter, _ *http.Request) {
@@ -203,7 +176,6 @@ func (w *Worker) Handler() http.Handler {
 			http.Error(rw, `{"error":"unknown turn"}`, http.StatusNotFound)
 			return
 		}
-		// The turn's tokens stay in the worker: the server minted them and needs them back for nothing.
 		spec := t.Spec()
 		if spec.Proxy != nil {
 			p := *spec.Proxy
@@ -228,7 +200,7 @@ func (w *Worker) Handler() http.Handler {
 		defer cancel()
 		events, done, err := t.Wait(ctx, after)
 		if err != nil && r.Context().Err() != nil {
-			return // the server left
+			return
 		}
 		if events == nil {
 			events = []Event{}
@@ -305,7 +277,6 @@ func refuse(rw http.ResponseWriter, err error) {
 	_ = json.NewEncoder(rw).Encode(map[string]string{"error": err.Error(), "code": code})
 }
 
-// badRequest is the caller's mistake (a bad body, spec or argument), not the worker's trouble.
 type badRequest struct{ error }
 
 func decodeBody(rw http.ResponseWriter, r *http.Request, v any) bool {
@@ -318,12 +289,10 @@ func decodeBody(rw http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// Remote is the server's client of a worker in its own process, on a Unix socket.
 type Remote struct {
 	http *http.Client
 }
 
-// NewRemote returns a client of the worker listening on socket.
 func NewRemote(socket string) *Remote {
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -377,12 +346,10 @@ func (c *Remote) do(ctx context.Context, method, path string, in, out any) error
 
 var errNotFound = errors.New("not found")
 
-// quick bounds the calls that answer at once.
 func quick() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 30*time.Second)
 }
 
-// Available reports whether cli is installed on the worker; false if it doesn't answer.
 func (c *Remote) Available(cli CLI) bool {
 	ctx, cancel := quick()
 	defer cancel()
@@ -394,7 +361,6 @@ func (c *Remote) Available(cli CLI) bool {
 	return out[cli]
 }
 
-// StartLogin starts user's login for cli's account in slot, or returns the one in progress.
 func (c *Remote) StartLogin(user int64, cli CLI, slot Slot) (LoginInfo, error) {
 	ctx, cancel := quick()
 	defer cancel()
@@ -403,7 +369,6 @@ func (c *Remote) StartLogin(user int64, cli CLI, slot Slot) (LoginInfo, error) {
 	return info, err
 }
 
-// LoginInfo returns user's login for cli's account in slot, if the worker has one.
 func (c *Remote) LoginInfo(user int64, cli CLI, slot Slot) (LoginInfo, bool) {
 	ctx, cancel := quick()
 	defer cancel()
@@ -414,7 +379,6 @@ func (c *Remote) LoginInfo(user int64, cli CLI, slot Slot) (LoginInfo, bool) {
 	return info, true
 }
 
-// accountPath is prefix, the user and CLI, then suffix, and the slot as a query.
 func accountPath(prefix string, user int64, cli CLI, slot Slot, suffix string) string {
 	p := prefix + strconv.FormatInt(user, 10) + "/" + url.PathEscape(string(cli)) + suffix
 	if slot != "" {
@@ -423,14 +387,12 @@ func accountPath(prefix string, user int64, cli CLI, slot Slot, suffix string) s
 	return p
 }
 
-// SubmitLoginCode passes the sign-in page's code to user's login.
 func (c *Remote) SubmitLoginCode(user int64, cli CLI, slot Slot, code string) error {
 	ctx, cancel := quick()
 	defer cancel()
 	return c.do(ctx, http.MethodPost, accountPath("/logins/", user, cli, slot, "/code"), map[string]string{"code": code}, nil)
 }
 
-// CancelLogin stops user's login for cli's account in slot.
 func (c *Remote) CancelLogin(user int64, cli CLI, slot Slot) {
 	ctx, cancel := quick()
 	defer cancel()
@@ -439,30 +401,24 @@ func (c *Remote) CancelLogin(user int64, cli CLI, slot Slot) {
 	}
 }
 
-// Status asks the worker whether user's cli is signed in, in the account in slot.
 func (c *Remote) Status(ctx context.Context, user int64, cli CLI, slot Slot) (AuthStatus, error) {
 	var st AuthStatus
 	err := c.do(ctx, http.MethodGet, accountPath("/status/", user, cli, slot, ""), nil, &st)
 	return st, err
 }
 
-// Logout signs user's cli out of the account in slot and removes what it kept.
 func (c *Remote) Logout(ctx context.Context, user int64, cli CLI, slot Slot) error {
 	return c.do(ctx, http.MethodPost, "/logout", map[string]any{"user": user, "cli": cli, "slot": slot}, nil)
 }
 
-// Forget removes everything the worker keeps for user, for an account that is deleted.
 func (c *Remote) Forget(ctx context.Context, user int64) error {
 	return c.do(ctx, http.MethodPost, "/forget", map[string]any{"user": user}, nil)
 }
 
-// Reconcile tells the worker which users exist and which number comes next, so that it takes
-// back the forgotten marks a restore of the server's data made wrong (Worker.Reconcile).
 func (c *Remote) Reconcile(ctx context.Context, live []int64, next int64, before time.Time) error {
 	return c.do(ctx, http.MethodPost, "/reconcile", map[string]any{"live": live, "next": next, "before": before}, nil)
 }
 
-// StartTurn starts spec's turn on the worker, or attaches to the one with its ID.
 func (c *Remote) StartTurn(spec TurnSpec) (*RemoteTurn, bool, error) {
 	ctx, cancel := quick()
 	defer cancel()
@@ -475,14 +431,11 @@ func (c *Remote) StartTurn(spec TurnSpec) (*RemoteTurn, bool, error) {
 	return &RemoteTurn{c: c, spec: spec}, out.Attached, nil
 }
 
-// turnInfo is a turn as GET /turns/{id} shows it: its spec, without its tokens, and whether it
-// has ended.
 type turnInfo struct {
 	TurnSpec
 	Over bool `json:"over"`
 }
 
-// FindTurn returns the worker's turn with id, running or finished recently.
 func (c *Remote) FindTurn(id string) (*RemoteTurn, bool) {
 	ctx, cancel := quick()
 	defer cancel()
@@ -493,7 +446,6 @@ func (c *Remote) FindTurn(id string) (*RemoteTurn, bool) {
 	return &RemoteTurn{c: c, spec: info.TurnSpec, over: info.Over}, true
 }
 
-// StopTurn stops the worker's turn id.
 func (c *Remote) StopTurn(id string) {
 	ctx, cancel := quick()
 	defer cancel()
@@ -502,7 +454,6 @@ func (c *Remote) StopTurn(id string) {
 	}
 }
 
-// Permissions returns the permission questions waiting in user's conversation.
 func (c *Remote) Permissions(ctx context.Context, user, conversation int64) ([]PermissionRequest, error) {
 	var out struct {
 		Requests []PermissionRequest `json:"requests"`
@@ -514,28 +465,20 @@ func (c *Remote) Permissions(ctx context.Context, user, conversation int64) ([]P
 	return out.Requests, nil
 }
 
-// Answer answers permission question id in user's conversation (ErrNoPermission if it isn't
-// waiting there).
 func (c *Remote) Answer(ctx context.Context, user, conversation int64, id string, allow bool) error {
 	return c.do(ctx, http.MethodPost, "/permissions/answer", answerRequest{User: user, Conversation: conversation, ID: id, Allow: allow}, nil)
 }
 
-// RemoteTurn is a turn on a worker in its own process.
 type RemoteTurn struct {
 	c    *Remote
 	spec TurnSpec
 	over bool
 }
 
-// Spec returns what the turn runs.
 func (t *RemoteTurn) Spec() TurnSpec { return t.spec }
 
-// Over reports whether the turn had ended when FindTurn found it (a turn StartTurn started
-// hadn't).
 func (t *RemoteTurn) Over() bool { return t.over }
 
-// Wait returns the events after Seq after, waiting until there is one, the turn is over, or
-// ctx ends.
 func (t *RemoteTurn) Wait(ctx context.Context, after int) ([]Event, bool, error) {
 	for {
 		var out struct {

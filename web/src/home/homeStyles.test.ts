@@ -1,15 +1,11 @@
 // @vitest-environment jsdom
 
-// What Home's stylesheet does to what it frames. jsdom draws no layout, so these read the rules
-// themselves and check what they reach.
-
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
 
 const css = readFileSync(join(__dirname, 'Home.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
 
-// Every rule (selector and declarations) in the file, with the at-rules it is inside.
 function rules(): { selector: string; body: string; at: string[] }[] {
   const out: { selector: string; body: string; at: string[] }[] = []
   const stack: string[] = []
@@ -34,7 +30,6 @@ function rules(): { selector: string; body: string; at: string[] }[] {
   return out
 }
 
-// Whether a selector reaches `el`; one jsdom can't read reaches nothing here.
 function matches(el: Element, selector: string): boolean {
   try {
     return el.matches(selector)
@@ -43,7 +38,6 @@ function matches(el: Element, selector: string): boolean {
   }
 }
 
-// The declarations of every rule that reaches `el`.
 function reaching(el: Element) {
   return rules().filter((r) => r.selector.split(',').some((s) => matches(el, s.trim())))
 }
@@ -54,8 +48,6 @@ test('an app’s screen sits bare in its widget, with the room its focus ring an
   const library = reaching(document.querySelector('section') as Element)
     .map((r) => r.body)
     .join(';')
-  // The library's bare frame has no edge or surface, and keeps the few pixels a focus ring and the
-  // primary's lift reach outside it: the widget's body scrolls, and would cut them at no padding.
   expect(library).not.toMatch(/padding/)
 })
 

@@ -14,14 +14,8 @@ import (
 	"taskto.ai/taskto/internal/updatestatus"
 )
 
-// An operator's "Update now" (docs/install.md#update-now): the server puts a file in a directory
-// of its own and a systemd path unit runs `taskto-update --requested`, which takes the file and
-// does the nightly run, behind every gate of it. The directory is the server's to write, so
-// everything in it is hostile.
-
 const requestLine = "2026-11-24T12:00:00Z 0123456789abcdef0123456789abcdef\n"
 
-// requestEnv is an install whose host has the request directory in place and a newer release.
 func requestEnv(t *testing.T) (*updEnv, string) {
 	t.Helper()
 	e := newUpdEnv(t)
@@ -51,8 +45,6 @@ func (e *updEnv) wantNoRequestLeft(dir string) {
 	}
 }
 
-// updaterCalls is how many calls to Docker the updater made (the status it publishes asks systemd
-// whether the path unit is on, which isn't a change).
 func (e *updEnv) updaterCalls() int {
 	n := 0
 	for _, c := range e.calls() {
@@ -72,13 +64,10 @@ func requestOutcome(t *testing.T, e *updEnv) *updatestatus.RequestRun {
 	return s.Requests.Last
 }
 
-// A request is the nightly run: the newest on the channel is installed, the request is gone, the
-// status says the run was requested and what became of it, and the page's "running" is there
-// while it goes on and gone when it ends.
 func TestUpdateRequestedDoesTheChannelRun(t *testing.T) {
 	e, dir := requestEnv(t)
 	e.request(dir, requestLine)
-	e.write("fake/block", "") // the run waits in its first pull, after it took the request
+	e.write("fake/block", "")
 	cmd := e.command("--requested")
 	var out strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &out
@@ -118,10 +107,9 @@ func TestUpdateRequestedDoesTheChannelRun(t *testing.T) {
 	e.wantNoRequestLeft(dir)
 }
 
-// A run nobody requested says it wasn't, and a request is not needed for it.
 func TestUpdateNightlyRunIsNotRequested(t *testing.T) {
 	e, dir := requestEnv(t)
-	e.request(dir, requestLine) // a request waiting is not this run's
+	e.request(dir, requestLine)
 	if code, out := e.run(); code != 0 {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
@@ -136,8 +124,6 @@ func TestUpdateNightlyRunIsNotRequested(t *testing.T) {
 	}
 }
 
-// Every gate of the nightly run holds for a request, the request is gone either way, and nothing
-// is changed: the answer is a code the page says in words.
 func TestUpdateRequestedRespectsTheGates(t *testing.T) {
 	for name, tc := range map[string]struct {
 		prepare func(e *updEnv)
@@ -193,8 +179,6 @@ func TestUpdateRequestedRespectsTheGates(t *testing.T) {
 	}
 }
 
-// A request is only an existence: whatever else is in the directory, a link, a directory, a
-// fifo or a large file, is removed and ignored, never followed or read, and changes nothing.
 func TestUpdateRequestedIgnoresAHostileRequest(t *testing.T) {
 	secret := "do-not-read-this"
 	for name, setup := range map[string]func(t *testing.T, e *updEnv, dir string) (guard string){
@@ -277,9 +261,6 @@ func TestUpdateRequestedIgnoresAHostileRequest(t *testing.T) {
 	}
 }
 
-// What is in a request's content never becomes an argument or anything else: a request is the one
-// fixed line the server writes, and anything else (text that looks like a command line, extra
-// lines, a line without its end, a file that grew past the limit) is removed and ignored.
 func TestUpdateRequestedContentIsNeverUsed(t *testing.T) {
 	pwned := func(e *updEnv) string { return filepath.Join(e.dir, "pwned") }
 	for name, content := range map[string]func(e *updEnv) string{
@@ -311,7 +292,6 @@ func TestUpdateRequestedContentIsNeverUsed(t *testing.T) {
 			}
 		})
 	}
-	// The one line the server writes is the request, whatever its time and nonce.
 	e, dir := requestEnv(t)
 	e.request(dir, "2030-01-01T00:00:00Z ffffffffffffffffffffffffffffffff\n")
 	if code, out := e.run("--requested"); code != 0 {
@@ -323,11 +303,9 @@ func TestUpdateRequestedContentIsNeverUsed(t *testing.T) {
 	}
 }
 
-// One requested run per ten minutes, and never the same request twice. A request turned away is
-// answered, and the last run's status stays as it was.
 func TestUpdateRequestedIsRateLimited(t *testing.T) {
 	e, dir := requestEnv(t)
-	e.extra = []string{"TASKTO_UPDATE_REQUEST=" + dir, "TASKTO_UPDATE_REQUEST_OWNER=" + strconv.Itoa(os.Getuid())} // the default interval
+	e.extra = []string{"TASKTO_UPDATE_REQUEST=" + dir, "TASKTO_UPDATE_REQUEST_OWNER=" + strconv.Itoa(os.Getuid())}
 	e.request(dir, requestLine)
 	if code, out := e.run("--requested"); code != 0 {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -356,7 +334,6 @@ func TestUpdateRequestedIsRateLimited(t *testing.T) {
 		t.Errorf("last run = %+v", s.LastRun)
 	}
 
-	// Without the limit, the same request is still handled once.
 	e.extra = []string{"TASKTO_UPDATE_REQUEST=" + dir, "TASKTO_UPDATE_REQUEST_MIN_INTERVAL=0", "TASKTO_UPDATE_REQUEST_OWNER=" + strconv.Itoa(os.Getuid())}
 	e.request(dir, requestLine)
 	if code, out := e.run("--requested"); code != 0 {
@@ -375,13 +352,10 @@ func TestUpdateRequestedIsRateLimited(t *testing.T) {
 	}
 }
 
-// If the rate-limit record cannot be saved, a requested run must stop before doing any
-// update work. Otherwise each new request could start a run without the ten-minute limit.
 func TestUpdateRequestedNeedsItsRateLimitRecord(t *testing.T) {
 	for _, blocked := range []string{"request-last-run.new", "request-last-run"} {
 		t.Run(blocked, func(t *testing.T) {
 			e, dir := requestEnv(t)
-			// A directory makes either the write or the final rename fail, even as root.
 			e.sub("state/" + blocked)
 			e.request(dir, requestLine)
 			code, out := e.run("--requested")
@@ -400,8 +374,6 @@ func TestUpdateRequestedNeedsItsRateLimitRecord(t *testing.T) {
 	}
 }
 
-// With no request waiting, a requested run does nothing and writes nothing (a path unit that
-// started it twice, a request another run took).
 func TestUpdateRequestedWithNoRequest(t *testing.T) {
 	e, _ := requestEnv(t)
 	code, out := e.run("--requested")
@@ -410,8 +382,6 @@ func TestUpdateRequestedWithNoRequest(t *testing.T) {
 	}
 }
 
-// A request directory that isn't as the updater needs it (missing, a link, another owner) is
-// neither read nor emptied, and the status says the host can't take a request.
 func TestUpdateRequestedNeedsTheDirectoryInPlace(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		e := newUpdEnv(t)
@@ -447,7 +417,6 @@ func TestUpdateRequestedNeedsTheDirectoryInPlace(t *testing.T) {
 	t.Run("another owner", func(t *testing.T) {
 		e, dir := requestEnv(t)
 		e.request(dir, requestLine)
-		// Not the server's uid (a directory Docker made as root's is this case).
 		e.extra = append(e.extra, "TASKTO_UPDATE_REQUEST_OWNER="+strconv.Itoa(os.Getuid()+2))
 		code, out := e.run("--requested")
 		if code != 0 || !strings.Contains(out, "isn't in place") || !e.exists("state/request/update-now") {
@@ -466,7 +435,6 @@ func TestUpdateRequestedNeedsTheDirectoryInPlace(t *testing.T) {
 	})
 }
 
-// --requested is a run of its own: it takes no version and combines with nothing.
 func TestUpdateRequestedTakesNoArguments(t *testing.T) {
 	e, dir := requestEnv(t)
 	e.request(dir, requestLine)
@@ -480,7 +448,6 @@ func TestUpdateRequestedTakesNoArguments(t *testing.T) {
 	}
 }
 
-// The status for the server says whether this host can take a request, when the directory is there.
 func TestUpdateStatusSaysTheHostCanTakeARequest(t *testing.T) {
 	e, _ := requestEnv(t)
 	if code, _ := e.run("--publish-status"); code != 0 {
@@ -492,9 +459,6 @@ func TestUpdateStatusSaysTheHostCanTakeARequest(t *testing.T) {
 	}
 }
 
-// The server may mount exactly the request directory, read-write, and nothing else of the
-// updater's; no other service may have it. An update whose new settings break that is refused
-// before anything starts.
 func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
 	refused := func(t *testing.T, e *updEnv, edit, want string) {
 		t.Helper()
@@ -561,7 +525,6 @@ func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
 	t.Run("another service has a volume that binds it", func(t *testing.T) {
 		e := newUpdEnv(t)
 		e.release(updNew, "", false, false)
-		// An external volume keeps the options it was made with, whatever the Compose file says.
 		e.write("fake/volume-options", "taskto_reqvol "+e.state+"/request\n")
 		refused(t, e, `.services.caddy.volumes += [{type: "volume", source: "reqvol", target: "/r", volume: {}}]
 			| .volumes.reqvol = {name: "taskto_reqvol", external: true}`, "other than the server")
@@ -580,8 +543,6 @@ func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
 	})
 }
 
-// The rendered Compose settings can differ from containers that already exist. The running
-// safety check must independently reject another service's access to the request directory.
 func TestUpdateSafetyChecksRunningRequestMounts(t *testing.T) {
 	for _, kind := range []string{"none", "bind", "read-only bind", "alias", "volume", "inspect failure", "volume inspect failure"} {
 		t.Run(kind, func(t *testing.T) {
@@ -594,7 +555,7 @@ func TestUpdateSafetyChecksRunningRequestMounts(t *testing.T) {
 			case "read-only bind":
 				mount["RW"] = false
 			case "alias":
-				_ = e.paths() // creates a symbolic link to the state directory
+				_ = e.paths()
 				mount["Source"] = filepath.Join(e.dir, "link-state", "request")
 			case "volume", "volume inspect failure":
 				mount = map[string]any{"Type": "volume", "Name": "taskto_requestvol", "Destination": "/request", "RW": true}
@@ -625,5 +586,4 @@ func TestUpdateSafetyChecksRunningRequestMounts(t *testing.T) {
 	}
 }
 
-// fmtReason is a status's reason, as text.
 func fmtReason(st map[string]any) string { return fmt.Sprint(st["reason"]) }

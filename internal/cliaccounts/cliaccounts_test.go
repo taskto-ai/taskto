@@ -40,8 +40,7 @@ type env struct {
 	worker *cliworker.Worker
 	layout cliworker.Layout
 	h      http.Handler
-	// proxy serves the shared accounts' proxy, at the address the CLIs are given.
-	proxy *httptest.Server
+	proxy  *httptest.Server
 }
 
 func newEnv(t *testing.T, mode Mode, tune func(*cliworker.Config)) *env {
@@ -59,7 +58,6 @@ func newEnv(t *testing.T, mode Mode, tune func(*cliworker.Config)) *env {
 	e := &env{t: t, db: sqlDB, layout: cliworker.Layout{Root: filepath.Join(dir, "cli")}}
 	var worker Worker
 	if mode != Off {
-		// The helper refuses to run a CLI as root; a test job that runs as root allows it.
 		cfg := cliworker.Config{Layout: e.layout, Bins: map[cliworker.CLI]string{}, Path: "/usr/bin:/bin", StopGrace: time.Second, UnsafePrivileged: os.Geteuid() == 0}
 		for name, path := range clitest.Install(t, t.TempDir()) {
 			cfg.Bins[cliworker.CLI(name)] = path
@@ -189,7 +187,6 @@ func (c *client) account(cli cliworker.CLI) Account {
 	return c.accountByID(string(cli))
 }
 
-// accountByID returns c's account with the handle id from the list.
 func (c *client) accountByID(id string) Account {
 	c.e.t.Helper()
 	for _, a := range c.list().Accounts {
@@ -224,13 +221,11 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// connect signs c in to cli through the API, as the user would.
 func (c *client) connect(cli cliworker.CLI) {
 	c.e.t.Helper()
 	c.connectAccount(string(cli))
 }
 
-// connectAccount signs c in to the account with the handle id ("claude-2") through the API.
 func (c *client) connectAccount(id string) {
 	c.e.t.Helper()
 	a, ok := parseHandle(id)
@@ -274,7 +269,6 @@ func TestSignedOut(t *testing.T) {
 	}
 }
 
-// Local mode has no OS boundary between users, so it works only while there is one user.
 func TestLocalModeOnlyWithOneUser(t *testing.T) {
 	e := newEnv(t, Local, nil)
 	owner, ws := e.setup()
@@ -313,13 +307,11 @@ func TestConnectEachCLI(t *testing.T) {
 			if a := owner.account(cli); a.Login == nil || a.Login.State != cliworker.LoginConnected {
 				t.Errorf("after: %+v", a)
 			}
-			// How it is signed in comes from the CLI, asked in the background.
 			eventually(t, "no auth method", func() bool { return owner.account(cli).AuthMethod != "" })
 		})
 	}
 }
 
-// A device-code login is recorded when it ends, even if no one asks about it again.
 func TestDeviceLoginRecordedWithoutPolling(t *testing.T) {
 	e := newEnv(t, Local, nil)
 	owner, _ := e.setup()
@@ -355,7 +347,6 @@ func TestLoginErrors(t *testing.T) {
 		rec := owner.do(http.MethodGet, base+"/codex/login", nil)
 		return rec.Code == http.StatusOK && decode[cliworker.LoginInfo](t, rec).State == cliworker.LoginCancelled
 	})
-	// A wrong code fails the login, and the account stays disconnected.
 	expect(t, owner.do(http.MethodPost, base+"/claude/login/code", map[string]string{"code": "wrong"}), http.StatusAccepted)
 	eventually(t, "the login didn't fail", func() bool {
 		rec := owner.do(http.MethodGet, base+"/claude/login", nil)
@@ -366,8 +357,6 @@ func TestLoginErrors(t *testing.T) {
 	}
 }
 
-// Isolation: one user's logins and accounts are theirs. Another user never sees them, can't
-// answer or cancel their login, and can't check, disconnect or sign in with their account.
 func TestAnotherUsersAccounts(t *testing.T) {
 	e := newEnv(t, LocalUnsafe, nil)
 	owner, ws := e.setup()
@@ -377,7 +366,6 @@ func TestAnotherUsersAccounts(t *testing.T) {
 	if info.State != cliworker.LoginWaiting {
 		t.Fatalf("login = %+v", info)
 	}
-	// The other user sees no login, and their attempts touch only their own (none).
 	expect(t, other.do(http.MethodGet, base+"/claude/login", nil), http.StatusNotFound)
 	expect(t, other.do(http.MethodPost, base+"/claude/login/code", map[string]string{"code": clitest.GoodCode}), http.StatusNotFound)
 	expect(t, other.do(http.MethodDelete, base+"/claude/login", nil), http.StatusNoContent)
@@ -393,7 +381,6 @@ func TestAnotherUsersAccounts(t *testing.T) {
 	expect(t, owner.do(http.MethodPost, base+"/claude/login/code", map[string]string{"code": clitest.GoodCode}), http.StatusAccepted)
 	eventually(t, "the owner's account didn't connect", func() bool { return owner.account(cliworker.Claude).State == Connected })
 
-	// The owner's login is not the other user's.
 	if a := other.account(cliworker.Claude); a.State != Disconnected {
 		t.Errorf("the other user's account = %+v", a)
 	}
@@ -402,7 +389,6 @@ func TestAnotherUsersAccounts(t *testing.T) {
 	if a := decode[Account](t, rec); a.State != Disconnected {
 		t.Errorf("the other user's check = %+v", a)
 	}
-	// Disconnecting is the other user's own account only.
 	expect(t, other.do(http.MethodDelete, base+"/claude", nil), http.StatusNoContent)
 	if a := owner.account(cliworker.Claude); a.State != Connected {
 		t.Errorf("the owner's account after the other user's disconnect: %+v", a)
@@ -415,12 +401,10 @@ func TestAnotherUsersAccounts(t *testing.T) {
 	}
 }
 
-// A check that finds the login gone marks the account for Reconnect; a new login connects it.
 func TestCheckFindsAnExpiredLogin(t *testing.T) {
 	e := newEnv(t, Local, nil)
 	owner, _ := e.setup()
 	owner.connect(cliworker.Claude)
-	// The login is revoked outside: the CLI is signed out.
 	if err := os.Remove(filepath.Join(e.layout.User(owner.id).Config(cliworker.Claude), ".credentials.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -429,14 +413,12 @@ func TestCheckFindsAnExpiredLogin(t *testing.T) {
 	if a := decode[Account](t, rec); a.State != Reconnect {
 		t.Fatalf("check = %+v", a)
 	}
-	// The finished login the worker still reports doesn't reconnect it by itself.
 	if a := owner.account(cliworker.Claude); a.State != Reconnect {
 		t.Fatalf("account = %+v", a)
 	}
 	owner.connect(cliworker.Claude)
 }
 
-// A turn that finds the login expired marks the account; the stale login doesn't undo it.
 func TestSetReconnectSticks(t *testing.T) {
 	e := newEnv(t, Local, nil)
 	owner, _ := e.setup()
@@ -469,7 +451,6 @@ func TestRecordLimitsMergesByWindow(t *testing.T) {
 	owner, _ := e.setup()
 	ctx := context.Background()
 	pct := func(v float64) *float64 { return &v }
-	// Not connected: nothing to keep them on.
 	if err := e.svc.recordLimits(ctx, e.accountID(owner.id, cliworker.Claude), []cliworker.Limit{{Window: "five_hour", UsedPercent: pct(10)}}); err != nil {
 		t.Fatal(err)
 	}
@@ -508,8 +489,6 @@ func TestParseMode(t *testing.T) {
 	}
 }
 
-// A disconnect wins over the login that connected the account: the finished login the worker
-// still reports never brings it back, whoever notices it after.
 func TestDisconnectIsNotUndoneByTheLogin(t *testing.T) {
 	e := newEnv(t, Local, nil)
 	owner, _ := e.setup()
@@ -528,14 +507,12 @@ func TestDisconnectIsNotUndoneByTheLogin(t *testing.T) {
 	}
 }
 
-// Disconnecting while a sign-in is in progress stops it first: it can't write its credentials
-// back after the files are gone.
 func TestDisconnectStopsALoginInProgress(t *testing.T) {
 	e := newEnv(t, Local, nil)
 	owner, _ := e.setup()
 	owner.startLogin(cliworker.Codex)
 	expect(t, owner.do(http.MethodDelete, base+"/codex", nil), http.StatusNoContent)
-	clitest.Approve(t, e.layout.User(owner.id).Config(cliworker.Codex)) // too late
+	clitest.Approve(t, e.layout.User(owner.id).Config(cliworker.Codex))
 	time.Sleep(200 * time.Millisecond)
 	if st, _ := e.worker.Status(context.Background(), owner.id, cliworker.Codex, ""); st.LoggedIn {
 		t.Fatal("the cancelled login signed in")
@@ -545,7 +522,6 @@ func TestDisconnectStopsALoginInProgress(t *testing.T) {
 	}
 }
 
-// accountID returns user's first account for cli, 0 if it has none.
 func (e *env) accountID(user int64, cli cliworker.CLI) int64 {
 	e.t.Helper()
 	var id int64

@@ -1,10 +1,3 @@
-/* The design system's entry, imported once by main.tsx before anything else that styles the page.
-
-   The cascade layers, in order: a later layer wins over an earlier one, whatever the specificity.
-   tokens (scales, and the old names), themes (the colour roles of the brand), base (elements),
-   components (one file per component), screens (what only one screen needs). A rule in no layer
-   wins over all of them: the screens' stylesheets, which styles.css lists, are in none until each
-   screen is rebuilt (docs/design.md, "Where styles live"). */
 @layer tokens, themes, base, components, screens;
 
 @import "./tokens.css";

@@ -14,16 +14,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// TestRealCLIs runs the installed Claude Code and Codex (and Grok Build, if installed) through
-// the worker against a model gateway that speaks Anthropic Messages and OpenAI Responses under
-// /v1, as the spike did (docs/spikes/cli-workers.md): no subscription is involved. It needs
-//
-//	TASKTO_CLI_IT_BASE_URL  the gateway's root (no /v1)
-//	TASKTO_CLI_IT_KEY_FILE  a file holding a low-value key for it
-//	TASKTO_CLI_IT_MODEL     a model that calls tools well there
-//
-// and is skipped without them. The key reaches the CLIs only through their environment,
-// from the file, and only in this test; a production worker never passes a key.
 func TestRealCLIs(t *testing.T) {
 	base, keyFile, model := os.Getenv("TASKTO_CLI_IT_BASE_URL"), os.Getenv("TASKTO_CLI_IT_KEY_FILE"), os.Getenv("TASKTO_CLI_IT_MODEL")
 	if base == "" || keyFile == "" || model == "" {
@@ -109,8 +99,6 @@ func TestRealCLIs(t *testing.T) {
 		})
 	}
 
-	// Asking (docs/agent-safety.md): the CLI's hook asks the worker before the command runs,
-	// and the answer decides whether it does.
 	for cli := range bins {
 		for _, allow := range []bool{true, false} {
 			name := fmt.Sprintf("%s-ask-%t", cli, allow)
@@ -121,7 +109,6 @@ func TestRealCLIs(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				// Answer every question the turn asks, the same way, as the owner would.
 				asked := make(chan cliworker.PermissionRequest, 16)
 				stop := make(chan struct{})
 				defer close(stop)
@@ -138,8 +125,6 @@ func TestRealCLIs(t *testing.T) {
 								seen[q.ID] = true
 								asked <- q
 								_ = w.Answer(1, 7, q.ID, allow)
-								// A model told no may try again and again: a minute after the first
-								// denial, the owner stops the turn.
 								if !allow && len(seen) == 1 {
 									time.AfterFunc(time.Minute, func() { w.Stop(s.ID) })
 								}
@@ -168,7 +153,6 @@ func TestRealCLIs(t *testing.T) {
 		}
 	}
 
-	// A refused key looks like an expired login, and is reported at once.
 	bad := newWorker("invalid-key-for-the-test")
 	for cli := range bins {
 		t.Run(string(cli)+"-refused", func(t *testing.T) {
@@ -177,7 +161,6 @@ func TestRealCLIs(t *testing.T) {
 			if done := last(events); done.Status != cliworker.StatusLoginRequired {
 				t.Fatalf("turn with a refused key: %+v", done)
 			}
-			// Refused by the gateway, not by something else that looks like it.
 			if e, _ := find(events, cliworker.EventLoginRequired); !strings.Contains(e.Text, "401") && !strings.Contains(e.Text, "authentication_failed") {
 				t.Errorf("login_required for another reason: %+v", events)
 			}

@@ -7,17 +7,6 @@ import (
 	"time"
 )
 
-// What a payer does on Stripe's page, and what follows. The methods move a session through its
-// states and make the events Stripe sends for one payment, in the order it sends them. Stripe
-// sends several events for one card payment: a payment_intent.created, a charge.succeeded, a
-// payment_intent.succeeded, a charge.updated and the checkout.session.completed (Stripe doesn't
-// promise their order). A test gives the integration all of them and checks that the payment is
-// applied once.
-//
-// The intent, the charge and the refund are the minimum of their objects: what a reader of the
-// events would use. Every method returns the events it made, which a Sender delivers.
-
-// Payer-side errors.
 var (
 	ErrNoSuchSession = errors.New("testprovider: no such checkout session")
 	ErrNotOpen       = errors.New("testprovider: the session isn't open")
@@ -27,35 +16,24 @@ var (
 	ErrLinkInactive  = errors.New("testprovider: the payment link isn't active")
 )
 
-// DefaultPayer is the person on Stripe's page unless a fake is given another (WithPayer,
-// SetPayer): their details end up on the session. They are personal data the integration must
-// never keep. Each call returns a value of its own, and each fake keeps its own copy, so a test
-// that changes one fake's payer changes no other's.
 func DefaultPayer() CustomerDetails {
 	return CustomerDetails{Email: "payer@example.test", Name: "A. Payer"}
 }
 
-// WithPayer sets the details of the payer on this fake's sessions.
 func WithPayer(d CustomerDetails) Option { return func(s *Stripe) { s.payer = d } }
 
-// Payer returns the details the fake's payer gives.
 func (s *Stripe) Payer() CustomerDetails {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.payer
 }
 
-// SetPayer changes the payer for the sessions paid from now on, on this fake only.
 func (s *Stripe) SetPayer(d CustomerDetails) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.payer = d
 }
 
-// openSession finds an open session, expiring those whose time has come. It returns the time it
-// read from the clock, which the caller uses for what it makes: the decision that the session is
-// open and the time of what follows are of one reading, so a clock moving meanwhile can't put a
-// payment after its session's expiry.
 func (s *Stripe) openSession(id string) (*session, time.Time, error) {
 	ss, ok := s.sessions[id]
 	if !ok {
@@ -98,7 +76,6 @@ func nullable(v string) any {
 	return v
 }
 
-// begin gives the session its intent when a payment is attempted.
 func (s *Stripe) begin(ss *session, at time.Time) []*Event {
 	if ss.piID != "" {
 		return nil
@@ -117,8 +94,6 @@ func values(evs []*Event) []Event {
 	return out
 }
 
-// Pay is the payer paying with a card: the session completes and is paid at once. The events are
-// those of a card payment, in the order a payer's success makes them.
 func (s *Stripe) Pay(sessionID string) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,7 +104,6 @@ func (s *Stripe) Pay(sessionID string) ([]Event, error) {
 	return values(s.payLocked(ss, at)), nil
 }
 
-// payLocked pays an open session by card at time at, and returns the events. The caller holds s.mu.
 func (s *Stripe) payLocked(ss *session, at time.Time) []*Event {
 	evs := s.begin(ss, at)
 	ss.chargeID = "ch_" + randomID(24)
@@ -145,10 +119,6 @@ func (s *Stripe) payLocked(ss *session, at time.Time) []*Event {
 	)
 }
 
-// PayLink is a payer paying through a payment link with a card: a Checkout Session that carries
-// the link's id is made and completes at once, with the events of a card payment. A link that
-// isn't active, or has taken its limit of completed sessions (restrictions[completed_sessions]),
-// takes no payment. The session that reaches the limit deactivates the link.
 func (s *Stripe) PayLink(linkID string) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -188,8 +158,6 @@ func (s *Stripe) PayLink(linkID string) ([]Event, error) {
 	return values(evs), nil
 }
 
-// PayDelayed is the payer choosing a payment method that settles later (a bank debit): the
-// session completes but is still unpaid. SettleDelayed ends it.
 func (s *Stripe) PayDelayed(sessionID string) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -209,7 +177,6 @@ func (s *Stripe) PayDelayed(sessionID string) ([]Event, error) {
 	return values(evs), nil
 }
 
-// SettleDelayed ends a delayed payment: it succeeds (the session becomes paid) or fails.
 func (s *Stripe) SettleDelayed(sessionID string, succeeded bool) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -220,7 +187,7 @@ func (s *Stripe) SettleDelayed(sessionID string, succeeded bool) ([]Event, error
 	if !ss.delayed {
 		return nil, fmt.Errorf("%w: %s isn't waiting for a delayed payment", ErrNotOpen, sessionID)
 	}
-	ss.delayed = false // both outcomes end the wait; a failed payment stays complete and unpaid
+	ss.delayed = false
 	at := s.clock.Now()
 	if !succeeded {
 		return values([]*Event{
@@ -238,8 +205,6 @@ func (s *Stripe) SettleDelayed(sessionID string, succeeded bool) ([]Event, error
 	}), nil
 }
 
-// Decline is a payer's attempt that the card refuses: the session stays open (the payer may try
-// another card) and Stripe sends the failure events.
 func (s *Stripe) Decline(sessionID string) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -249,7 +214,7 @@ func (s *Stripe) Decline(sessionID string) ([]Event, error) {
 	}
 	evs := s.begin(ss, at)
 	ss.attempts++
-	ss.chargeID = "ch_" + randomID(24) // the intent's latest charge, in the failure events too
+	ss.chargeID = "ch_" + randomID(24)
 	failed := s.chargeOf(ss, "failed")
 	failed["failure_code"] = "card_declined"
 	evs = append(evs,
@@ -259,8 +224,6 @@ func (s *Stripe) Decline(sessionID string) ([]Event, error) {
 	return values(evs), nil
 }
 
-// Expire expires an open session now, as Stripe does when its time comes (the clock does that
-// too) and sends checkout.session.expired.
 func (s *Stripe) Expire(sessionID string) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -273,8 +236,6 @@ func (s *Stripe) Expire(sessionID string) ([]Event, error) {
 	return values(s.events[before:]), nil
 }
 
-// Refund refunds amount (all that is left when 0) of a paid session: Stripe sends refund.created
-// and charge.refunded, and updates the charge.
 func (s *Stripe) Refund(sessionID string, amount int64) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -305,7 +266,6 @@ func (s *Stripe) Refund(sessionID string, amount int64) ([]Event, error) {
 	}), nil
 }
 
-// Session returns the session as the API would show it now.
 func (s *Stripe) Session(id string) (Session, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -317,7 +277,6 @@ func (s *Stripe) Session(id string) (Session, bool) {
 	return ss.snapshot(), true
 }
 
-// Sessions returns every session, oldest first.
 func (s *Stripe) Sessions() []Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()

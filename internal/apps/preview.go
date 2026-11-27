@@ -11,22 +11,10 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// The draft's preview: the app's draft drawn and used on sample rows that live in the caller's
-// browser, never in the database. People who may design or publish an app try its draft here
-// before they publish it, and what they do changes nothing real: no row is read from or written
-// to the app's data, nothing is recorded in a record's history and nothing else an action could
-// do happens. The preview holds no state: the caller sends the rows as they are, and the answer
-// has them as the action leaves them. Service.preview doesn't take a transaction or the write
-// lock, and the preview tests check, against the database, that nothing is written.
-
-// previewMaxRows bounds the sample rows a preview holds, so a request is a reasonable size.
 const previewMaxRows = 100
 
-// previewMaxBody bounds a preview's request, which carries every sample row: as many as an app may
-// hold in all, with room for the JSON around them and for the escaping of their text.
 const previewMaxBody = 2*MaxDataSize + 64<<10
 
-// previewFull is a preview at previewMaxRows. It says the preview's limit, not the live app's.
 func previewFull() error {
 	return &fullError{
 		msg:  fmt.Sprintf("a preview holds at most %d rows", previewMaxRows),
@@ -34,36 +22,25 @@ func previewFull() error {
 	}
 }
 
-// sampleRowCount is how many sample rows a preview starts with.
 const sampleRowCount = 3
 
-// PreviewRow is one sample row of a preview: as a stored row, but simulated.
 type PreviewRow struct {
 	ID       int64          `json:"id"`
 	Revision int64          `json:"revision"`
 	Data     map[string]any `json:"data"`
 }
 
-// PreviewRequest is a step of a preview. Without Rows it starts one, on sample rows made from the
-// draft's collection; with them it goes on from where the caller is. Action, if any, is run on the
-// rows as the draft defines it.
 type PreviewRequest struct {
 	Action *ClientAction `json:"action,omitempty"`
 	Rows   []PreviewRow  `json:"rows"`
 }
 
-// PreviewReply is the messages that draw or update the screen, and the sample rows as they are
-// now, to send back with the next step.
 type PreviewReply struct {
 	Messages []Message    `json:"messages"`
 	Rows     []PreviewRow `json:"rows"`
-	// Effects are what the action would have set going on boards and documents, simulated on
-	// the same sample rows (nothing is made); left out when there are none.
-	Effects []EffectView `json:"effects,omitempty"`
+	Effects  []EffectView `json:"effects,omitempty"`
 }
 
-// SampleRows makes the sample rows of a collection: a few rows of plausible values of every field,
-// the same on every call. A row the collection's rules refuse is left out.
 func SampleRows(c Collection) []Row {
 	c = c.forPreview()
 	var rows []Row
@@ -81,7 +58,6 @@ func SampleRows(c Collection) []Row {
 	return rows
 }
 
-// sampleValue is the n-th sample value of a field, within its limits.
 func sampleValue(f Field, n int) (any, bool) {
 	switch f.Type {
 	case TypeString:
@@ -111,20 +87,15 @@ func sampleValue(f Field, n int) (any, bool) {
 		}
 		return f.Options[(n-1)%len(f.Options)], true
 	case TypeLocation:
-		// A place and a time that are plain sample data, not a person's: the same on every call.
 		return map[string]any{"lat": 38.7 + float64(n)/100, "lon": -9.1, "accuracy_m": 10.0,
 			"captured_at": fmt.Sprintf("2026-01-%02dT09:30:00.000Z", 9+n), "source": SourceDevice}, true
 	case TypeBarcode:
 		return sampleCode(f, n), true
 	}
-	// A signature (like a photo) has no sample: a preview never holds a picture.
 	return nil, false
 }
 
-// sampleCode is the n-th sample text of a barcode field: a number with the right check digit for a
-// format the server checks, text otherwise, within the field's length.
 func sampleCode(f Field, n int) string {
-	// digits is a number of the length, ending in its check digit if the format has one.
 	digits := func(length int, check bool) string {
 		if !check {
 			return fmt.Sprintf("%0*d", length, 400638+n)
@@ -155,8 +126,6 @@ func sampleCode(f Field, n int) string {
 	return s
 }
 
-// forPreview is the collection as a preview holds it: the same, but a field that holds a picture is never
-// required, since a preview holds none (it would otherwise refuse every row and every action).
 func (c Collection) forPreview() Collection {
 	out := Collection{Fields: slices.Clone(c.Fields)}
 	for i, f := range out.Fields {
@@ -167,16 +136,11 @@ func (c Collection) forPreview() Collection {
 	return out
 }
 
-// previewDefinition is def as a preview plans its actions: with the collection a preview holds
-// (forPreview), so that an action whose record would carry a photo or a signature isn't refused
-// for the lack of one.
 func previewDefinition(def Definition) Definition {
 	def.Collection = def.Collection.forPreview()
 	return def
 }
 
-// preview draws the app's draft, or runs one of its actions, on sample rows. It is for those who
-// may design or publish the app (the draft is theirs to see), and reads nothing of the app's data.
 func (s *Service) preview(ctx context.Context, sp access.Space, actor Actor, appID int64, req PreviewRequest) (PreviewReply, error) {
 	if _, err := s.reviewer(ctx, sp, actor, appID); err != nil {
 		return PreviewReply{}, err
@@ -223,11 +187,7 @@ func (s *Service) preview(ctx context.Context, sp access.Space, actor Actor, app
 	return reply, nil
 }
 
-// simulate applies change to rows as the live app would to its own, in memory: the rows it
-// returns are new, the ones it was given are left as they were.
 func simulate(def Definition, rows []Row, ch Change) ([]Row, error) {
-	// A preview has no photos: an id in an action names an attachment of a live app, which a
-	// preview never reads or holds.
 	ch.Data = withoutPhotos(def, ch.Data)
 	switch ch.Kind {
 	case ActionInsert:
@@ -268,8 +228,6 @@ func simulate(def Definition, rows []Row, ch Change) ([]Row, error) {
 	return nil, invalidf("unknown kind of action %q", ch.Kind)
 }
 
-// withoutPhotos is data without its attachment and signature fields' values: a preview never holds an attachment id,
-// so it can't draw, return or tell whether a real attachment exists. The sample rows have none.
 func withoutPhotos(def Definition, data map[string]any) map[string]any {
 	out := make(map[string]any, len(data))
 	for k, v := range data {
@@ -290,9 +248,6 @@ func findRow(rows []Row, id int64) (Row, bool) {
 	return Row{}, false
 }
 
-// previewRows checks the rows a caller sends back against the draft: not too many, each with an
-// ID of its own, and each fitting the collection. A row of a draft that has changed since (a field
-// it requires and the row lacks) is refused, and the caller starts the preview again.
 func previewRows(def Definition, given []PreviewRow) ([]Row, error) {
 	if len(given) > previewMaxRows {
 		return nil, previewFull()

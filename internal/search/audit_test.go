@@ -23,7 +23,6 @@ func TestAuditEmbeddingsAndConsent(t *testing.T) {
 	account := w.addAccount("embed")
 	settings := fmt.Sprintf("/api/workspaces/%d/search/settings", w.ws)
 
-	// Turning embeddings on names the account and the model.
 	expect(t, w.owner.do(http.MethodPut, settings, map[string]any{"embeddings": map[string]any{"account": account, "model": fakeModel}}), http.StatusOK)
 	set := w.events(w.ws, audit.SearchEmbeddingsChanged)
 	if len(set) != 1 {
@@ -34,7 +33,6 @@ func TestAuditEmbeddingsAndConsent(t *testing.T) {
 		t.Fatalf("set = %+v", s)
 	}
 
-	// Consenting for a space, as its editor, then withdrawing.
 	expect(t, w.owner.do(http.MethodPut, embeddingURL(w.team), map[string]bool{"enabled": true}), http.StatusOK)
 	consent := w.events(w.ws, audit.SearchConsentChanged)
 	if len(consent) != 1 || *consent[0].ActorID != w.owner.id || *consent[0].TargetID != w.team.ID ||
@@ -46,7 +44,6 @@ func TestAuditEmbeddingsAndConsent(t *testing.T) {
 		t.Fatalf("consent = %+v", got)
 	}
 
-	// Turning embeddings off.
 	expect(t, w.owner.do(http.MethodPut, settings, map[string]any{}), http.StatusOK)
 	if got := w.events(w.ws, audit.SearchEmbeddingsChanged); len(got) != 2 || got[0].Details["enabled"] != false {
 		t.Fatalf("embeddings = %+v", got)
@@ -60,8 +57,6 @@ func TestAuditSearchRefusalsRecordNothing(t *testing.T) {
 	settings := fmt.Sprintf("/api/workspaces/%d/search/settings", w.ws)
 	n := len(w.events(0, ""))
 
-	// Not an admin; not an editor; not a member of the space; no embeddings model to consent to;
-	// an account that isn't the workspace's.
 	expect(t, w.alice.do(http.MethodPut, settings, map[string]any{"embeddings": map[string]any{"account": account, "model": fakeModel}}), http.StatusForbidden)
 	expect(t, w.bob.do(http.MethodPut, embeddingURL(w.team), map[string]bool{"enabled": true}), http.StatusForbidden)
 	expect(t, w.mallory.do(http.MethodPut, embeddingURL(w.team), map[string]bool{"enabled": true}), http.StatusNotFound)
@@ -93,7 +88,6 @@ func TestAuditRemovingTheEmbeddingsAccountRecordsWhatGoesWithIt(t *testing.T) {
 		*consent[0].TargetID != w.team.ID {
 		t.Fatalf("search_consent_changed = %+v, want the removal of the team space's consent", consent)
 	}
-	// What was recorded is what is gone.
 	var left int
 	if err := w.e.idx.db.QueryRow(`SELECT (SELECT count(*) FROM search_settings) + (SELECT count(*) FROM search_embedding_consent)`).Scan(&left); err != nil || left != 0 {
 		t.Fatalf("%d settings and consents left, %v", left, err)
