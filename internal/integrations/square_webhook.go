@@ -42,16 +42,21 @@ func (square) VerifyWebhook(h http.Header, body []byte, secrets WebhookSecrets, 
 	if err != nil || len(got) != sha256.Size {
 		return errMalformedHeader
 	}
-	match := 0
+	// A secret matches only over an address of its own: one with none (saved while the server had no
+	// public URL) verifies nothing, whatever the other secret's address is.
+	match, addressed := 0, 0
 	for slot, key := range keys {
-		if hmac.Equal(squareMAC(key, urls[slot], body), got) && slot < real {
+		if slot < real && urls[slot] != "" {
+			addressed = 1
+		}
+		if hmac.Equal(squareMAC(key, urls[slot], body), got) && slot < real && urls[slot] != "" {
 			match = 1 // no early exit
 		}
 	}
 	switch {
 	case real == 0:
 		return errNoSecret
-	case secrets.URL == "":
+	case addressed == 0:
 		return errNoURL
 	case match == 0 || len(body) == 0:
 		return errBadSignature

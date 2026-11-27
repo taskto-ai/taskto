@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -572,6 +573,33 @@ func (e *env) deliverSquare(path, signedOver, host string, body []byte) int {
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
 	return rec.Code
+}
+
+// Each secret verifies over its own address only, whichever of the two is empty: the current secret
+// saved while the server had no public URL has none, and the previous one still verifies over the
+// address it was saved for; a secret with no address verifies nothing.
+func TestSquareASecretWithNoAddressVerifiesNothing(t *testing.T) {
+	const oldURL = "https://old.example.test/hooks/abc"
+	at := testprovider.DefaultStart
+	oldKey, newKey := Secret(testprovider.SquareSignatureKey), Secret(testprovider.SquareOtherSignatureKey)
+	body := testprovider.NewSquareEvent("payment.updated", "payment", "PAY1", map[string]any{"payment": map[string]any{"id": "PAY1"}}, at).Body()
+	signed := func(key Secret, over string) http.Header {
+		return http.Header{SquareSignatureHeader: {testprovider.SignSquare(key.Reveal(), over, body)}}
+	}
+	noCurrentAddress := WebhookSecrets{Current: newKey, Previous: oldKey, URL: "", PreviousURL: oldURL}
+	if err := (square{}).VerifyWebhook(signed(oldKey, oldURL), body, noCurrentAddress, at); err != nil {
+		t.Fatalf("the previous key over its own address, with no current address: %v", err)
+	}
+	if err := (square{}).VerifyWebhook(signed(newKey, ""), body, noCurrentAddress, at); err == nil {
+		t.Fatal("the current key with no address of its own verified")
+	}
+	if err := (square{}).VerifyWebhook(signed(newKey, oldURL), body, noCurrentAddress, at); err == nil {
+		t.Fatal("the current key verified over the previous key's address")
+	}
+	none := WebhookSecrets{Current: newKey, Previous: oldKey}
+	if err := (square{}).VerifyWebhook(signed(newKey, ""), body, none, at); !errors.Is(err, errNoURL) {
+		t.Fatalf("no address at all: %v", err)
+	}
 }
 
 // deliverSquareAs posts a Square delivery signed with secret over signedOver, and returns the answer.
