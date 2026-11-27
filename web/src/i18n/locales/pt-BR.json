@@ -1222,6 +1222,7 @@
     "integration_link_lookup_pending": "O provedor de pagamentos não informou se criou este link de pagamento. O servidor continua procurando por ele, e não cria outro, por algumas horas.",
     "integration_condition_changed": "O registro foi alterado e não atende mais à condição desta ação, então nenhum link de pagamento foi criado. Ninguém precisa aprovar nada: desfaça a alteração ou execute a ação quando o registro se qualificar.",
     "integration_nothing_to_confirm": "Este pagamento não está aguardando uma decisão sobre um resultado desconhecido.",
+    "integration_link_attempt_changed": "Este link de pagamento foi tentado de novo desde que esta lista foi exibida, então o que você verificou no provedor de pagamentos pode não ser tudo o que existe. Verifique de novo a conta do provedor antes de confirmar.",
     "integration_link_not_confirmable": "Um link deste pagamento já foi visto no provedor de pagamentos, ou uma tentativa anterior dele já foi resolvida, então confirmar que nenhum existe não pode liberar um novo: um segundo link poderia ser pago duas vezes. Verifique a conta do provedor e concilie este pagamento lá.",
     "app_definition_version": "Este app usa um formato de definição (versão {version}) que o servidor não lê; ele lê até a {supported}.",
     "app_icon_path": "O ícone “{component}” não é um caminho SVG: ele deve começar com M ou m e só deve ter comandos de caminho, números, vírgulas e espaços, com no máximo {max} caracteres.",

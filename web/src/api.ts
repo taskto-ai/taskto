@@ -905,6 +905,10 @@ export type PaymentLinkOutcome = {
   params?: Params
   // The provider's id of an object of the waiting key that the server saw and couldn't resolve, "" when none.
   object_id: string
+  // The attempt that waits (from 0) and how many calls went out under it: a confirmation names both, and
+  // is refused if either changed since.
+  attempt_seq: number
+  attempt_sends: number
   // Every attempt at this payment, oldest first: what an admin looks for at the provider.
   attempts: PaymentLinkAttempt[]
 }

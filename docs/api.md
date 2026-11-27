@@ -230,6 +230,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_condition_changed` | — | A failed `create_payment_link` entry: the record was changed so that it no longer meets the `when` condition of the action's link. Nothing was created and nobody needs to approve anything; make the change again when the record qualifies. |
 | `app_effect_space_changed` | — | A failed `create_payment_link` entry: the app moved to another space after the payment was queued (a move clears the app's approvals, so what was queued was never approved there). Start the payment again. |
 | `integration_nothing_to_confirm` | 409 | The payment link entry isn't one whose unknown outcome ended in `integration_outcome_unknown` (or it was confirmed already). |
+| `integration_link_attempt_changed` | 409 | An admin's confirmation that no payment link exists, refused because it names another attempt than the one that waits now, or another call went out under that attempt since the list showed it (the entry was retried): what the admin checked at the provider may not be all there is. They read the list again and check the provider again. |
 | `integration_link_not_confirmable` | 409 | An admin's confirmation that no payment link exists, refused because the server itself saw something of the reference at the provider (a call's answer named an object, or a lookup found one carrying the reference's token, whose state could not be read) or one of the reference's keys was already resolved (an earlier key's object was seen expired, or an earlier confirmation): a new key could make a second payable link. A person reconciles the payment in the provider's account. |
 | `integration_link_already_paid` | — | A failed `create_payment_link` entry whose earlier try's payment link was found paid (a completed Checkout Session), or no longer able to take payment for a reason that doesn't say it wasn't paid (a Payment Link deactivated or at its limit): nothing is made. An admin reconciles that payment in the provider's account before running the action again. |
 | `integration_event_unavailable` | — | A failed payment event: the app's approval was withdrawn, the integration is switched off or not allowed in the space, or the live release has no such slot. |
@@ -4496,6 +4497,8 @@ provider and none of its keys was resolved (otherwise a confirmation is refused,
 resolve (an answer named it, or a lookup found it carrying the key's token but couldn't read its amount,
 or found it asking another amount or currency), `""` when none: `can_confirm` is then false, and an
 admin checks that object at the provider; a retry of the entry adopts it once a lookup can check it.
+`attempt_seq` is the number of the attempt that waits (the reference's current key, from 0) and
+`attempt_sends` how many calls went out under it so far: a confirmation names both.
 When `waiting` and `can_confirm` are both false the lookup stopped, and `code` is the code the entry
 failed with (for example `integration_account_changed`), which clients say in words; it is left out
 otherwise. `params` are the values that code's message names, as the entry failed with them (for
@@ -4514,7 +4517,8 @@ account. `403` for a member, `404` for another workspace's integration.
 
 `POST /api/workspaces/{workspace}/integrations/{integration}/payment-links/{effect}/confirm-no-link`
 
-Admin only, body `{}`. For a payment link whose entry failed with `integration_outcome_unknown`: the
+Admin only, body `{"attempt_seq": 0, "attempt_sends": 3}`: the attempt the admin checked, as the
+list above showed it (both required). For a payment link whose entry failed with `integration_outcome_unknown`: the
 admin checked the provider's account for an object of the reference (a Payment Link's
 `metadata.taskto_ref`, a Checkout Session's `client_reference_id`, holding any of the reference's
 tokens) and found none. The key whose outcome was unknown is recorded as abandoned (its record stays),
@@ -4523,7 +4527,10 @@ the user who acted with their access then. Recorded in the audit log
 (`integration_new_link_allowed`). `204`. `403` for a member; `404` for an entry that isn't of this
 integration, or is in a space the admin doesn't manage; `409 integration_nothing_to_confirm` when the
 entry isn't waiting for this decision (not failed with that code, the link was found, or it was
-confirmed already: a second request never allows a second key); `409 integration_link_not_confirmable`
+confirmed already: a second request never allows a second key); `409 integration_link_attempt_changed`
+when the attempt named is not the one that waits now, or another call went out under it since it was
+listed (the entry was retried): what the admin checked at the provider is not all that may be there,
+so they read the list again and check again; `409 integration_link_not_confirmable`
 when the server saw something of the reference that contradicts "none exists" (any of its keys has an
 object on record: a call's answer named one, or a lookup found one by the key's token, and its state
 could not be read) or any of its keys was already resolved (an earlier key whose object was seen

@@ -1188,7 +1188,7 @@ func TestAPaymentForARefWhoseOutcomeWasUnknownIsAppliedAndNeverDropped(t *testin
 	if list := decode[PaymentLinkOutcomes](t, rec); len(list.PaymentLinks) != 0 {
 		t.Fatalf("list = %+v", list)
 	}
-	rec = p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{})
+	rec = p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), p.checkedBody(e.id))
 	expect(t, rec, http.StatusConflict)
 	if got := decode[struct {
 		Code string `json:"code"`
@@ -1232,7 +1232,7 @@ func TestAPaymentThatNamesNoObjectForAnUnknownRefIsStillApplied(t *testing.T) {
 	if n := len(p.fake.RequestsTo(http.MethodPost, linkShapes["a checkout session"].path)); n != calls {
 		t.Fatalf("%d calls that make an object, want the %d made before the payment", n, calls)
 	}
-	rec := p.owner.do(http.MethodPost, p.confirmPath(0, fmt.Sprintf("%d/confirm-no-link", p.entries()[0].id)), map[string]any{})
+	rec := p.owner.do(http.MethodPost, p.confirmPath(0, fmt.Sprintf("%d/confirm-no-link", p.entries()[0].id)), p.checkedBody(p.entries()[0].id))
 	expect(t, rec, http.StatusConflict)
 	// A refund of all of it then applies through the payment the ref learned.
 	p.put(Event{Kind: EventPaymentRefunded, PaymentID: payment, AmountMinor: 1000, Currency: "EUR"})
@@ -1398,7 +1398,7 @@ func TestAPaymentThroughAnEarlierKeyStopsTheConfirmationOfTheNext(t *testing.T) 
 	}
 	p.exec(`UPDATE app_effects SET state = 'failed', error_code = ? WHERE id = ?`, string(apierr.CodeIntegrationOutcomeUnknown), req.EffectID)
 	spaces := map[int64]bool{p.space.ID: true}
-	if err := p.svc.ConfirmNoPaymentLink(ctx, p.ws, p.owner.id, p.in.ID, req.EffectID, spaces); err != nil {
+	if err := p.svc.ConfirmNoPaymentLink(ctx, p.ws, p.owner.id, p.in.ID, req.EffectID, p.checkedAttempt(req.EffectID), spaces); err != nil {
 		t.Fatal(err)
 	}
 	// Key 1's call gets a 5xx too: the ref waits on its outcome.
@@ -1439,7 +1439,7 @@ func TestAPaymentThroughAnEarlierKeyStopsTheConfirmationOfTheNext(t *testing.T) 
 	if list := decode[PaymentLinkOutcomes](t, rec); len(list.PaymentLinks) != 0 {
 		t.Fatalf("list = %+v", list.PaymentLinks)
 	}
-	rec = p.owner.do(http.MethodPost, p.confirmPath(req.EffectID, fmt.Sprintf("%d/confirm-no-link", req.EffectID)), map[string]any{})
+	rec = p.owner.do(http.MethodPost, p.confirmPath(req.EffectID, fmt.Sprintf("%d/confirm-no-link", req.EffectID)), p.checkedBody(req.EffectID))
 	expect(t, rec, http.StatusConflict)
 	if got := decode[struct {
 		Code string `json:"code"`

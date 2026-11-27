@@ -430,7 +430,11 @@ write.
       [api.md](api.md#confirm-that-no-payment-link-exists)), the only way to a new key for such a
       reference. The key is recorded as abandoned (its record stays), **exactly one** new key is
       allowed, the entry is queued again as it was (the person who acted, with the access they have
-      then), and the confirmation is in the audit log (`integration_new_link_allowed`). It is refused
+      then), and the confirmation is in the audit log (`integration_new_link_allowed`). It names the
+      attempt the admin checked (`attempt_seq` and `attempt_sends`, as the list showed them), and is
+      refused (`integration_link_attempt_changed`) if the reference is on another key by then or another
+      call went out under the key since (the entry was retried): what the admin checked is not all that
+      may be at the provider. It is refused
       (`integration_link_not_confirmable`), in the transaction that would allow the new key, when the
       server saw anything of the reference that contradicts "none exists" (a key with an object on
       record: an answer named one, or a lookup found one carrying its token, whether or not it could check

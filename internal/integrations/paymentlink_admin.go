@@ -62,6 +62,12 @@ type PaymentLinkOutcome struct {
 	// Params are the values the code's message names (for integration_amount_above_max, the ceiling and
 	// its currency), as the entry failed with them; left out when there are none.
 	Params apierr.Params `json:"params,omitempty"`
+	// AttemptSeq is the number of the attempt that waits for a decision (the ref's current key), and
+	// AttemptSends how many calls went out under it so far. A confirmation names both, so it says "no
+	// link exists" of exactly what the admin checked: one made after another call went out under the key,
+	// or after the ref moved to another key, is refused (integration_link_attempt_changed).
+	AttemptSeq   int `json:"attempt_seq"`
+	AttemptSends int `json:"attempt_sends"`
 	// Attempts is every try at this payment (every idempotency key of the reference, oldest first, not
 	// only the current one): what an admin searches the provider's account for. Never anything sealed.
 	Attempts []PaymentLinkAttempt `json:"attempts" apitypes:"nonnull"`
@@ -118,7 +124,7 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 	rows, err := s.store.db.QueryContext(ctx, `
 		SELECT r.id, r.success_url, r.account_id, r.account_mode, r.effect_id, r.app_id, a.space_id, r.record_id, r.amount_minor, r.currency, coalesce(k.unknown_since, k.created_at),
 			coalesce(e.state, ''), coalesce(e.error_code, ''), e.error_params, `+confirmable+`,
-			coalesce(k.object_id, '')
+			coalesce(k.object_id, ''), k.seq, k.sends
 		FROM integration_refs r
 		JOIN integration_ref_attempts k ON k.ref_id = r.id AND k.seq = r.key_seq
 		JOIN apps a ON a.id = r.app_id
@@ -139,7 +145,7 @@ func (s *Service) unresolved(ctx context.Context, workspace, integration int64, 
 		var state, code string
 		var params sql.NullString
 		var clean bool
-		if err := rows.Scan(&v.id, &v.successURL, &v.account, &v.mode, &o.EffectID, &o.AppID, &o.SpaceID, &o.RecordID, &minor, &o.Currency, &o.Since, &state, &code, &params, &clean, &o.ObjectID); err != nil {
+		if err := rows.Scan(&v.id, &v.successURL, &v.account, &v.mode, &o.EffectID, &o.AppID, &o.SpaceID, &o.RecordID, &minor, &o.Currency, &o.Since, &state, &code, &params, &clean, &o.ObjectID, &o.AttemptSeq, &o.AttemptSends); err != nil {
 			return nil, err
 		}
 		if !spaces[o.SpaceID] || len(out) >= maxOutcomesListed {
@@ -232,7 +238,12 @@ func (s *Service) handleUnresolved(w http.ResponseWriter, r *http.Request) {
 // log records it. It is the only way to a new key for a ref whose key's outcome is unknown, and it is
 // refused (integration_link_not_confirmable) for a ref any key of which has an object on record or an
 // outcome, checked in this transaction, which holds the write lock from its start.
-func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, integration, effect int64, spaces map[int64]bool) error {
+//
+// It is bound to the attempt the admin checked (checked: the attempt_seq and attempt_sends the list
+// showed them): if the ref is on another key by now, or another call went out under the same key since
+// (the entry was retried), what the admin looked for at the provider is not all that may be there, and
+// the confirmation is refused (integration_link_attempt_changed) for them to check again.
+func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, integration, effect int64, checked CheckedAttempt, spaces map[int64]bool) error {
 	return s.store.write(ctx, func(tx *sql.Tx) error {
 		rec, err := s.store.get(ctx, tx, workspace, integration)
 		if err != nil {
@@ -241,14 +252,16 @@ func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, int
 		var refID, keySeq, appID, spaceID int64
 		var object, refState, state, code string
 		var unknown, clean bool
+		var sends int
 		err = tx.QueryRowContext(ctx, `
 			SELECT r.id, r.key_seq, r.app_id, coalesce(r.provider_object_id, ''), r.state, a.space_id,
-				coalesce(k.outcome IS NULL AND k.sends > k.clean_sends, 0), coalesce(e.state, ''), coalesce(e.error_code, ''), `+confirmable+`
+				coalesce(k.outcome IS NULL AND k.sends > k.clean_sends, 0), coalesce(e.state, ''), coalesce(e.error_code, ''), `+confirmable+`,
+				coalesce(k.sends, 0)
 			FROM integration_refs r
 			JOIN apps a ON a.id = r.app_id
 			LEFT JOIN integration_ref_attempts k ON k.ref_id = r.id AND k.seq = r.key_seq
 			LEFT JOIN app_effects e ON e.id = r.effect_id
-			WHERE r.effect_id = ? AND r.integration_id = ?`, effect, integration).Scan(&refID, &keySeq, &appID, &object, &refState, &spaceID, &unknown, &state, &code, &clean)
+			WHERE r.effect_id = ? AND r.integration_id = ?`, effect, integration).Scan(&refID, &keySeq, &appID, &object, &refState, &spaceID, &unknown, &state, &code, &clean, &sends)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && !spaces[spaceID]) {
 			return errNotFound // another space's, or none: nothing says which
 		}
@@ -261,6 +274,11 @@ func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, int
 		if object != "" || !unknown || refState == "paid" || refState == "refunded" || state != "failed" || code != string(apierr.CodeIntegrationOutcomeUnknown) {
 			return nothing
 		}
+		// What the admin checked is still all there is: the same key, and no call under it since.
+		if checked.Seq == nil || checked.Sends == nil || int64(*checked.Seq) != keySeq || *checked.Sends != sends {
+			return apierr.New(http.StatusConflict, apierr.CodeIntegrationLinkAttemptChanged,
+				"this payment link was tried again since it was listed: check the provider again")
+		}
 		// Something of the ref was seen at the provider (an object an answer named or a lookup found, kept
 		// on its key) or a key of it was settled: "none exists" can't be taken from anyone then.
 		if !clean {
@@ -270,9 +288,9 @@ func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, int
 		// The key is abandoned (its row stays, with every call made under it) and the ref takes the next.
 		// The conditions are repeated in the statement, so nothing seen can be abandoned whatever ran before.
 		res, err := tx.ExecContext(ctx, `UPDATE integration_ref_attempts SET outcome = 'abandoned'
-			WHERE ref_id = ? AND seq = ? AND outcome IS NULL AND sends > clean_sends AND object_id IS NULL
+			WHERE ref_id = ? AND seq = ? AND sends = ? AND outcome IS NULL AND sends > clean_sends AND object_id IS NULL
 				AND NOT EXISTS (SELECT 1 FROM integration_ref_attempts o WHERE o.ref_id = ? AND (o.object_id IS NOT NULL OR o.outcome IS NOT NULL))`,
-			refID, keySeq, refID)
+			refID, keySeq, sends, refID)
 		if err != nil {
 			return err
 		}
@@ -308,6 +326,13 @@ func (s *Service) ConfirmNoPaymentLink(ctx context.Context, workspace, user, int
 	})
 }
 
+// CheckedAttempt is the attempt an admin's confirmation is about, as the list of unresolved payment
+// links showed it (PaymentLinkOutcome.AttemptSeq and AttemptSends). Both are required.
+type CheckedAttempt struct {
+	Seq   *int `json:"attempt_seq"`
+	Sends *int `json:"attempt_sends"`
+}
+
 func (s *Service) handleConfirmNoLink(w http.ResponseWriter, r *http.Request) {
 	id, ok := integrationID(w, r)
 	if !ok {
@@ -318,7 +343,7 @@ func (s *Service) handleConfirmNoLink(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, errNotFound)
 		return
 	}
-	var req struct{}
+	var req CheckedAttempt
 	if !readJSON(w, r, &req) {
 		return
 	}
@@ -326,7 +351,7 @@ func (s *Service) handleConfirmNoLink(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.ConfirmNoPaymentLink(r.Context(), workspaceOf(r), actorOf(r), id, effect, visibleTo(ids)); err != nil {
+	if err := s.ConfirmNoPaymentLink(r.Context(), workspaceOf(r), actorOf(r), id, effect, req, visibleTo(ids)); err != nil {
 		fail(w, r, err)
 		return
 	}

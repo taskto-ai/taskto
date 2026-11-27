@@ -509,6 +509,7 @@ const (
 	CodeIntegrationOutcomeUnknown      Code = "integration_outcome_unknown"       // the provider never said whether the payment link was made, and the bounded wait for it ended: no second link is made; an admin checks the provider and confirms that none exists (or the link is adopted by a retry)
 	CodeIntegrationLinkLookupPending   Code = "integration_link_lookup_pending"   // a call may have run and nobody knows what it made: only its object is looked for and the call asked again under its own key, for a bounded time, and no other key is used meanwhile
 	CodeIntegrationNothingToConfirm    Code = "integration_nothing_to_confirm"    // 409: the payment link entry isn't one whose outcome is unknown and whose wait ended
+	CodeIntegrationLinkAttemptChanged  Code = "integration_link_attempt_changed"  // 409: the payment link was tried again (another call under its key, or another key) since the admin's list showed it: what they checked at the provider is not all that may be there, so they check again
 	CodeIntegrationLinkNotConfirmable  Code = "integration_link_not_confirmable"  // 409: an object of the payment link was seen at the provider (an answer named one, or a lookup found one), or one of its keys was resolved already: an admin's confirmation never allows a new key for it
 	CodeIntegrationConditionChanged    Code = "integration_condition_changed"     // the record changed so that it no longer meets the condition (`when`) of the action's payment link: nothing was created
 )

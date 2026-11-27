@@ -2031,9 +2031,9 @@ func TestAnAdminConfirmingNoLinkAllowsExactlyOneNewKey(t *testing.T) {
 				t.Fatalf("list = %+v", list)
 			}
 
-			expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{}), http.StatusNoContent)
+			expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), p.checkedBody(e.id)), http.StatusNoContent)
 			// A second confirmation finds nothing to decide: no second key.
-			rec = p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{})
+			rec = p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), p.checkedBody(e.id))
 			expect(t, rec, http.StatusConflict)
 			if got := decode[struct {
 				Code string `json:"code"`
@@ -2105,7 +2105,7 @@ func TestAStoppedLookupIsListedWithItsCodeAndCannotBeConfirmed(t *testing.T) {
 	if got := list.PaymentLinks[0]; got.Waiting || got.CanConfirm || got.Code != string(apierr.CodeIntegrationAccountChanged) {
 		t.Fatalf("link = %+v: want stopped, with the entry's code", got)
 	}
-	expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{}), http.StatusConflict)
+	expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), p.checkedBody(e.id)), http.StatusConflict)
 
 	// A code whose message names values (the ceiling that refused the amount) is listed with them, as
 	// the entry failed with them.
@@ -2134,7 +2134,7 @@ func TestAnAdminCannotConfirmWhileTheServerStillLooks(t *testing.T) {
 	p := newPay(t, shape.public)
 	p.unknownOutcome(shape, "op-confirm-0002")
 	e := p.entries()[0]
-	rec := p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{})
+	rec := p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), p.checkedBody(e.id))
 	expect(t, rec, http.StatusConflict)
 	if r := p.refs(); r[0].keySeq != 0 {
 		t.Fatalf("refs = %+v", r)
@@ -2169,13 +2169,13 @@ func TestOnlyAnAdminOfTheWorkspaceMayConfirmNoLink(t *testing.T) {
 
 	// Another workspace's admin, naming this workspace's integration in their own workspace.
 	_, other := p.otherWorkspace(p.owner)
-	rec := p.owner.do(http.MethodPost, wsPath(other, fmt.Sprintf("integrations/%d/payment-links/%d/confirm-no-link", p.in.ID, e.id)), map[string]any{})
+	rec := p.owner.do(http.MethodPost, wsPath(other, fmt.Sprintf("integrations/%d/payment-links/%d/confirm-no-link", p.in.ID, e.id)), p.checkedBody(e.id))
 	expect(t, rec, http.StatusNotFound)
 	rec = p.owner.do(http.MethodGet, wsPath(other, fmt.Sprintf("integrations/%d/payment-links/unresolved", p.in.ID)), nil)
 	expect(t, rec, http.StatusNotFound)
 
 	// An admin who doesn't manage the entry's space is told it isn't there, and nothing changes.
-	if err := p.svc.ConfirmNoPaymentLink(context.Background(), p.ws, p.owner.id, p.in.ID, e.id, map[int64]bool{}); !errors.Is(err, errNotFound) {
+	if err := p.svc.ConfirmNoPaymentLink(context.Background(), p.ws, p.owner.id, p.in.ID, e.id, p.checkedAttempt(e.id), map[int64]bool{}); !errors.Is(err, errNotFound) {
 		t.Fatalf("err = %v", err)
 	}
 	if got, err := p.svc.unresolved(context.Background(), p.ws, p.in.ID, map[int64]bool{}); err != nil || len(got) != 0 {
@@ -2247,7 +2247,7 @@ func TestALinkSeenWhoseAmountCannotBeReadBlocksANewKeyUntilItIsAdopted(t *testin
 		list.PaymentLinks[0].CanConfirm || list.PaymentLinks[0].Waiting {
 		t.Fatalf("list = %+v", list)
 	}
-	rec = p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{})
+	rec = p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), p.checkedBody(e.id))
 	expect(t, rec, http.StatusConflict)
 	if got := decode[struct {
 		Code string `json:"code"`
@@ -2564,7 +2564,7 @@ func TestARefusalKeptUnderTheKeyNeverRotatesTheKey(t *testing.T) {
 			if keys := p.keysUsed(shape.path); len(keys) != 1 || p.objects(shape.path) != 0 {
 				t.Fatalf("keys = %v, objects %d", keys, p.objects(shape.path))
 			}
-			expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{}), http.StatusNoContent)
+			expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), p.checkedBody(e.id)), http.StatusNoContent)
 			p.later(time.Hour)
 			p.settled(apps.StateDone)
 			if keys := p.keysUsed(shape.path); len(keys) != 2 || p.objects(shape.path) != 1 {
@@ -2782,7 +2782,7 @@ func TestRepeatedFailedReadsNeverEndTheReconciliationEarly(t *testing.T) {
 				t.Fatalf("keys = %v", keys)
 			}
 			p.fake.ClearFaults()
-			expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), map[string]any{}), http.StatusNoContent)
+			expect(t, p.owner.do(http.MethodPost, p.confirmPath(e.id, fmt.Sprintf("%d/confirm-no-link", e.id)), p.checkedBody(e.id)), http.StatusNoContent)
 			p.later(time.Hour)
 			p.settled(apps.StateDone)
 			if p.objects(shape.path) != 1 {
