@@ -1451,3 +1451,19 @@ test("a start's sweep makes no database for another account whose login it was o
   vi.restoreAllMocks()
   expect(await databases()).not.toContain('taskto-offline-8')
 })
+
+function supersededAfterOpening() {
+  let asked = 0
+  return () => ++asked < 2
+}
+
+test('without Web Locks, an open that is superseded after it made the database leaves it: another tab may have written to it', async () => {
+  await expect(OfflineStore.open(7, { still: supersededAfterOpening() })).rejects.toThrow()
+  expect(await databases()).toContain('taskto-offline-7')
+})
+
+test('with Web Locks, an open that is superseded after it made the database removes it again', async () => {
+  fakeLocks()
+  await expect(OfflineStore.open(7, { still: supersededAfterOpening() })).rejects.toThrow()
+  expect(await databases()).not.toContain('taskto-offline-7')
+})

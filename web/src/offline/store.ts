@@ -266,12 +266,13 @@ export class OfflineStore {
     user: number,
     { still = () => true, existing = false }: { still?: () => boolean; existing?: boolean } = {},
   ): Promise<OfflineStore> {
-    return withLock(user, (expired) => OfflineStore.openNow(user, expired, still, existing))
+    return withLock(user, (expired, locked) => OfflineStore.openNow(user, expired, locked, still, existing))
   }
 
   private static async openNow(
     user: number,
     expired: () => boolean,
+    locked: boolean,
     still: () => boolean,
     existing: boolean,
   ): Promise<OfflineStore> {
@@ -288,13 +289,13 @@ export class OfflineStore {
         },
       })
     }
-    const giveUp = async (db: IDBDatabase, error: Error): Promise<never> => {
+    const giveUp = async (db: IDBDatabase, error: Error, madeByThisCheck = false): Promise<never> => {
       db.close()
-      if (made && !expired()) await deleteDatabase(name).catch(() => {})
+      if (made && (locked || madeByThisCheck) && !expired()) await deleteDatabase(name).catch(() => {})
       throw error
     }
     const db = await open()
-    if (made && existing) return giveUp(db, new NotOnDevice())
+    if (made && existing) return giveUp(db, new NotOnDevice(), true)
     let retired = false
     try {
       retired = (await runTx(db, [META], 'readonly', (tx) => tx.store(META).get(RETIRED))) !== undefined
@@ -813,16 +814,16 @@ export class Superseded extends Error {
   }
 }
 
-function withLock<T>(user: number, work: (expired: () => boolean) => Promise<T>): Promise<T> {
+function withLock<T>(user: number, work: (expired: () => boolean, locked: boolean) => Promise<T>): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-  if (!locks?.request) return work(() => false)
+  if (!locks?.request) return work(() => false, false)
   let granted = false
   const signal = lockTimes.waitOver(lockTimes.wait)
   const held = () => {
     granted = true
     let over = false
     return withinTime(
-      work(() => over),
+      work(() => over, true),
       lockTimes.hold,
       () => {
         over = true
