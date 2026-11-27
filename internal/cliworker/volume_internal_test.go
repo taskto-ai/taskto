@@ -150,6 +150,9 @@ func TestAUIDBaseIsNeverOneALegacyHomesOwnerWouldGetAgain(t *testing.T) {
 	if _, err := os.Stat(w.uidBaseFile()); err == nil {
 		t.Error("the refused base was pinned")
 	}
+	if err := w.pinUIDBase(owner - firstHome); err == nil {
+		t.Error("a UID base whose first home is a legacy home's owner was accepted")
+	}
 	if err := w.pinUIDBase(owner - (maxHome - 1)); err == nil {
 		t.Error("a UID base whose last home is a legacy home's owner was accepted")
 	}

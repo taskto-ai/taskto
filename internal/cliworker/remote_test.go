@@ -8,8 +8,10 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,5 +186,16 @@ func TestADeletionBeforeTheFirstCensusSaysSoOverTheSocket(t *testing.T) {
 	r := serve(t, h)
 	if err := r.Forget(context.Background(), acct(1)); !errors.Is(err, cliworker.ErrCensusNeeded) {
 		t.Errorf("a deletion before any census over the socket: %v, want ErrCensusNeeded", err)
+	}
+	a := acct(1)
+	req := httptest.NewRequest(http.MethodPost, "/forget", strings.NewReader(`{"user":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Taskto-Identity", a.Identity)
+	req.Header.Set("X-Taskto-Boot", a.Boot)
+	req.Header.Set("X-Taskto-Installation", a.Installation)
+	rec := httptest.NewRecorder()
+	h.w.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"census_needed"`) {
+		t.Errorf("a deletion before any census answers %d %s, want 409 census_needed", rec.Code, rec.Body.String())
 	}
 }
