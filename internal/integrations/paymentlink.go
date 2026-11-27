@@ -311,6 +311,11 @@ func (t try) resolve(ctx context.Context, r *ref, a attempt) (resolution, paylin
 				logFailure(t.rec, ce)
 				return unresolved, paylink.Link{}, t.s.settleAttempt(ctx, a)
 			case CallRefused:
+				if seen {
+					if none, nerr := nothingPayable(ctx, t.provider, t.creds, t.client, r.newLink(a, t.req.Description), t.since); nerr == nil && none {
+						return t.s.expireEnded(ctx, a)
+					}
+				}
 				logFailure(t.rec, ce)
 				return unresolved, paylink.Link{}, &paylink.Error{Code: apierr.CodeIntegrationProviderRefused}
 			case CallUnreachable, CallLookupIncomplete:
@@ -384,12 +389,33 @@ func (t try) settle(ctx context.Context, r *ref, a attempt, l Link) (resolution,
 }
 
 func (t try) noOtherPayable(ctx context.Context, r *ref, a attempt, expired string) bool {
-	found, ok, _, err := t.provider.FindPaymentLink(ctx, t.creds, t.client, r.newLink(a, t.req.Description), t.since)
-	if err == nil && !ok {
+	none, err := nothingPayable(ctx, t.provider, t.creds, t.client, r.newLink(a, t.req.Description), t.since)
+	if err == nil && none {
 		return true
 	}
-	slog.Info("integrations: another object of an expired key's token may be paid", "ref", r.id, "expired", expired != "", "seen", found.ObjectID != "")
+	slog.Info("integrations: another object of an expired key's token may be paid", "ref", r.id, "expired", expired != "")
 	return false
+}
+
+func nothingPayable(ctx context.Context, provider PaymentProvider, creds Credentials, client *Client, l NewLink, since time.Time) (bool, error) {
+	if checker, ok := provider.(payableChecker); ok {
+		return checker.NothingPayable(ctx, creds, client, l, since)
+	}
+	_, found, _, err := provider.FindPaymentLink(ctx, creds, client, l, since)
+	return !found && err == nil, err
+}
+
+func (s *Service) expireEnded(ctx context.Context, a attempt) (resolution, paylink.Link, error) {
+	now, err := s.attemptByKey(ctx, a.refID, a.seq)
+	if err != nil {
+		return unresolved, paylink.Link{}, err
+	}
+	if ok, err := s.markExpiredOf(ctx, now, now.objectID); err != nil {
+		return unresolved, paylink.Link{}, err
+	} else if !ok {
+		return unresolved, paylink.Link{}, s.stillUnknown(ctx, now)
+	}
+	return resolvedExpired, paylink.Link{}, nil
 }
 
 func (s *Service) markExpiredOf(ctx context.Context, a attempt, objectID string) (bool, error) {
@@ -1052,14 +1078,7 @@ func (s *Service) provePaymentEnded(ctx context.Context, provider PaymentProvide
 		return err
 	}
 	for _, l := range keys {
-		var none bool
-		if checker, ok := provider.(payableChecker); ok {
-			none, err = checker.NothingPayable(ctx, creds, client, l, since)
-		} else {
-			var found bool
-			_, found, _, err = provider.FindPaymentLink(ctx, creds, client, l, since)
-			none = !found && err == nil
-		}
+		none, err := nothingPayable(ctx, provider, creds, client, l, since)
 		if err != nil {
 			if ce, ok := IsCall(err); ok && ce.Kind == CallSettled {
 				return &paylink.Error{Code: apierr.CodeIntegrationLinkAlreadyPaid}

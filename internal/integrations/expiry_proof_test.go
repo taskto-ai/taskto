@@ -110,3 +110,56 @@ func TestAReplacementIsMadeOnceEveryObjectOfTheSavedLinksTokenEnded(t *testing.T
 		t.Fatalf("link = %+v, %d sessions", link, len(p.fake.Sessions()))
 	}
 }
+
+func TestAKeyWhoseEverySessionExpiredBeforeTheLookupMovesOn(t *testing.T) {
+	ctx := context.Background()
+	p := newPay(t, publicURL)
+	record := p.invoice(10, "EUR")
+	req := p.direct(record, "op-all-expired-0001")
+	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("the lost answer was no error")
+	}
+	first := p.fake.Sessions()[0].ID
+	second := p.secondSessionOfToken(first)
+	for _, id := range []string{first, second} {
+		if _, err := p.fake.Expire(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link, err := p.svc.OpenPaymentLink(ctx, req)
+	if err != nil {
+		t.Fatalf("the key never moved on although no session can be paid: %v", err)
+	}
+	if link.ObjectID == first || link.ObjectID == second || len(p.fake.Sessions()) != 3 {
+		t.Fatalf("link = %+v, %d sessions", link, len(p.fake.Sessions()))
+	}
+}
+
+func TestAKeyWhoseEverySessionExpiredWhileItsStateWasReadMovesOn(t *testing.T) {
+	ctx := context.Background()
+	p := newPay(t, publicURL)
+	record := p.invoice(10, "EUR")
+	req := p.direct(record, "op-all-expired-0002")
+	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))
+	if _, err := p.svc.OpenPaymentLink(ctx, req); err == nil {
+		t.Fatal("the lost answer was no error")
+	}
+	first := p.fake.Sessions()[0].ID
+	second := p.secondSessionOfToken(first)
+	p.svc.beforeSettle = func(string) {
+		p.svc.beforeSettle = nil
+		for _, id := range []string{first, second} {
+			if _, err := p.fake.Expire(id); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	link, err := p.svc.OpenPaymentLink(ctx, req)
+	if err != nil {
+		t.Fatalf("the key never moved on although no session can be paid: %v", err)
+	}
+	if link.ObjectID == first || link.ObjectID == second || len(p.fake.Sessions()) != 3 {
+		t.Fatalf("link = %+v, %d sessions", link, len(p.fake.Sessions()))
+	}
+}
