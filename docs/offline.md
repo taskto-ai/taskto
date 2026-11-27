@@ -87,6 +87,8 @@ uses the device's clock for the current month, over the rows with a real date th
 too old to know `month_of` asks to be updated and draws no app that uses it) are
 recomputed from those records with the same rules the server uses
 ([`rules.ts`](../web/src/apps/rules.ts)).
+Declared chart series are recomputed from the downloaded rows plus queued changes, with the same
+grouping and bucket rules as the server.
 
 ## The outbox
 

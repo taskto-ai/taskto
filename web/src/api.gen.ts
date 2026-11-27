@@ -243,6 +243,7 @@ export type AppsDefinition = {
   collection: AppsCollection
   actions: Record<string, AppsAction>
   summaries?: Record<string, AppsSummary>
+  series?: Record<string, AppsSeries>
   contributions?: AppsContributions
   integrations?: Record<string, AppsIntegrationSlot>
 }
@@ -336,6 +337,7 @@ export type AppsOfflineDefinition = {
   screens?: AppsOfflineScreen[]
   actions: Record<string, AppsOfflineAction>
   summaries?: Record<string, AppsSummary>
+  series?: Record<string, AppsSeries>
 }
 
 export type AppsOfflineScreen = {
@@ -356,6 +358,16 @@ export type AppsScreen = {
   root: string
   record?: boolean
   components: unknown[] | null
+}
+
+export type AppsSeries = {
+  kind: string
+  field?: string
+  group_by: string
+  bucket?: string
+  last?: number
+  split_by?: string
+  where?: AppsRule
 }
 
 export type AppsSlotLive = {

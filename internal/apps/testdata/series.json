@@ -1,0 +1,326 @@
+{
+  "now": "2027-01-06T12:00:00Z",
+  "collection": {
+    "fields": [
+      {
+        "name": "amount",
+        "type": "number"
+      },
+      {
+        "name": "status",
+        "type": "choice",
+        "options": [
+          "open",
+          "closed"
+        ],
+        "option_labels": {
+          "closed": "Closed",
+          "open": "Open"
+        }
+      },
+      {
+        "name": "active",
+        "type": "boolean"
+      },
+      {
+        "name": "day",
+        "type": "date"
+      },
+      {
+        "name": "name",
+        "type": "string"
+      }
+    ]
+  },
+  "rows": [
+    {
+      "active": true,
+      "amount": 4,
+      "day": "2026-11-30",
+      "id": 1,
+      "name": "a",
+      "status": "open"
+    },
+    {
+      "active": true,
+      "amount": 8,
+      "day": "2026-12-15",
+      "id": 2,
+      "name": "b",
+      "status": "open"
+    },
+    {
+      "active": false,
+      "amount": 2,
+      "day": "2026-12-31",
+      "id": 3,
+      "name": "a",
+      "status": "closed"
+    },
+    {
+      "active": false,
+      "amount": "wrong",
+      "day": "2027-01-01",
+      "id": 4,
+      "name": "other",
+      "status": "closed"
+    },
+    {
+      "active": false,
+      "amount": 6,
+      "day": "2027-01-05",
+      "id": 5,
+      "name": "a",
+      "status": "open"
+    },
+    {
+      "active": true,
+      "amount": 1,
+      "day": "2026-10-01",
+      "id": 6,
+      "name": "c",
+      "status": "closed"
+    },
+    {
+      "active": true,
+      "amount": 3,
+      "day": "2026-12-28",
+      "id": 7,
+      "name": "b",
+      "status": "closed"
+    }
+  ],
+  "series": {
+    "by_day": {
+      "kind": "avg",
+      "field": "amount",
+      "group_by": "day",
+      "bucket": "day",
+      "last": 7
+    },
+    "by_month": {
+      "kind": "sum",
+      "field": "amount",
+      "group_by": "day",
+      "bucket": "month",
+      "last": 3
+    },
+    "by_name": {
+      "kind": "count",
+      "group_by": "name"
+    },
+    "by_status": {
+      "kind": "count",
+      "group_by": "status",
+      "split_by": "active"
+    },
+    "by_week": {
+      "kind": "count",
+      "group_by": "day",
+      "bucket": "week",
+      "last": 4
+    },
+    "open_total": {
+      "kind": "sum",
+      "field": "amount",
+      "group_by": "active",
+      "where": {
+        "field": "status",
+        "op": "eq",
+        "value": "open"
+      }
+    }
+  },
+  "expected": {
+    "by_day": {
+      "x": [
+        {
+          "key": "2026-12-31",
+          "label": "2026-12-31"
+        },
+        {
+          "key": "2027-01-01",
+          "label": "2027-01-01"
+        },
+        {
+          "key": "2027-01-02",
+          "label": "2027-01-02"
+        },
+        {
+          "key": "2027-01-03",
+          "label": "2027-01-03"
+        },
+        {
+          "key": "2027-01-04",
+          "label": "2027-01-04"
+        },
+        {
+          "key": "2027-01-05",
+          "label": "2027-01-05"
+        },
+        {
+          "key": "2027-01-06",
+          "label": "2027-01-06"
+        }
+      ],
+      "series": [
+        {
+          "key": "",
+          "label": "",
+          "values": [
+            2,
+            null,
+            null,
+            null,
+            null,
+            6,
+            null
+          ]
+        }
+      ]
+    },
+    "by_month": {
+      "x": [
+        {
+          "key": "2026-11",
+          "label": "2026-11"
+        },
+        {
+          "key": "2026-12",
+          "label": "2026-12"
+        },
+        {
+          "key": "2027-01",
+          "label": "2027-01"
+        }
+      ],
+      "series": [
+        {
+          "key": "",
+          "label": "",
+          "values": [
+            4,
+            13,
+            6
+          ]
+        }
+      ]
+    },
+    "by_name": {
+      "x": [
+        {
+          "key": "a",
+          "label": "a"
+        },
+        {
+          "key": "b",
+          "label": "b"
+        },
+        {
+          "key": "c",
+          "label": "c"
+        },
+        {
+          "key": "other",
+          "label": "other"
+        }
+      ],
+      "series": [
+        {
+          "key": "",
+          "label": "",
+          "values": [
+            3,
+            2,
+            1,
+            1
+          ]
+        }
+      ]
+    },
+    "by_status": {
+      "x": [
+        {
+          "key": "open",
+          "label": "Open"
+        },
+        {
+          "key": "closed",
+          "label": "Closed"
+        }
+      ],
+      "series": [
+        {
+          "key": "false",
+          "label": "false",
+          "values": [
+            1,
+            2
+          ]
+        },
+        {
+          "key": "true",
+          "label": "true",
+          "values": [
+            2,
+            2
+          ]
+        }
+      ]
+    },
+    "by_week": {
+      "x": [
+        {
+          "key": "2026-W51",
+          "label": "2026-W51"
+        },
+        {
+          "key": "2026-W52",
+          "label": "2026-W52"
+        },
+        {
+          "key": "2026-W53",
+          "label": "2026-W53"
+        },
+        {
+          "key": "2027-W01",
+          "label": "2027-W01"
+        }
+      ],
+      "series": [
+        {
+          "key": "",
+          "label": "",
+          "values": [
+            1,
+            0,
+            3,
+            1
+          ]
+        }
+      ]
+    },
+    "open_total": {
+      "x": [
+        {
+          "key": "false",
+          "label": "false"
+        },
+        {
+          "key": "true",
+          "label": "true"
+        }
+      ],
+      "series": [
+        {
+          "key": "",
+          "label": "",
+          "values": [
+            6,
+            12
+          ]
+        }
+      ]
+    }
+  }
+}

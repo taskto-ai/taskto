@@ -359,6 +359,127 @@ function summarize(s: { kind: string; field?: string; where?: unknown; month_of?
   return ''
 }
 
+type SeriesDefinition = {
+  kind: string
+  field?: string
+  group_by: string
+  bucket?: 'day' | 'week' | 'month'
+  last?: number
+  split_by?: string
+  where?: unknown
+}
+
+function computeSeries(s: SeriesDefinition, def: Definition, rows: Item[], now: Date): unknown {
+  const fields = def.collection.fields as Field[]
+  const byName = new Map(fields.map((f) => [f.name, f]))
+  const groupField = byName.get(s.group_by)
+  if (!groupField) return { x: [], series: [] }
+  const keeps = (row: Item): boolean => !s.where || holds(s.where as Rule, row)
+  const groups: { key: string; label: string }[] = []
+  const groupIndex = new Map<string, number>()
+  const addGroup = (key: string, label = key): void => {
+    groupIndex.set(key, groups.length)
+    groups.push({ key, label })
+  }
+  const dateKey = (date: Date): string => {
+    const y = date.getUTCFullYear()
+    const m = String(date.getUTCMonth() + 1).padStart(2, '0')
+    const d = String(date.getUTCDate()).padStart(2, '0')
+    if (s.bucket === 'month') return `${y}-${m}`
+    if (s.bucket === 'week') {
+      const day = new Date(Date.UTC(y, date.getUTCMonth(), date.getUTCDate()))
+      day.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7))
+      const thursday = new Date(day)
+      thursday.setUTCDate(day.getUTCDate() + 3)
+      const isoYear = thursday.getUTCFullYear()
+      const jan4 = new Date(Date.UTC(isoYear, 0, 4))
+      const week1 = new Date(jan4)
+      week1.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() + 6) % 7))
+      const week = Math.floor((day.getTime() - week1.getTime()) / 604800000) + 1
+      return `${isoYear}-W${String(week).padStart(2, '0')}`
+    }
+    return `${y}-${m}-${d}`
+  }
+  const shiftDate = (date: Date, amount: number): Date => {
+    const result = new Date(date)
+    if (s.bucket === 'month') result.setUTCMonth(result.getUTCMonth() + amount)
+    else result.setUTCDate(result.getUTCDate() + amount * (s.bucket === 'week' ? 7 : 1))
+    return result
+  }
+  if (groupField.type === 'date') {
+    const current = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+    if (s.bucket === 'week') current.setUTCDate(current.getUTCDate() - ((current.getUTCDay() + 6) % 7))
+    if (s.bucket === 'month') current.setUTCDate(1)
+    const last = s.last || 12
+    for (let i = last - 1; i >= 0; i--) addGroup(dateKey(shiftDate(current, -i)))
+  } else if (groupField.type === 'choice') {
+    for (const key of groupField.options ?? []) addGroup(key, groupField.option_labels?.[key] ?? key)
+  } else if (groupField.type === 'boolean') {
+    addGroup('false')
+    addGroup('true')
+  } else if (groupField.type === 'string') {
+    const counts = new Map<string, number>()
+    for (const row of rows) {
+      const value = row[s.group_by]
+      if (keeps(row) && typeof value === 'string') counts.set(value, (counts.get(value) ?? 0) + 1)
+    }
+    const keys = [...counts.keys()]
+      .filter((key) => key !== 'other')
+      .sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || (a < b ? -1 : a > b ? 1 : 0))
+      .slice(0, 20)
+    for (const key of keys) addGroup(key)
+    addGroup('other')
+  }
+  const splitField = s.split_by ? byName.get(s.split_by) : undefined
+  const splits =
+    splitField?.type === 'choice'
+      ? (splitField.options ?? []).map((key) => ({ key, label: splitField.option_labels?.[key] ?? key }))
+      : splitField?.type === 'boolean'
+        ? [
+            { key: 'false', label: 'false' },
+            { key: 'true', label: 'true' },
+          ]
+        : [{ key: '', label: '' }]
+  const totals = splits.map(() => groups.map(() => ({ count: 0, sum: 0 })))
+  for (const row of rows) {
+    const raw = row[s.group_by]
+    if (!keeps(row)) continue
+    let key: string | undefined
+    if (groupField.type === 'date' && typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const date = new Date(`${raw}T00:00:00.000Z`)
+      if (!Number.isNaN(date.getTime())) key = dateKey(date)
+    } else if (groupField.type === 'choice' && typeof raw === 'string' && groupIndex.has(raw)) key = raw
+    else if (groupField.type === 'boolean' && typeof raw === 'boolean') key = String(raw)
+    else if (groupField.type === 'string' && typeof raw === 'string') key = groupIndex.has(raw) ? raw : 'other'
+    const group = key === undefined ? undefined : groupIndex.get(key)
+    if (group === undefined) continue
+    const amount = s.kind === 'count' ? undefined : row[s.field ?? '']
+    if (s.kind !== 'count' && typeof amount !== 'number') continue
+    let split = 0
+    if (splitField) {
+      const rawSplit = row[s.split_by as string]
+      if (splitField.type === 'boolean' && typeof rawSplit !== 'boolean') continue
+      if (splitField.type === 'choice' && (typeof rawSplit !== 'string' || !splits.some((v) => v.key === rawSplit)))
+        continue
+      const splitKey = String(rawSplit)
+      split = splits.findIndex((v) => v.key === splitKey)
+      if (split < 0) continue
+    }
+    const total = totals[split][group]
+    total.count++
+    if (s.kind !== 'count') total.sum += amount as number
+  }
+  return {
+    x: groups,
+    series: splits.map((split, i) => ({
+      ...split,
+      values: totals[i].map((v) =>
+        s.kind === 'count' ? v.count : s.kind === 'sum' ? v.sum : v.count ? v.sum / v.count : null,
+      ),
+    })),
+  }
+}
+
 function dataMessage(surface: string, path: string, value: unknown): Message {
   return { version: 'v0.9', updateDataModel: { surfaceId: surface, path, value } }
 }
@@ -374,11 +495,14 @@ function surfaceOf(messages: unknown[]): string {
 export function viewOf(download: Download, queue: OutboxItem[]): unknown[] {
   const surface = surfaceOf(download.messages)
   const items = itemsOf(download, queue)
+  const now = new Date()
   return (download.messages as Message[]).map((m) => {
     const update = m.updateDataModel as { path?: string; value?: unknown } | undefined
     if (update?.path !== '/' || !update.value || typeof update.value !== 'object') return m
     const value: Record<string, unknown> = { ...(update.value as Record<string, unknown>), items }
     for (const [name, s] of Object.entries(download.definition.summaries ?? {})) value[name] = summarize(s, items)
+    for (const [name, s] of Object.entries(download.definition.series ?? {}))
+      value[name] = computeSeries(s, download.definition, items, now)
     return dataMessage(surface, '/', value)
   })
 }
@@ -393,10 +517,14 @@ export function answerChange(
   const surface = surfaceOf(download.messages)
   const items = itemsOf(download, queue)
   const def = download.definition
+  const now = new Date()
   if (!def.screens?.length) return viewOf(download, queue).filter((m) => (m as Message).updateDataModel)
   const out: Message[] = [dataMessage(surface, '/items', items)]
   for (const [name, s] of Object.entries(def.summaries ?? {}).sort(([a], [b]) => (a < b ? -1 : 1))) {
     out.push(dataMessage(surface, `/${name}`, summarize(s, items)))
+  }
+  for (const [name, s] of Object.entries(def.series ?? {}).sort(([a], [b]) => (a < b ? -1 : 1))) {
+    out.push(dataMessage(surface, `/${name}`, computeSeries(s, def, items, now)))
   }
   if (kind === 'insert') out.push(dataMessage(surface, '/draft', {}))
   if (kind === 'update') out.push(dataMessage(surface, '/record', items.find((i) => i.id === id) ?? {}))
