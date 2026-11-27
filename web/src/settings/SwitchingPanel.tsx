@@ -27,7 +27,8 @@ const entry = (a: QueueAccount) => {
   if (a.kind === 'model') return { provider: a.id, model_id: a.model_id }
   return a.kind === 'own' ? { account: a.id } : { shared: Number(a.id) }
 }
-const key = (a: QueueAccount) => (a.kind === 'model' ? `model:${a.id}:${a.model_id}` : `${a.kind}:${a.id}`)
+const key = (a: QueueAccount) =>
+  a.kind === 'model' ? `model:${JSON.stringify([a.id, a.model_id])}` : `${a.kind}:${a.id}`
 
 function modelEntries(providers: ModelProvider[]): QueueModel[] {
   return providers

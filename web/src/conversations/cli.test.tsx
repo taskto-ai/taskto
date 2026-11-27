@@ -588,9 +588,40 @@ test('the model the server moved a conversation to after a limit replaces the on
   fireEvent.change(select, { target: { value: JSON.stringify(['cli-claude', 'opus']) } })
   await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-claude', 'opus'])))
 
+  await waitFor(() => expect(count(calls, 'GET', '/api/workspaces/1/conversations/7/model')).toBe(2))
   server = { provider: 'u2-home', model_id: 'llama' }
   const reads = count(calls, 'GET', '/api/workspaces/1/conversations/7/model')
   act(() => es.send(done('$ go test\nok')))
   await waitFor(() => expect(count(calls, 'GET', '/api/workspaces/1/conversations/7/model')).toBe(reads + 1))
   await waitFor(() => expect(select.value).toBe(JSON.stringify(['u2-home', 'llama'])))
+})
+
+test('a failed read after a pick keeps the pick; a read that was on its way before the pick does not undo it', async () => {
+  let server = { provider: 'cli-claude', model_id: 'default' }
+  let reads = 0
+  let hold: ((v: { body: unknown }) => void) | null = null
+  const { es } = await open(
+    {
+      ...cliRoutes,
+      'GET /api/workspaces/1/conversations/7/model': () => {
+        reads++
+        if (reads === 2) return new Promise((resolve) => (hold = resolve))
+        if (reads === 3) return { status: 500, body: { error: 'down' } }
+        return { body: server }
+      },
+      'PUT /api/workspaces/1/conversations/7/model': (call) => {
+        server = call.body as typeof server
+        return { body: call.body }
+      },
+    },
+    running('$ go test\n'),
+  )
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-claude', 'default'])))
+  act(() => es.send(done('$ go test\nok')))
+  await waitFor(() => expect(reads).toBe(2))
+  fireEvent.change(select, { target: { value: JSON.stringify(['cli-claude', 'opus']) } })
+  await waitFor(() => expect(reads).toBe(3))
+  await act(async () => hold?.({ body: { provider: 'cli-claude', model_id: 'default' } }))
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-claude', 'opus'])))
 })

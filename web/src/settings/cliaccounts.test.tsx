@@ -607,7 +607,7 @@ test('automatic switching: a model can be added from the workspace models', asyn
   const add = await within(panel).findByLabelText('Add to the queue')
   await within(panel).findByRole('option', { name: 'Model: Small model' })
   expect(within(panel).queryByRole('option', { name: /Model: default/ })).toBeNull()
-  fireEvent.change(add, { target: { value: 'model:u2-mine:small' } })
+  fireEvent.change(add, { target: { value: 'model:["u2-mine","small"]' } })
   await waitFor(() => expect(count(calls, 'PUT', '/api/me/cli-switching')).toBe(1))
   expect(calls.filter((c) => c.method === 'PUT')[0].body).toEqual({
     queue: [{ account: 'claude' }, { provider: 'u2-mine', model_id: 'small' }],
@@ -649,4 +649,32 @@ test('automatic switching: a failed models request says so, keeps the accounts e
   expect(await within(panel).findByRole('option', { name: 'Model: Big model' })).toBeTruthy()
   expect(within(panel).queryByText(/Couldn't load the models/)).toBeNull()
   expect(count(calls, 'GET', '/api/workspaces/1/models')).toBe(2)
+})
+
+test('automatic switching: two models whose provider and model ids join to the same text are still two entries', async () => {
+  fakeFetch({
+    'GET /api/me/cli-accounts': list(account('claude', 'Claude Code', { state: 'connected' })),
+    'GET /api/workspaces/1/cli-accounts': {
+      body: { enabled: true, mode: 'own_else_shared', default_mode: 'own_else_shared', accounts: [] },
+    },
+    'GET /api/workspaces/1/models': {
+      body: {
+        providers: [
+          { provider: 'gateway', name: 'First', scope: 'instance', models: [{ id: 'x:y', name: 'Queued one' }] },
+          { provider: 'gateway:x', name: 'Second', scope: 'instance', models: [{ id: 'y', name: 'Other one' }] },
+        ],
+      },
+    },
+    'GET /api/me/cli-switching': {
+      body: {
+        enabled: true,
+        queue: [{ kind: 'model', id: 'gateway', model_id: 'x:y', cli: '', title: 'x:y', limited: false }],
+        available: [],
+      },
+    },
+  })
+  render(<CliAccountsTab workspace={1} />)
+  const panel = await screen.findByRole('region', { name: 'Automatic switching' })
+  await within(panel).findByRole('option', { name: 'Model: Other one' })
+  expect(within(panel).queryByRole('option', { name: 'Model: Queued one' })).toBeNull()
 })

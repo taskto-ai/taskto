@@ -102,7 +102,7 @@ export function ConversationView({
   )
   const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
   const [picked, setPicked] = useState<{ ref: ModelRef; read: number } | null>(null)
-  const model = picked && picked.read === loadedModel.settled ? picked.ref : loadedModel.data
+  const model = picked && (picked.read === loadedModel.settled || loadedModel.error) ? picked.ref : loadedModel.data
   const turnChanged = useChanged(running)
   if (turnChanged && !running) loadedModel.reload()
   const usesCli = Boolean(cliOfProvider(model?.provider) || providers.data?.some((p) => p.scope === 'cli'))
@@ -231,7 +231,10 @@ export function ConversationView({
             providers={providers.data}
             current={model}
             cli={cli.data}
-            onChosen={(ref) => setPicked({ ref, read: loadedModel.settled ?? 0 })}
+            onChosen={(ref) => {
+              setPicked({ ref, read: loadedModel.settled ?? 0 })
+              loadedModel.reload()
+            }}
             disabled={archived || unreadable}
           />
         )}

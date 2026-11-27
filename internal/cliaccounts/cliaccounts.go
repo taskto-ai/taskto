@@ -154,6 +154,7 @@ type Service struct {
 	setModel   ModelSetter
 	switches   map[string]string
 	hops       map[string]*modelHop
+	hopMu      sync.Mutex
 	catalog    ModelCatalog
 	stops      map[string]time.Time
 }

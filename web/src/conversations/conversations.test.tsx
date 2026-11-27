@@ -483,6 +483,7 @@ test('the list shows the archived conversations on request', async () => {
 })
 
 test('the model is chosen among the providers the user may use', async () => {
+  let server = { provider: 'script', model_id: 'script-1' }
   const { calls } = await openWith({
     'GET /api/workspaces/1/models': {
       body: {
@@ -492,8 +493,11 @@ test('the model is chosen among the providers the user may use', async () => {
         ],
       },
     },
-    'GET /api/workspaces/1/conversations/7/model': { body: { provider: 'script', model_id: 'script-1' } },
-    'PUT /api/workspaces/1/conversations/7/model': (call) => ({ body: call.body }),
+    'GET /api/workspaces/1/conversations/7/model': () => ({ body: server }),
+    'PUT /api/workspaces/1/conversations/7/model': (call) => {
+      server = call.body as typeof server
+      return { body: call.body }
+    },
   })
   const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
   expect([...select.options].map((o) => o.textContent)).toEqual(['Scripted', 'Llama'])

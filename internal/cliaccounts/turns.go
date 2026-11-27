@@ -351,6 +351,19 @@ func (s *Service) rememberHop(turn string, h *modelHop) {
 	s.hops[turn] = h
 }
 
+func (s *Service) hopOnce(ctx context.Context, p conversations.Principal, turn, stopped, note string) *modelHop {
+	s.hopMu.Lock()
+	defer s.hopMu.Unlock()
+	if h := s.hopOf(turn); h != nil {
+		return h
+	}
+	h := s.hopToModel(ctx, p, stopped, note)
+	if h != nil {
+		s.rememberHop(turn, h)
+	}
+	return h
+}
+
 func (s *Service) hopOf(turn string) *modelHop {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -496,9 +509,7 @@ func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversat
 		}
 	}
 	if !ok {
-		if res.hop = s.hopToModel(ctx, p, from+" "+why, note); res.hop != nil {
-			s.rememberHop(t.Spec().ID, res.hop)
-		}
+		res.hop = s.hopOnce(ctx, p, t.Spec().ID, from+" "+why, note)
 		return nil, ""
 	}
 	note += "\n\n"
