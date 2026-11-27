@@ -2765,9 +2765,9 @@
       "restored": "Restored",
       "archived": "Archived",
       "commented": "Commented",
-      "card": "Card #{id}",
-      "record": "Record #{id} in {app}",
-      "recordBare": "Record #{id}"
+      "card": "Card {id}",
+      "record": "Record {id} in {app}",
+      "recordBare": "Record {id}"
     },
     "tool": {
       "help": "Asked you to take over the browser",

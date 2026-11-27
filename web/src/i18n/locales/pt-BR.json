@@ -2786,9 +2786,9 @@
       "restored": "Restaurado",
       "archived": "Arquivado",
       "commented": "Comentado",
-      "card": "Cartão #{id}",
-      "record": "Registro #{id} em {app}",
-      "recordBare": "Registro #{id}"
+      "card": "Cartão {id}",
+      "record": "Registro {id} em {app}",
+      "recordBare": "Registro {id}"
     },
     "tool": {
       "help": "Pediu para você assumir o navegador",

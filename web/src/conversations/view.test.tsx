@@ -196,7 +196,7 @@ test('the answer ends with a list of what the turn changed, each opening its pag
   expect(links.map((l) => [l.textContent, l.getAttribute('href')])).toEqual([
     ['a.md', '/w/1/knowledge/3%3Anotes%2Fa.md'],
     ['Call the bank', '/w/1/boards/3%3A4%3A9'],
-    ['Record #12', '/w/1/apps/2-5'],
+    ['Record 12', '/w/1/apps/2-5'],
   ])
   expect(within(box).getByText('notes')).toBeTruthy()
   expect(within(box).getAllByText('Created')).toHaveLength(3)
