@@ -103,6 +103,9 @@ export function ConversationView({
   )
   const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
   const [picked, setPicked] = useState<ModelRef | null>(null)
+  const readModel = () => {
+    api<ModelRef>(`${base}/model`).then(setPicked, () => loadedModel.reload())
+  }
   const model = picked ?? loadedModel.data
   const agents = useMemo(
     () =>
@@ -228,7 +231,7 @@ export function ConversationView({
         running={running}
         onSent={onChanged}
         agents={agents}
-        onSwitched={setPicked}
+        onSwitched={readModel}
       >
         {providers.data && model && (
           <ModelPicker

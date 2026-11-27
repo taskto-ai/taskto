@@ -835,11 +835,15 @@ const agentCatalog = {
 }
 
 test('"@" at the start offers the agents, a choice inserts its token, and a send that switched updates the picker', async () => {
+  let switched = false
   const { calls } = await openWith({
     ...agentCatalog,
-    'POST /api/workspaces/1/conversations/7/messages': {
-      status: 202,
-      body: { submission_id: 12, model: { provider: 'cli-codex', model_id: 'default' } },
+    'GET /api/workspaces/1/conversations/7/model': () => ({
+      body: switched ? { provider: 'cli-codex', model_id: 'default' } : { provider: 'script', model_id: 'script-1' },
+    }),
+    'POST /api/workspaces/1/conversations/7/messages': () => {
+      switched = true
+      return { status: 202, body: { submission_id: 12, model: { provider: 'script', model_id: 'script-1' } } }
     },
   })
   const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
@@ -888,7 +892,7 @@ test('a menu choice by pointer inserts the token too', async () => {
   await openWith({ ...agentCatalog })
   const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
   fireEvent.change(box, { target: { value: '@' } })
-  fireEvent.pointerDown(within(screen.getByRole('listbox')).getByRole('option', { name: 'Scripted' }))
+  fireEvent.pointerUp(within(screen.getByRole('listbox')).getByRole('option', { name: 'Scripted' }))
   expect(box.value).toBe('@[Scripted](agent:script/script-1) ')
   fireEvent.change(box, { target: { value: '' } })
 })

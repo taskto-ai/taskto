@@ -66,6 +66,9 @@ export function Composer({
   const menuOpen = matches.length > 0
   const current = Math.min(active, Math.max(matches.length - 1, 0))
   const optionId = (n: number) => `${id}-agent-${n}`
+  useEffect(() => {
+    if (menuOpen) document.getElementById(`${id}-agent-${current}`)?.scrollIntoView?.({ block: 'nearest' })
+  }, [menuOpen, current, id])
   const chooseAgent = (choice: AgentChoice) => {
     setText(`${agentToken(choice)} `)
     setActive(0)
@@ -219,10 +222,8 @@ export function Composer({
                   aria-selected={n === current}
                   className="ui-chat-agent"
                   data-active={n === current || undefined}
-                  onPointerDown={(e) => {
-                    e.preventDefault()
-                    chooseAgent(choice)
-                  }}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onPointerUp={() => chooseAgent(choice)}
                 >
                   {choice.menu}
                 </div>
