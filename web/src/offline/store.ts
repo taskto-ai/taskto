@@ -563,6 +563,7 @@ export class OfflineStore {
         if (staleView(e)) this.refresh()
         throw e
       }
+      if (e instanceof Superseded) throw e
       throw asNotSaved(e)
     }
   }
@@ -881,10 +882,15 @@ export class OfflineStore {
     seal = true,
     still: () => boolean = () => true,
   ): Promise<UnsentRef[]> {
+    // Asked after every step that waits, before the next change: once it doesn't hold, the whole
+    // transaction is aborted, so nothing of what it had removed is removed, and nothing is retired.
+    const go = () => {
+      if (!still()) throw new Superseded()
+    }
     return this.keep([DOWNLOADS, OUTBOX, BLOBS, META], async (tx) => {
       const outbox = tx.store<OutboxItem>(OUTBOX)
       const items = await outbox.getAll()
-      if (!still()) return []
+      go()
       const unsent = items.filter((i) => i.state !== 'synced')
       const everyApproved = unsent.every((i) => {
         const shown = approved.get(i.id)
@@ -893,12 +899,26 @@ export class OfflineStore {
       const refs = unsent.map((i): UnsentRef => ({ id: i.id, ...seenOf(i) }))
       if (!everyApproved && !seal) return refs
       const downloads = tx.store<Download>(DOWNLOADS)
-      for (const d of await downloads.getAll()) await downloads.delete(d.key)
+      const kept = await downloads.getAll()
+      go()
+      for (const d of kept) {
+        await downloads.delete(d.key)
+        go()
+      }
       const blobs = tx.store<BlobRow>(BLOBS)
       if (everyApproved) {
-        for (const i of items) await outbox.delete(i.id)
-        for (const b of await blobs.getAll()) await blobs.delete(b.id)
+        for (const i of items) {
+          await outbox.delete(i.id)
+          go()
+        }
+        const photos = await blobs.getAll()
+        go()
+        for (const b of photos) {
+          await blobs.delete(b.id)
+          go()
+        }
         await tx.store<{ key: string; value: number }>(META).put({ key: RETIRED, value: 1 })
+        go()
         return []
       }
       const gone = new Set<string>()
@@ -906,8 +926,15 @@ export class OfflineStore {
         if (i.state !== 'synced') continue
         gone.add(i.id)
         await outbox.delete(i.id)
+        go()
       }
-      for (const b of await blobs.getAll()) if (gone.has(b.item)) await blobs.delete(b.id)
+      const photos = await blobs.getAll()
+      go()
+      for (const b of photos) {
+        if (!gone.has(b.item)) continue
+        await blobs.delete(b.id)
+        go()
+      }
       return refs
     })
   }
@@ -1011,6 +1038,15 @@ export const lockTimes = {
     const timer = setTimeout(over, ms)
     return () => clearTimeout(timer)
   },
+}
+
+// A sign-out's change of the database stopped because a newer login of the account started: the
+// transaction was aborted, and nothing was changed.
+export class Superseded extends Error {
+  constructor() {
+    super('a newer login of the account started')
+    this.name = 'Superseded'
+  }
 }
 
 // One at a time per account, across the browser's tabs: opening its database, and a sign-out's

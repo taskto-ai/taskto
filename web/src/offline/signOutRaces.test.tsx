@@ -825,3 +825,38 @@ test('a start whose login another tab replaced while it took the account up open
   expect(await screen.findByText('The account changed')).toBeTruthy()
   expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
 })
+
+test("a newer login that wins while the cleanup's transaction is deleting leaves the database untouched", async () => {
+  await activate(7, 'Pat')
+  const runtime = runtimeState().runtime
+  runtime?.engine.pause('manual')
+  await runtime?.store.enqueue(queued(), [])
+  const [item] = (await runtime?.store.listItems()) ?? []
+  await deactivate({ purge: false, user: 7 })
+  recordSignOut(7, 's1', false, new Map())
+  // The same person signs in again in another tab just as the transaction makes its first deletion.
+  const real = IDBObjectStore.prototype.delete
+  let taken = false
+  vi.spyOn(IDBObjectStore.prototype, 'delete').mockImplementation(function (
+    this: IDBObjectStore,
+    key: IDBValidKey | IDBKeyRange,
+  ) {
+    // The retirement's own deletions: the queue's records, after its check of what is unsent.
+    if (!taken && this.name === 'outbox') {
+      taken = true
+      rememberLogin(7, 's2', Date.now() + 1)
+    }
+    return real.call(this, key)
+  })
+  await cleanUpAfterSignOut(7, 's1', {
+    keep: false,
+    approved: new Map([[item.id, { version: item.version, operation: item.operation }]]),
+  })
+  vi.restoreAllMocks()
+  expect(taken).toBe(true)
+  // Nothing was deleted, nothing retired: the newer login's to use.
+  const after = await OfflineStore.open(7)
+  expect((await after.listItems()).map((i) => i.id)).toEqual(['item-1'])
+  await after.enqueue(queued('newer'), [])
+  after.close()
+})

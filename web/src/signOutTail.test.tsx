@@ -7,7 +7,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { Me } from './api'
-import { pendingSignOuts } from './offline/pendingSignOut'
+import { backFromSignOut, pendingSignOuts } from './offline/pendingSignOut'
 import { fakeFetch } from './test/fakes'
 
 // The sign-out waits a short time here, and the device's cleanup can be made to fail.
@@ -604,5 +604,28 @@ test("a sign-out refused because the same person signed in again elsewhere doesn
   await logOut()
   expect(await screen.findByText('The account changed')).toBeTruthy()
   // The older login's sign-out is not one that holds the account's data or queue.
+  await waitFor(() => expect(pendingOf()).toEqual([]))
+})
+
+test("Back in another tab never drops a sign-out while this tab's logout of the same login can still reach the server", async () => {
+  let confirm: (() => void) | undefined
+  fakeFetch({
+    ...pages,
+    'GET /api/me': { body: { ...first_, session: 's1' } },
+    'POST /api/logout': () =>
+      new Promise((done) => {
+        confirm = () => done({ status: 204 })
+      }),
+  })
+  render(<App />)
+  await logOut()
+  await waitFor(() => expect(confirm).toBeDefined())
+  // Another tab of the same login takes the sign-out up, gets a definite refusal from the server,
+  // and goes back: its own attempt is over, this tab's isn't.
+  backFromSignOut(1, 's1')
+  expect(pendingSignOuts().find((p) => p.session === 's1')).toMatchObject({ phase: 'backed' })
+  // This tab's logout reaches the server after all: the sign-out is finished as the person decided.
+  await act(async () => confirm?.())
+  await screen.findByRole('heading', { name: 'Log in' })
   await waitFor(() => expect(pendingOf()).toEqual([]))
 })

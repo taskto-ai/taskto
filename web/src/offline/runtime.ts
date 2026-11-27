@@ -29,7 +29,7 @@ import {
 import { SchemaTooNew } from './idb'
 import { signOutPending } from './pendingSignOut'
 import { revalidate } from './revalidate'
-import { type Approval, type Download, OfflineStore, seenOf, type UnsentRef } from './store'
+import { type Approval, type Download, OfflineStore, Superseded, seenOf, type UnsentRef } from './store'
 import { type SyncDeps, SyncEngine } from './sync'
 import { OfflineWriter, type WriterDeps } from './writer'
 
@@ -382,7 +382,9 @@ async function checkUnsent(
     try {
       if (!still()) return { left: [], unreadable: false }
       left.push(...(await ask(store)))
-    } catch {
+    } catch (e) {
+      // Stopped for a newer login: nothing was changed, and nothing is to be.
+      if (e instanceof Superseded) return { left: [], unreadable: false }
       unreadable = true
     } finally {
       if (own) store.close()

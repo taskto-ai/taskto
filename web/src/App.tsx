@@ -37,14 +37,15 @@ import { LogoutGuard } from './offline/LogoutGuard'
 import {
   backedSignOut,
   backFromSignOut,
+  beginLogout,
   browserLogin,
   confirmSignOut,
+  endLogout,
   forgetLogin,
   loginIsCurrent,
   recordSignOut,
   settleSignOut,
   signOutPending,
-  unansweredSignOut,
 } from './offline/pendingSignOut'
 import {
   activate,
@@ -347,6 +348,9 @@ export function App() {
       // server refuses it.
       const wait = new AbortController()
       const timer = setTimeout(() => wait.abort(), SIGN_OUT_WAIT_MS)
+      // Marked as on its way before it is sent, for a Back in another tab meanwhile (pendingSignOut.ts).
+      const attempt = beginLogout(user, session)
+      let answered = true
       const outcome = await api('/api/logout', {
         method: 'POST',
         headers: forAccount(user),
@@ -363,11 +367,12 @@ export function App() {
           }
           // No answer from the server itself (none in time, the connection, a proxy's page): the
           // request may still reach it.
-          if (!(e instanceof ApiError) || !e.code) unansweredSignOut(user, session)
+          if (!(e instanceof ApiError) || !e.code) answered = false
           return wait.signal.aborted ? translate('app.signOutNoAnswer') : errorText(e)
         },
       )
       clearTimeout(timer)
+      endLogout(attempt, user, session, answered)
       // Confirmed: the device is cleared as the person decided, whatever this page shows by now. When
       // the browser's login had ended already, it shields nothing (a newer one that is over too).
       if (outcome === 'out') {

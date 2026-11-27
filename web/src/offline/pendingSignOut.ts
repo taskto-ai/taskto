@@ -149,6 +149,47 @@ function change(user: number, session: string, to: (p: PendingSignOut) => Pendin
   if (p) put(user, session, to(p))
 }
 
+// The logouts of a login on their way, in any tab: each one's own key (so no tab writes back
+// another's), written before it is sent and removed once its answer is in (a definite one, or none
+// in time, which first marks the record `unanswered`). A tab that closes with one on its way leaves
+// its key: that logout may still reach the server, so the sign-out is never dropped for it.
+const LOGOUT = 'taskto:sign-out-logout:'
+const logoutsOf = (user: number, session: string) => `${LOGOUT}${user}:${session}:`
+
+export function beginLogout(user: number, session: string): string {
+  const key = `${logoutsOf(user, session)}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+  try {
+    window.localStorage.setItem(key, String(Date.now()))
+  } catch {
+    // Not kept: a Back in another tab meanwhile may drop the sign-out, as before there was this.
+  }
+  return key
+}
+
+// `answered`: the server's own answer came (it is over); without one, it may still reach the server.
+export function endLogout(key: string, user: number, session: string, answered: boolean): void {
+  if (!answered) unansweredSignOut(user, session)
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // Left: the sign-out is kept for it, which is the safe side.
+  }
+}
+
+function logoutsOnTheirWay(user: number, session: string): string[] {
+  const keys: string[] = []
+  try {
+    const prefix = logoutsOf(user, session)
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i)
+      if (key?.startsWith(prefix)) keys.push(key)
+    }
+  } catch {
+    // Not read: none known.
+  }
+  return keys
+}
+
 // A logout of `user`'s login `session` got no answer: it may reach the server yet. A record of
 // another login of the account (a newer one's, from another tab) stays as it is.
 export function unansweredSignOut(user: number, session: string): void {
@@ -159,8 +200,11 @@ export function unansweredSignOut(user: number, session: string): void {
 // it got no answer, which may still end the login: then it is kept, as `backed`, to be finished if
 // it does. Only that login's record: another login's of the account (signing out in another tab)
 // stays.
+// A logout of it on its way in another tab (not answered yet) counts as one that may end the login.
 export function backFromSignOut(user: number, session: string): void {
-  change(user, session, (p) => (p.unanswered ? { ...p, phase: 'backed' } : null))
+  change(user, session, (p) =>
+    p.unanswered || logoutsOnTheirWay(user, session).length > 0 ? { ...p, phase: 'backed' } : null,
+  )
 }
 
 // The sign-out the person went back from, of the login `session`, if its logout may still end it.
@@ -178,8 +222,18 @@ export function confirmSignOut(user: number, session: string): void {
 // The sign-out is over: finished and verified, or cancelled by the same login. With `session`, only
 // that login's: the sign-out of another login of the account (recorded meanwhile) stays.
 export function settleSignOut(user: number, session?: string): void {
-  for (const p of read())
-    if (p.user === user && (session === undefined || p.session === session)) put(p.user, p.session, null)
+  for (const p of read()) {
+    if (p.user !== user || (session !== undefined && p.session !== session)) continue
+    put(p.user, p.session, null)
+    // Its logouts' marks go with it: the sign-out is over.
+    for (const key of logoutsOnTheirWay(p.user, p.session)) {
+      try {
+        window.localStorage.removeItem(key)
+      } catch {
+        // Left: harmless once the record is gone.
+      }
+    }
+  }
 }
 
 // Whether `user`'s data on this device belongs to a sign-out that isn't resolved: not to be opened

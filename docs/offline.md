@@ -571,7 +571,10 @@ signing in is dealt with when it signs in:
   the server after *Back to the app* found the login going on: Back then keeps the record, marked as
   gone back from (it holds neither the queue nor offline starts back, and no start takes it up), and
   if that login ends while it is there (a `401`, a start with nobody signed in) the sign-out is
-  finished as the person decided, the records they agreed to lose included. Back lets a sign-out go
+  finished as the person decided, the records they agreed to lose included. Every logout is marked as
+  on its way (a mark of its own) before it is sent, and the mark goes once its answer is in: Back,
+  in any tab, drops a sign-out only when no logout of that login is on its way and none went
+  unanswered, so a tab that closes with its logout still travelling leaves the sign-out kept. Back lets a sign-out go
   only once the app has started again; a step that fails leaves the person on *Couldn't sign out*.
   A logout confirmed after the same account signed in with a **newer login** (in another tab, after
   the request was sent) touches nothing on the device: the drafts, the database and the push
@@ -584,8 +587,8 @@ signing in is dealt with when it signs in:
   recorded counts as newer than it. A sign-out's record and decision are kept **per login**: a stale
   tab signing out an older login never replaces or removes a newer login's (one gone back from and
   still waiting on a logout that got no answer keeps the person's decision for when it ends). Every step of the cleanup asks again, after each wait, whether a
-  newer login started, also inside the transaction that empties the database before it changes
-  anything, and settles only its own login's record. A cleanup that found the database unreadable keeps
+  newer login started, also inside the transaction that empties the database, after each of its
+  steps (it is aborted whole, so nothing is removed or retired, once a newer login has won), and settles only its own login's record. A cleanup that found the database unreadable keeps
   the sign-out recorded and says so, whatever a later read says. Its deletion of the database is
   **one at a time with opening it** (a Web Lock per account; where the browser has none, only the
   moment between the check and the deletion is unguarded). The lock is waited for, and held, for a
