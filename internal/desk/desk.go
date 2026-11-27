@@ -94,7 +94,7 @@ func (s *Service) SaveLayout(ctx context.Context, workspaceID, userID, id, versi
 	if err != nil {
 		return Desk{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if version == 0 {
 		if _, err = tx.ExecContext(ctx, `
 			INSERT INTO desks (user_id, workspace_id, name, layout, version)
