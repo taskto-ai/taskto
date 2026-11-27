@@ -188,7 +188,7 @@ func (s *Service) searchDocs(ctx context.Context, c *call, args json.RawMessage)
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.o.Search.Search(ctx, c.Workspace, spaces, search.Query{Text: a.Query, Limit: limit, Offset: a.offset})
+	res, err := s.o.Search.Search(ctx, s.o.Access, c.User, c.Workspace, spaces, search.Query{Text: a.Query, Limit: limit, Offset: a.offset})
 	if err != nil {
 		return nil, err
 	}

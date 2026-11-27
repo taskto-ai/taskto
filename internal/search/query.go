@@ -134,11 +134,76 @@ const (
 // queryTimeout bounds the call that embeds a query.
 const queryTimeout = 15 * time.Second
 
-// Search finds q in spaces, which must be of workspaceID and readable by the caller: the
-// space RequireSpace checked, or the caller's Readable spaces. Each space is synced with
-// git first. It ranks by full text alone without an embeddings model, and fuses full-text
-// and semantic ranks with one.
-func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.Space, q Query) (Results, error) {
+// Search finds q in spaces, which must be of workspaceID and readable by userID: the space
+// RequireSpace checked, or the caller's Readable spaces. It is the one way in for a caller that acts
+// for a person (the HTTP routes, the agent's and MCP's tools): what it found is released only for
+// the spaces c says userID can read at that moment, since access may have ended while it ran (the
+// way SearchCards and SearchRecords check their own). Each space is synced with git first. It
+// ranks by full text alone without an embeddings model, and fuses full-text and semantic ranks
+// with one.
+func (x *Index) Search(ctx context.Context, c *access.Checker, userID, workspaceID int64, spaces []access.Space, q Query) (Results, error) {
+	res, err := x.searchIndex(ctx, workspaceID, spaces, q)
+	if err != nil {
+		return Results{}, err
+	}
+	if x.beforeRelease != nil {
+		x.beforeRelease()
+	}
+	return x.stillReadable(ctx, c, userID, spaces, res)
+}
+
+// stillReadable keeps of res only the results in spaces userID may still read, as the space that
+// was authorized (its workspace and generation): the search ran for access that was checked when
+// it began. When any space it searched is no longer readable, what says more is dropped too: the
+// next page's offset and the count of documents waiting for embeddings, which were of all of them.
+func (x *Index) stillReadable(ctx context.Context, c *access.Checker, userID int64, spaces []access.Space, res Results) (Results, error) {
+	readable := make(map[int64]bool, len(spaces))
+	err := c.Snapshot(ctx, func(snap *access.Checker, _ *sql.Tx) error {
+		for _, was := range spaces {
+			cur, err := snap.Check(ctx, userID, was.ID)
+			switch {
+			case errors.Is(err, access.ErrNotFound):
+				readable[was.ID] = false
+			case err != nil:
+				return err
+			default:
+				readable[was.ID] = cur.WorkspaceID == was.WorkspaceID && (was.Generation == 0 || cur.Generation == was.Generation)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return Results{}, err
+	}
+	lost := false
+	for _, ok := range readable {
+		lost = lost || !ok
+	}
+	if !lost {
+		return res, nil
+	}
+	kept := res.Results[:0:0]
+	for _, r := range res.Results {
+		if readable[r.SpaceID] {
+			kept = append(kept, r)
+		}
+	}
+	res.Results, res.NextOffset = kept, nil
+	// The pending count is of every space searched, the one lost included.
+	var notices []Notice
+	for _, n := range res.Notices {
+		if n.Code == NoticePending {
+			res.Notice = strings.TrimSpace(strings.Replace(res.Notice, fmt.Sprintf(noticePending, n.Count), "", 1))
+			continue
+		}
+		notices = append(notices, n)
+	}
+	res.Notices = notices
+	return res, nil
+}
+
+// searchIndex is Search without the check of the caller's access once it is done.
+func (x *Index) searchIndex(ctx context.Context, workspaceID int64, spaces []access.Space, q Query) (Results, error) {
 	match, err := checkQuery(&q)
 	if err != nil {
 		return Results{}, err
@@ -564,7 +629,7 @@ func (x *Index) nearest(ctx context.Context, workspaceID int64, in string, ep ra
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err
 	}
-	found, rest, err := x.vectors.nearest(ctx, x.db, workspaceID, spaces, key, qv)
+	found, rest, err := x.vectors.nearest(ctx, x.db, workspaceID, spaces, ep, qv)
 	if err != nil {
 		return nil, err
 	}

@@ -129,63 +129,11 @@ func (x *Index) search(w http.ResponseWriter, r *http.Request, c *access.Checker
 	if q.Offset, ok = queryInt(w, r, "offset"); !ok {
 		return
 	}
-	res, err := x.Search(r.Context(), workspaceID, spaces, q)
+	res, err := x.Search(r.Context(), c, userID, workspaceID, spaces, q)
 	if searchFailed(w, r, err) {
 		return
 	}
-	if x.beforeRelease != nil {
-		x.beforeRelease()
-	}
-	// The caller's access to each space the results are of is asked again, as it is now, before
-	// anything is released: they may have lost it while the search ran.
-	if res, err = x.stillReadable(r.Context(), c, userID, spaces, res); err != nil {
-		serverError(w, r, err)
-		return
-	}
 	writeJSON(w, http.StatusOK, res)
-}
-
-// stillReadable keeps of res only the results in spaces userID may still read, as the space that
-// was authorized (its workspace and generation): the search ran for access that was checked when
-// the request began.
-func (x *Index) stillReadable(ctx context.Context, c *access.Checker, userID int64, spaces []access.Space, res Results) (Results, error) {
-	if len(res.Results) == 0 {
-		return res, nil
-	}
-	authorized := make(map[int64]access.Space, len(spaces))
-	for _, sp := range spaces {
-		authorized[sp.ID] = sp
-	}
-	readable := map[int64]bool{}
-	err := c.Snapshot(ctx, func(snap *access.Checker, _ *sql.Tx) error {
-		for _, r := range res.Results {
-			if _, done := readable[r.SpaceID]; done {
-				continue
-			}
-			was := authorized[r.SpaceID]
-			cur, err := snap.Check(ctx, userID, r.SpaceID)
-			switch {
-			case errors.Is(err, access.ErrNotFound):
-				readable[r.SpaceID] = false
-			case err != nil:
-				return err
-			default:
-				readable[r.SpaceID] = cur.WorkspaceID == was.WorkspaceID && (was.Generation == 0 || cur.Generation == was.Generation)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return Results{}, err
-	}
-	kept := res.Results[:0:0]
-	for _, r := range res.Results {
-		if readable[r.SpaceID] {
-			kept = append(kept, r)
-		}
-	}
-	res.Results = kept
-	return res, nil
 }
 
 // searchCards is search for the cards of spaces' boards.
