@@ -17,10 +17,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// The container mode's OS boundary: each user's CLIs run as a Unix user of their own. These
-// tests need root on Linux (CI runs them in a container, see .github/workflows/ci.yml);
-// elsewhere they are skipped.
-
 const isoBase = 200000
 
 type isoHarness struct {
@@ -34,8 +30,6 @@ func newIsolated(t *testing.T) *isoHarness {
 	if os.Geteuid() != 0 {
 		t.Skip("the isolation tests need root (Linux); CI runs them in a container")
 	}
-	// Everything the users' processes run must be reachable by them: a directory others can
-	// pass through, a copy of this test binary as the helper and the fake CLIs.
 	base := t.TempDir()
 	for d := base; d != "/" && d != os.TempDir(); d = filepath.Dir(d) {
 		if err := os.Chmod(d, 0o711); err != nil {
@@ -104,7 +98,6 @@ func copyFile(t *testing.T, to string) {
 	}
 }
 
-// signIn connects user's fake cli the way its login would: as the user, through the helper.
 func (h *isoHarness) signIn(t *testing.T, user int64, cli cliworker.CLI) {
 	t.Helper()
 	l, err := h.w.StartLogin(user, cli, "")
@@ -128,7 +121,6 @@ func (h *isoHarness) signIn(t *testing.T, user int64, cli cliworker.CLI) {
 	}
 }
 
-// approveAs approves a device login as the user would, writing the fake's file as its owner.
 func approveAs(t *testing.T, configDir string, uid int) {
 	t.Helper()
 	clitest.Approve(t, configDir)
@@ -137,7 +129,6 @@ func approveAs(t *testing.T, configDir string, uid int) {
 	}
 }
 
-// scenario writes the fake's scenario for user as the user's own file.
 func (h *isoHarness) scenario(t *testing.T, user int64, cli cliworker.CLI, s clitest.Scenario) {
 	t.Helper()
 	dir := h.layout.User(user).Config(cli)
@@ -160,16 +151,13 @@ func TestIsolationEachUserIsAUnixUser(t *testing.T) {
 		if got := probeResult(done.Text, "uid"); got != fmt.Sprintf("ok %d %d", isoBase+1, isoBase+1) {
 			t.Errorf("%s ran as %s", cli, got)
 		}
-		// No capabilities: nothing to escalate with.
 		if got := probeResult(done.Text, "caps"); !strings.Contains(got, "CapPrm: 0000000000000000") || !strings.Contains(got, "CapEff: 0000000000000000") {
 			t.Errorf("%s capabilities: %s", cli, got)
 		}
-		// no_new_privs: a setuid program couldn't give it any either.
 		if got := probeResult(done.Text, "nnp"); got != "ok 1" {
 			t.Errorf("%s no_new_privs: %s", cli, got)
 		}
 	}
-	// The user exists, and their directory is theirs alone.
 	passwd, err := os.ReadFile(h.cfg.Isolation.Passwd)
 	if err != nil || !strings.Contains(string(passwd), fmt.Sprintf("tt1:x:%d:%d:", isoBase+1, isoBase+1)) {
 		t.Fatalf("passwd = %q %v", passwd, err)
@@ -183,8 +171,6 @@ func TestIsolationEachUserIsAUnixUser(t *testing.T) {
 	}
 }
 
-// What the spike saw Codex do (cat another user's file) fails here: one user's CLI can't read,
-// list, write or signal anything of another user's, nor list the users.
 func TestIsolationBetweenUsers(t *testing.T) {
 	h := newIsolated(t)
 	h.signIn(t, 1, cliworker.Claude)
@@ -195,7 +181,6 @@ func TestIsolationBetweenUsers(t *testing.T) {
 		t.Fatalf("user 1's login: %v", err)
 	}
 
-	// User 1 runs something long, so there is a process to signal.
 	h.scenario(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 20_000})
 	long, _, err := h.w.Start(spec("long", 1, cliworker.Claude, "slow"))
 	if err != nil {
@@ -230,19 +215,15 @@ func TestIsolationBetweenUsers(t *testing.T) {
 	if got := probeResult(done.Text, "kill:"+strconv.Itoa(victim)); !strings.Contains(got, "operation not permitted") {
 		t.Errorf("user 2 signalled user 1's CLI: %s", got)
 	}
-	// The account files are public, as on any system: they hold no secrets.
 	if got := probeResult(done.Text, "read:"+h.cfg.Isolation.Passwd); !strings.HasPrefix(got, "ok") {
 		t.Errorf("reading passwd: %s", got)
 	}
-	// User 1's CLI is untouched.
 	h.w.Stop("long")
 	if d := last(waitDone(t, long, 15*time.Second)); d.Status != cliworker.StatusStopped {
 		t.Errorf("user 1's turn: %+v", d)
 	}
 }
 
-// A new worker kills every process of every CLI user before it does anything: a uid, unlike
-// a PID, can't belong to something else.
 func TestIsolationNewWorkerKillsEveryCLIProcess(t *testing.T) {
 	h := newIsolated(t)
 	h.signIn(t, 1, cliworker.Grok)
@@ -270,8 +251,6 @@ func TestIsolationNewWorkerKillsEveryCLIProcess(t *testing.T) {
 	}
 }
 
-// A user's directory that isn't theirs (a symlink planted before the worker made it, or
-// another user's) is refused, not followed.
 func TestIsolationRefusesAForeignDirectory(t *testing.T) {
 	h := newIsolated(t)
 	if err := os.Symlink("/etc", h.layout.User(3).Root); err != nil {
@@ -281,7 +260,7 @@ func TestIsolationRefusesAForeignDirectory(t *testing.T) {
 	if done.Status != cliworker.StatusFailed || !strings.Contains(done.Text, "not a directory") {
 		t.Fatalf("done = %+v", done)
 	}
-	if err := os.Mkdir(h.layout.User(4).Root, 0o700); err != nil { // root's, not user 4's
+	if err := os.Mkdir(h.layout.User(4).Root, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	done = last(run(t, h.w, spec("foreign", 4, cliworker.Claude, "hi")))
@@ -290,8 +269,6 @@ func TestIsolationRefusesAForeignDirectory(t *testing.T) {
 	}
 }
 
-// The first uid must be above every system and image uid: the start-up sweep kills every
-// process from it up.
 func TestIsolationRefusesALowUIDBase(t *testing.T) {
 	h := newIsolated(t)
 	for _, base := range []int{-1, 1, 1000, 65534} {
@@ -303,8 +280,6 @@ func TestIsolationRefusesALowUIDBase(t *testing.T) {
 	}
 }
 
-// An account entry that would make a user someone else (the name with another uid, or the
-// uid with another name) is refused, not duplicated.
 func TestIsolationRefusesAConflictingAccount(t *testing.T) {
 	h := newIsolated(t)
 	f, err := os.OpenFile(h.cfg.Isolation.Passwd, os.O_APPEND|os.O_WRONLY, 0)
@@ -321,9 +296,6 @@ func TestIsolationRefusesAConflictingAccount(t *testing.T) {
 	}
 }
 
-// A user's commands can ask the approval socket only about their own turns: the worker
-// knows who asks from the socket's peer uid, so naming another user's session reaches
-// nothing of theirs.
 func TestIsolationPermissionQuestionsStayWithTheirUser(t *testing.T) {
 	h := newIsolated(t)
 	h.signIn(t, 1, cliworker.Claude)
@@ -343,7 +315,6 @@ func TestIsolationPermissionQuestionsStayWithTheirUser(t *testing.T) {
 	if done.Status != cliworker.StatusOK {
 		t.Fatalf("user 2's turn: %+v", done)
 	}
-	// User 2's hook reached no turn: none of user 2's runs that session.
 	if got := probeResult(done.Text, "ask:"+s1.Session); !strings.Contains(got, "no running turn") {
 		t.Errorf("user 2's question about user 1's session: %s", got)
 	}
@@ -356,8 +327,6 @@ func TestIsolationPermissionQuestionsStayWithTheirUser(t *testing.T) {
 	waitDone(t, turn, 20*time.Second)
 }
 
-// Without a Unix user per taskto user, a worker running as root would run the CLIs as root:
-// the helper refuses, unless the development override is set (docs/agent-safety.md).
 func TestIsolationRefusesRootInLocalMode(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("needs root (Linux); CI runs it in a container")

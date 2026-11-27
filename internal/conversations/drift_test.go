@@ -9,7 +9,6 @@ import (
 	"taskto.ai/taskto/internal/agentrt"
 )
 
-// fakeSidecar is the agent runtime's list of conversations.
 type fakeSidecar struct {
 	list    []agentrt.ConversationInfo
 	retired []int64
@@ -49,13 +48,13 @@ func TestDrift(t *testing.T) {
 	old := now.Add(-OrphanGrace - time.Second).UnixMilli()
 	rt := &fakeSidecar{list: []agentrt.ConversationInfo{
 		{ID: 101, CreatedAt: old},
-		{ID: 103, CreatedAt: old, Retired: true}, // recorded, but the agent runtime refuses it
-		{ID: 200, CreatedAt: old},                // an orphan
-		{ID: 201, CreatedAt: now.UnixMilli()},    // maybe being recorded right now
-		{ID: 202},                                // an orphan from before creation times were kept
-		{ID: 203, CreatedAt: old},                // recorded below, after the check
-		{ID: 204, CreatedAt: old, Retired: true}, // an orphan retired already
-		{ID: 205, CreatedAt: old},                // gone by the time it is retired
+		{ID: 103, CreatedAt: old, Retired: true},
+		{ID: 200, CreatedAt: old},
+		{ID: 201, CreatedAt: now.UnixMilli()},
+		{ID: 202},
+		{ID: 203, CreatedAt: old},
+		{ID: 204, CreatedAt: old, Retired: true},
+		{ID: 205, CreatedAt: old},
 	}}
 
 	d, err := CheckDrift(ctx, e.db, rt, now)
@@ -106,9 +105,8 @@ func TestDrift(t *testing.T) {
 		t.Fatalf("conversations left = %v, want only %d", left, kept)
 	}
 
-	// Recorded since the check: not retired after all.
 	record(203)
-	rt.list[len(rt.list)-1].Retired = true // 205: gone meanwhile, which isn't an error
+	rt.list[len(rt.list)-1].Retired = true
 	n, err = RetireOrphans(ctx, e.db, rt, d.Orphans)
 	if err != nil || n != 2 {
 		t.Fatalf("RetireOrphans = %d, %v; want 2", n, err)
@@ -117,7 +115,6 @@ func TestDrift(t *testing.T) {
 		t.Fatalf("retired = %v, want 200 and 202", rt.retired)
 	}
 
-	// Nothing is left to find.
 	if d, err := CheckDrift(ctx, e.db, rt, now); err != nil || len(d.Lost) != 0 || len(d.Orphans) != 0 {
 		t.Fatalf("CheckDrift after cleaning = %+v, %v; want nothing", d, err)
 	}

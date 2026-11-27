@@ -1,18 +1,4 @@
-// Building an app by asking the agent: you describe it, choose where it lives (your private space,
-// unless you pick a shared one), and the agent makes a draft with sample data in a conversation.
-// On a wide screen the conversation is beside a live preview of the draft, across the whole width;
-// on a phone Build and Preview are two panes of which one shows, chosen with a switch, and both stay
-// mounted, so neither loses its place (the conversation its scroll and message, the preview its
-// form) when you switch. What the
-// preview does is simulated on sample data and changes nothing real (docs/api.md, …/preview);
-// publishing is a separate, plain step with who can use the app and what it can read and change.
-// "Edit with AI" is the same, started on an existing app: the agent changes its draft, and the
-// published release keeps working until someone publishes.
-//
-// What is kept in this browser (the message not sent yet, the app being built, the pane a phone
-// showed) is a convenience only; the conversation and the draft are on the server.
-
-import { type FormEvent, useCallback, useEffect, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useEffectEvent, useState } from 'react'
 import { ApiError, type App, api, type Conversation, type Space, ws } from '../api'
 import { ConversationView } from '../conversations/ConversationView'
 import type { History } from '../conversations/history'
@@ -44,20 +30,12 @@ import { appPath, type BuilderRoute, builderPath, templatesPath } from './route'
 import { type Where, WhereChoice, writableSpaces } from './WhereChoice'
 import './Apps.css'
 
-// What a builder session knows: where the app lives and which app it is, once the agent has saved
-// one, and `since`, the newest entry the conversation had when the building began: only an app
-// the agent saved after it is this build's (a conversation may have saved others before, and the
-// builder never takes one of those for the app being built). An app that was chosen, to edit it,
-// is in the session from the start. It is kept in this browser as a convenience, and the page holds
-// it in its own state, so a browser that keeps nothing builds all the same.
 type Session = { space: number; app?: number; since?: number }
 
-// These keys belong to the signed-in user (uiState.draftKey).
 const sessionKey = (workspace: number, conversation: number) => draftKey('builder', workspace, conversation)
 const lastKey = (workspace: number) => draftKey('builder', workspace, 'last')
 const paneKey = (workspace: number, conversation: number) => draftKey('builder-pane', workspace, conversation)
 
-// The conversation a person was last building in, to continue it from the Apps page.
 export function lastBuilderConversation(workspace: number): number | null {
   const n = Number(readDraft(lastKey(workspace)))
   return Number.isSafeInteger(n) && n > 0 && readDraftJson<Session>(sessionKey(workspace, n)) ? n : null
@@ -73,7 +51,6 @@ export function AppBuilder({
   streams?: EventSourceFactory
 }) {
   const conversation = route.kind === 'conversation' ? route.conversation : null
-  // The sessions started on this page, whatever the browser kept.
   const [started, setStarted] = useState<Record<number, Session>>({})
   const session = conversation
     ? (started[conversation] ?? readDraftJson<Session>(sessionKey(workspace, conversation)))
@@ -96,8 +73,6 @@ export function AppBuilder({
       route={route}
       onStarted={(id, next) => {
         setStarted((all) => ({ ...all, [id]: next }))
-        // Building in the conversation the page is already on has no address to go to: the session
-        // is what changes.
         if (!(route.kind === 'conversation' && route.conversation === id)) {
           navigate(builderPath(workspace, { kind: 'conversation', conversation: id }))
         }
@@ -106,7 +81,6 @@ export function AppBuilder({
   )
 }
 
-// The start: what the app should do, and where it lives.
 function BuilderStart({
   workspace,
   route,
@@ -127,8 +101,8 @@ function BuilderStart({
     [workspace, editing?.space, editing?.app],
   )
   const [description, setDescription] = useState(() => readDraft(textKey) ?? '')
-  // biome-ignore lint/correctness/useExhaustiveDependencies: written when the text changes
-  useEffect(() => writeDraft(textKey, description.trim() ? description : null), [description])
+  const keepText = useEffectEvent((text: string) => writeDraft(textKey, text.trim() ? text : null))
+  useEffect(() => keepText(description), [description])
   const [where, setWhere] = useState<Where>('private')
   const [shared, setShared] = useState('')
   const [busy, setBusy] = useState(false)
@@ -141,9 +115,6 @@ function BuilderStart({
       ? mine
       : sharedSpaces.find((s) => String(s.id) === shared)
   const mayEdit = !editing || (target.data?.access.design && chosen?.access === 'write')
-  // Its steps go on only while the page is there and the session is the one that began them: one
-  // that answers after the person left, logged out, or someone else signed in, sends nothing more
-  // (not their prompt, not its title), keeps no draft and opens nothing.
   const mounted = useMounted()
 
   const start = async (e: FormEvent) => {
@@ -157,8 +128,6 @@ function BuilderStart({
       const id =
         conversation ??
         s.check(await api<Conversation>(`${ws(workspace)}/conversations`, { method: 'POST', body: {} })).id
-      // Where this build begins: what the conversation already holds (it may have saved other apps
-      // before) isn't part of it. A conversation made here is empty.
       const since = conversation
         ? (s.check(await api<History>(`${ws(workspace)}/conversations/${id}/entries`)).entries.at(-1)?.id ?? 0)
         : 0
@@ -185,7 +154,6 @@ function BuilderStart({
           },
         }),
       )
-      // The title is a nicety: the conversation is there either way.
       if (!conversation) {
         const title = (app?.name ?? content).replace(/\s+/g, ' ').slice(0, 60)
         s.check(
@@ -202,7 +170,6 @@ function BuilderStart({
     } catch (err) {
       if (s.ok()) setError(appError(err))
     } finally {
-      // The button is this screen's: ready again while it is here, whatever became of the session.
       if (mounted.current) setBusy(false)
     }
   }
@@ -259,7 +226,6 @@ function BuilderStart({
 
 type Pane = 'build' | 'preview'
 
-// The conversation and the preview of what it builds.
 function BuilderSession({
   workspace,
   conversation,
@@ -278,11 +244,9 @@ function BuilderSession({
     readDraft(paneKey(workspace, conversation)) === 'preview' ? 'preview' : 'build',
   )
   const [save, setSave] = useState<string | null>(null)
-  // The agent saved the app while the person was on the other pane.
   const [fresh, setFresh] = useState(false)
   const spaces = useLoad(() => api<{ spaces: Space[] }>(`${ws(workspace)}/spaces`).then((r) => r.spaces), [workspace])
   const base = session.app ? `${ws(workspace)}/spaces/${session.space}/apps/${session.app}` : null
-  // null: the server has no such app for this user (removed, moved, or its space is no longer theirs).
   const info = useLoad(
     () =>
       base
@@ -294,12 +258,10 @@ function BuilderSession({
     [base],
   )
   const reload = info.reload
-  // biome-ignore lint/correctness/useExhaustiveDependencies: read again after each save, keeping what is shown
   useEffect(() => {
     if (save) reload()
-  }, [save])
+  }, [save, reload])
 
-  // This is the conversation the Apps page offers to continue.
   useEffect(() => writeDraft(lastKey(workspace), String(conversation)), [workspace, conversation])
   const choose = (next: Pane) => {
     setPane(next)
@@ -400,8 +362,6 @@ function BuilderSession({
   )
 }
 
-// Where the draft being built stands: live, with changes not published yet, never published, or
-// offline.
 function DraftMarker({ app }: { app: App }) {
   const t = useT()
   if (app.archived_at) return <Badge tone="neutral">{t('apps.offlineBadge')}</Badge>
@@ -424,7 +384,6 @@ function DraftMarker({ app }: { app: App }) {
   )
 }
 
-// The draft the conversation is building, and publishing it.
 function BuilderPreview({
   workspace,
   session,
@@ -436,7 +395,6 @@ function BuilderPreview({
   session: Session
   spaces: Space[] | undefined
   base: string | null
-  // The app being built, read again after each save the agent makes.
   info: { data?: App | null; error?: string | null; reload: () => void }
 }) {
   const t = useT()

@@ -2,9 +2,6 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, posix, relative, resolve } from 'node:path'
 import { expect, test } from 'vitest'
 
-// The image's web build (the Dockerfile's js stage) type-checks the tests too, so every file of
-// internal/ that web/src imports must be copied into that stage, or the Images workflow fails
-// while CI, which builds from the whole checkout, stays green.
 const repo = resolve(__dirname, '../..')
 
 function sources(dir: string): string[] {
@@ -15,9 +12,6 @@ function sources(dir: string): string[] {
   })
 }
 
-// copiedBesideWeb returns the directories of internal/ a Dockerfile copies where web/src's relative
-// imports look for them: in a stage that copies web/, at the same root (each destination resolved
-// against the WORKDIR in effect on its line, which a FROM resets).
 function copiedBesideWeb(dockerfile: string): string[] {
   type Copy = { src: string; dest: string }
   const stages: Copy[][] = []
@@ -69,7 +63,6 @@ test('a COPY counts only where the web app looks for it', () => {
   expect(copiedBesideWeb(stage('COPY internal/apps/templates/ /src/internal/apps/templates/'))).toEqual([
     'internal/apps/templates',
   ])
-  // Somewhere else, under another working directory, or in a stage without the web app: not copied.
   expect(copiedBesideWeb(stage('COPY internal/apps/templates/ /tmp/templates/'))).toEqual([])
   expect(copiedBesideWeb(stage('WORKDIR /other\nCOPY internal/apps/templates/ internal/apps/templates/'))).toEqual([])
   expect(copiedBesideWeb(`${stage('')}WORKDIR /src\nCOPY internal/apps/templates/ internal/apps/templates/\n`)).toEqual(

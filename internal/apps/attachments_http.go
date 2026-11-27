@@ -9,13 +9,8 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// RawBodyRoutes are the routes that take a body other than JSON: a chunk of an upload, as
-// application/octet-stream. auth.CSRF lets that type through to them only, and checks them as it
-// does every state change (the same-origin check, and no other type than the two).
 var RawBodyRoutes = []string{"PUT /api/workspaces/{workspace}/spaces/{space}/apps/{app}/uploads/{upload}"}
 
-// attachmentRoutes mounts the upload and attachment routes, each behind the same session and
-// space checks as the app's other routes. Only if the service keeps files.
 func (s *Service) attachmentRoutes(mux *http.ServeMux, read, write func(http.HandlerFunc) http.Handler, apps string) {
 	mux.Handle("POST "+apps+"/{app}/uploads", write(s.handleUploadCreate))
 	mux.Handle("GET "+apps+"/{app}/uploads/{upload}", read(s.handleUploadState))
@@ -56,8 +51,6 @@ func (s *Service) handleUploadState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, up)
 }
 
-// handleUploadChunk takes the bytes of one chunk, at ?offset=, in the body: whole, up to MaxChunk,
-// before anything is written, so a connection that drops half way changes nothing.
 func (s *Service) handleUploadChunk(w http.ResponseWriter, r *http.Request) {
 	req, ok := parse(w, r, true)
 	if !ok {
@@ -79,7 +72,7 @@ func (s *Service) handleUploadChunk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusRequestEntityTooLarge, apierr.CodeAppUploadChunk, "a chunk is at most 2 MiB", apierr.Params{"max": MaxChunk})
 		return
 	case err != nil:
-		return // the connection dropped: nothing was written
+		return
 	}
 	up, err := s.putChunk(r.Context(), req.space, req.actor, req.app, r.PathValue("upload"), offset, data)
 	if err != nil {
@@ -94,7 +87,6 @@ func (s *Service) handleUploadFinalize(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// The body, if any, is an empty object: there is nothing to say.
 	var none struct{}
 	if r.ContentLength != 0 && !readJSON(w, r, &none) {
 		return
@@ -127,10 +119,6 @@ func (s *Service) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 	s.serveAttachment(w, r, true)
 }
 
-// serveAttachment answers with a picture the caller may read, as something a browser may only
-// show: its own type (found in its bytes), never sniffed into another, an inline picture with a
-// name made here, a policy that lets the response load nothing, and nothing kept by a shared cache
-// that could outlive the caller's right to it.
 func (s *Service) serveAttachment(w http.ResponseWriter, r *http.Request, thumb bool) {
 	req, ok := parse(w, r, true)
 	if !ok {
@@ -158,7 +146,6 @@ func (s *Service) serveAttachment(w http.ResponseWriter, r *http.Request, thumb 
 	http.ServeContent(w, r, f.Name, fi.ModTime(), f)
 }
 
-// failUpload answers an upload's error: the package's, and an upload's own.
 func (s *Service) failUpload(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, ErrInvalid) {
 		invalid(w, http.StatusBadRequest, err)

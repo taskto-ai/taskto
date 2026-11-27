@@ -1,8 +1,3 @@
-// The audit log of the workspace, for its admins: who did what to which thing, when and from
-// which address (docs/audit.md). Newest first, with filters and a button for older events. The
-// names of people and things are the server's, read when the log is: a person who has left is
-// shown by their number only.
-
 import { useMemo, useRef, useState } from 'react'
 import { type AuditEntry, type AuditPage, api, type Member, ws } from '../api'
 import { type Format, has, type Key, useFormat, useT } from '../i18n'
@@ -16,8 +11,6 @@ import { Select } from '../ui/Select'
 import { Table } from '../ui/Table'
 import { Alert, FormActions, Loading, SettingsTab, useAction } from './parts'
 
-// Every action the server records (internal/audit/actions.go): a test checks that this list, the
-// server's and both languages' labels agree.
 export const AUDIT_ACTIONS = [
   'setup_completed',
   'login_succeeded',
@@ -97,7 +90,6 @@ export const AUDIT_TARGETS = [
   'app_integration_approval',
 ] as const
 
-// The names of the facts an event may carry (internal/audit/schema.go).
 export const AUDIT_DETAILS = [
   'access_grants',
   'account',
@@ -161,10 +153,8 @@ const PAGE = 50
 type Filters = { action: string; actor: string; target: string; from: string; to: string }
 const NONE: Filters = { action: '', actor: '', target: '', from: '', to: '' }
 
-// A date input's day, from midnight to midnight where the admin is: the server compares times.
 function dayStart(day: string, plus = 0): string {
   const [y, m, d] = day.split('-').map(Number)
-  // setFullYear, not the constructor: years 0 to 99 are 1900 to 1999 there.
   const date = new Date(2000, 0, 1)
   date.setFullYear(y, m - 1, d + plus)
   return date.toISOString()
@@ -187,7 +177,6 @@ export function AuditTab({ workspace }: { workspace: number }) {
   const query = useMemo(() => queryOf(filters), [filters])
   const members = useLoad(() => api<{ members: Member[] }>(`${base}/members`).then((r) => r.members), [base])
   const first = useLoad(() => api<AuditPage>(`${base}/audit?${query}`), [base, query])
-  // Older pages the admin asked for, of one query: a new query or a refresh drops them.
   const [older, setOlder] = useState<{ query: string; events: AuditEntry[]; next: string } | null>(null)
   const action = useAction()
 
@@ -195,7 +184,6 @@ export function AuditTab({ workspace }: { workspace: number }) {
   const events = [...(first.data?.events ?? []), ...(shown?.events ?? [])]
   const next = shown ? shown.next : (first.data?.next ?? '')
 
-  // Bumped when what is shown is replaced, so an older page that was still on its way is dropped.
   const generation = useRef(0)
   const change = (patch: Partial<Filters>) => {
     generation.current++
@@ -322,8 +310,6 @@ const targetKey = (x: string) => `settings.audit.targets.${x}` as Key
 const detailKey = (d: string) => `settings.audit.details.${d}` as Key
 const valueKey = (v: string) => `settings.audit.values.${v}` as Key
 
-// The details whose values are codes with a translation (roles, modes, the names of fields); the
-// rest are names and addresses, shown as they are.
 const CODED = new Set([
   'allowed_by',
   'role',

@@ -1,13 +1,3 @@
-// A location field's input (docs/api.md, "Location, signature and barcode fields").
-//
-// The position is read once, in the foreground: when the person presses "Capture location" or,
-// for a field whose capture is "submit", as they submit the form (submit.ts). It is never watched
-// and never read in the background. Where the browser can't give it (the person said no, the
-// device has no position, the page isn't secure) the reason is said in words and the person types
-// the coordinates, which are stored as entered by hand. What is stored is evidence: the server
-// refuses to change it afterwards (unless the field says it is editable), so a stored location is
-// drawn read-only.
-
 import { useContext, useEffect, useId, useRef, useState } from 'react'
 import { useFormat, useT } from '../i18n'
 import { Button } from '../ui/Button'
@@ -31,10 +21,8 @@ export function LocationField({
   label?: string
   field: string
   value: Location | undefined
-  // Called with the new location, or undefined when the person removes it.
   onChange: (value: Location | undefined) => void
   info?: CaptureInfo
-  // Only shows what is stored.
   readOnly?: boolean
 }) {
   const t = useT()
@@ -73,8 +61,6 @@ export function LocationField({
   const captureRef = useRef(capture)
   captureRef.current = capture
 
-  // A field taken at submit: the screen asks for it as the form's button is pressed, once, if the
-  // person hasn't already given one.
   useEffect(() => {
     if (!submit || readOnly || at !== 'submit') return
     return submit.register(field, async () => {
@@ -170,7 +156,6 @@ export function LocationField({
           </Field>
           <Button onClick={applyManual}>{t('apps.location.useManual')}</Button>
           {invalid && (
-            // Named by id: both coordinate inputs are described by it, not only announced once.
             <div id={`${ids}-manual-error`} className="ui-capture-error">
               <Notice tone="danger">{t('apps.location.manualInvalid')}</Notice>
             </div>

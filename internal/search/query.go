@@ -18,79 +18,56 @@ import (
 	"taskto.ai/taskto/internal/egress"
 )
 
-// Limits of a search.
 const (
 	DefaultLimit = 20
 	MaxLimit     = 100
-	// MaxOffset is the deepest a search pages: past it, refine the query.
-	MaxOffset = 1000
-	// MaxQueryLen is the longest query, in bytes; maxTerms the most words and phrases of
-	// one that count, and maxTokens the most words in all, counting each character of an
-	// unspaced script (see segment) as one.
-	MaxQueryLen = 500
-	maxTerms    = 32
-	maxTokens   = 64
+	MaxOffset    = 1000
+	MaxQueryLen  = 500
+	maxTerms     = 32
+	maxTokens    = 64
 )
 
-// Query is a search.
 type Query struct {
 	Text   string
-	Limit  int // 0 for DefaultLimit
+	Limit  int
 	Offset int
 }
 
-// Segment is a piece of a snippet; Match marks the words that matched.
 type Segment struct {
 	Text  string `json:"text"`
 	Match bool   `json:"match,omitempty"`
 }
 
-// Result is a document found.
 type Result struct {
-	SpaceID   int64  `json:"space_id"`
-	SpaceName string `json:"space_name"`
-	Path      string `json:"path"`
-	Title     string `json:"title"`
-	// Snippet is the passage of the text that matched, as plain text in pieces: never
-	// markup, so it is safe to show as it is.
-	Snippet []Segment `json:"snippet"`
-	// Score orders the results, higher first. It compares results of one search only.
-	Score float64 `json:"score"`
-	// Match says what found it: "text", "semantic" or both.
-	Match string `json:"match"`
-	// Version is the document's version, and Commit main's commit, that the index had:
-	// read the document at Commit to see what was found.
-	Version string `json:"version"`
-	Commit  string `json:"commit"`
+	SpaceID   int64     `json:"space_id"`
+	SpaceName string    `json:"space_name"`
+	Path      string    `json:"path"`
+	Title     string    `json:"title"`
+	Snippet   []Segment `json:"snippet"`
+	Score     float64   `json:"score"`
+	Match     string    `json:"match"`
+	Version   string    `json:"version"`
+	Commit    string    `json:"commit"`
 }
 
-// The modes of a search.
 const (
 	ModeFullText = "fulltext"
 	ModeHybrid   = "hybrid"
 )
 
-// Results are a page of results.
 type Results struct {
-	Results []Result `json:"results"`
-	// Mode is ModeHybrid when semantic search took part, ModeFullText when not; Notice
-	// then says why, or what semantic search can't find yet.
-	Mode   string `json:"mode"`
-	Notice string `json:"notice,omitempty"`
-	// Notices are what Notice says, as codes, for a client to say in its own language.
-	Notices []Notice `json:"notices,omitempty"`
-	// NextOffset is the next page's offset, if there are more results.
-	NextOffset *int `json:"next_offset,omitempty"`
+	Results    []Result `json:"results"`
+	Mode       string   `json:"mode"`
+	Notice     string   `json:"notice,omitempty"`
+	Notices    []Notice `json:"notices,omitempty"`
+	NextOffset *int     `json:"next_offset,omitempty"`
 }
 
-// Notice is one part of a search's notice: one of the Notice… codes, and for
-// NoticePending, how many documents are still being embedded.
 type Notice struct {
 	Code  string `json:"code"`
 	Count int    `json:"count,omitempty"`
 }
 
-// The codes of a search's notices. Each keeps its meaning once released.
 const (
 	NoticeOff       = "embeddings_off"
 	NoticeFailed    = "embeddings_failed"
@@ -100,16 +77,12 @@ const (
 	NoticeBehind    = "behind"
 )
 
-// note sets the notice: text, and its code.
 func (r *Results) note(n Notice, text string) {
 	r.Notice, r.Notices = text, []Notice{n}
 }
 
-// ErrInvalid is for a query that can't be run; its message says why.
 var ErrInvalid = errors.New("invalid search")
 
-// invalidError is ErrInvalid with the API's code for it and its message's params
-// (internal/apierr); without one, it is apierr.CodeBadRequest.
 type invalidError struct {
 	error
 	code   apierr.Code
@@ -131,23 +104,73 @@ const (
 	noticePending   = "%d documents are still being embedded; until they are, only their text is searched."
 )
 
-// queryTimeout bounds the call that embeds a query.
 const queryTimeout = 15 * time.Second
 
-// Search finds q in spaces, which must be of workspaceID and readable by the caller: the
-// space RequireSpace checked, or the caller's Readable spaces. Each space is synced with
-// git first. It ranks by full text alone without an embeddings model, and fuses full-text
-// and semantic ranks with one.
-func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.Space, q Query) (Results, error) {
+func (x *Index) Search(ctx context.Context, c *access.Checker, userID, workspaceID int64, spaces []access.Space, q Query) (Results, error) {
+	res, err := x.searchIndex(ctx, workspaceID, spaces, q)
+	if err != nil {
+		return Results{}, err
+	}
+	if x.beforeRelease != nil {
+		x.beforeRelease()
+	}
+	return x.stillReadable(ctx, c, userID, spaces, res)
+}
+
+func (x *Index) stillReadable(ctx context.Context, c *access.Checker, userID int64, spaces []access.Space, res Results) (Results, error) {
+	readable := make(map[int64]bool, len(spaces))
+	err := c.Snapshot(ctx, func(snap *access.Checker, _ *sql.Tx) error {
+		for _, was := range spaces {
+			cur, err := snap.Check(ctx, userID, was.ID)
+			switch {
+			case errors.Is(err, access.ErrNotFound):
+				readable[was.ID] = false
+			case err != nil:
+				return err
+			default:
+				readable[was.ID] = cur.WorkspaceID == was.WorkspaceID && (was.Generation == 0 || cur.Generation == was.Generation)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return Results{}, err
+	}
+	lost := false
+	for _, ok := range readable {
+		lost = lost || !ok
+	}
+	if !lost {
+		return res, nil
+	}
+	kept := res.Results[:0:0]
+	for _, r := range res.Results {
+		if readable[r.SpaceID] {
+			kept = append(kept, r)
+		}
+	}
+	res.Results, res.NextOffset = kept, nil
+	var notices []Notice
+	for _, n := range res.Notices {
+		if n.Code == NoticePending {
+			res.Notice = strings.TrimSpace(strings.Replace(res.Notice, fmt.Sprintf(noticePending, n.Count), "", 1))
+			continue
+		}
+		notices = append(notices, n)
+	}
+	res.Notices = notices
+	return res, nil
+}
+
+func (x *Index) searchIndex(ctx context.Context, workspaceID int64, spaces []access.Space, q Query) (Results, error) {
 	match, err := checkQuery(&q)
 	if err != nil {
 		return Results{}, err
 	}
 	names := map[int64]string{}
-	ids := []int64{}
+	scope := []scopeEntry{}
 	behind := false
 	for _, sp := range spaces {
-		// Never anything else, whatever the caller passes.
 		if sp.WorkspaceID != workspaceID || !sp.Access.Allows(access.Read) {
 			continue
 		}
@@ -160,13 +183,12 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 		}
 		behind = behind || !synced
 		names[sp.ID] = sp.Name
-		ids = append(ids, sp.ID)
+		scope = append(scope, scopeEntry{ID: sp.ID, Workspace: sp.WorkspaceID, Generation: sp.Generation})
 	}
-	if len(ids) == 0 {
-		// No space to search: nothing found, and nothing to say about semantic search.
+	if len(scope) == 0 {
 		return Results{Results: []Result{}, Mode: ModeFullText}, nil
 	}
-	idsJSON, err := json.Marshal(ids)
+	idsJSON, err := json.Marshal(scope)
 	if err != nil {
 		return Results{}, err
 	}
@@ -177,11 +199,13 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 	e, ep, err := x.embeddings(ctx, workspaceID)
 	var embeddable bool
 	if err == nil {
-		// Spaces not consented to this endpoint have no vectors from it: a search of only
-		// those doesn't send the query to it either.
+		if x.afterQueryEndpoint != nil {
+			x.afterQueryEndpoint()
+		}
 		err = x.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM spaces sp
 			JOIN search_settings e ON e.workspace_id = sp.workspace_id
-			WHERE sp.id IN (SELECT value FROM json_each(?)) AND `+embeddableSQL+`)`, in).Scan(&embeddable)
+			WHERE sp.id IN (`+scopeSQL+`) AND e.account_id = ? AND e.model = ? AND `+embeddableAtSQL+`)`,
+			in, e.Account, e.Model, ep.BaseURL).Scan(&embeddable)
 	}
 	switch {
 	case errors.Is(err, errNoEmbeddings):
@@ -206,6 +230,9 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 		} else {
 			qv = vs[0]
 			res.Mode = ModeHybrid
+			if x.afterQueryEmbedded != nil {
+				x.afterQueryEmbedded()
+			}
 		}
 	}
 
@@ -218,14 +245,11 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 			hits[i].score = -hits[i].bm25
 		}
 	} else {
-		// Both rankings are read to the same depth for every page, so a document's fused
-		// score, and the order, don't depend on the page asked for: pages neither repeat
-		// nor skip results. Snippets are made for the page's results only.
 		text, err := x.fullText(ctx, in, match, hybridDepth, 0, false)
 		if err != nil {
 			return Results{}, err
 		}
-		near, err := x.nearest(ctx, workspaceID, in, e.key(), qv, hybridDepth)
+		near, err := x.nearest(ctx, workspaceID, in, rankEndpoint{key: e.key(), baseURL: ep.BaseURL}, qv, hybridDepth)
 		if err != nil {
 			return Results{}, err
 		}
@@ -237,7 +261,7 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 			return Results{}, err
 		}
 		var pending int
-		if err := x.db.QueryRowContext(ctx, `SELECT count(*) `+pendingSQL+` AND d.space_id IN (SELECT value FROM json_each(?))`,
+		if err := x.db.QueryRowContext(ctx, `SELECT count(*) `+pendingSQL+` AND d.space_id IN (`+scopeSQL+`)`,
 			in).Scan(&pending); err != nil {
 			return Results{}, err
 		}
@@ -248,7 +272,6 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 
 	if len(hits) > q.Limit {
 		hits = hits[:q.Limit]
-		// No next page past the deepest offset asked for: it would be refused.
 		if next := q.Offset + q.Limit; next <= MaxOffset {
 			res.NextOffset = &next
 		}
@@ -269,7 +292,18 @@ func (x *Index) Search(ctx context.Context, workspaceID int64, spaces []access.S
 	return res, nil
 }
 
-// checkQuery checks q, sets its default limit, and returns its FTS5 query.
+type rankEndpoint struct{ key, baseURL string }
+
+type scopeEntry struct {
+	ID         int64 `json:"id"`
+	Workspace  int64 `json:"workspace"`
+	Generation int64 `json:"generation"`
+}
+
+const scopeSQL = `SELECT sp.id FROM spaces sp, json_each(?) j
+	WHERE sp.id = j.value ->> 'id' AND sp.workspace_id = j.value ->> 'workspace'
+		AND (j.value ->> 'generation' = 0 OR sp.generation = j.value ->> 'generation')`
+
 func checkQuery(q *Query) (string, error) {
 	switch {
 	case strings.TrimSpace(q.Text) == "":
@@ -291,11 +325,6 @@ func checkQuery(q *Query) (string, error) {
 	return match, nil
 }
 
-// matchExpr turns what someone typed into an FTS5 query: every word must match, as a
-// prefix ("plan" finds "planning"), and words in double quotes as a phrase. A word in an
-// unspaced script is split as the index splits it (segment), so it is a phrase of its
-// characters. Only letters, digits and marks reach FTS5, each word quoted: its operators
-// and column filters aren't available, so no input is a syntax error.
 func matchExpr(q string) string {
 	var parts []string
 	tokens := 0
@@ -329,42 +358,28 @@ func matchExpr(q string) string {
 	return strings.Join(parts, " ")
 }
 
-// hit is a document found, with what each ranking said of it.
 type hit struct {
 	doc, space                   int64
 	path, title, version, commit string
 	snippet                      []Segment
-	bm25                         float64 // lower is better
+	bm25                         float64
 	score                        float64
 	match                        string
-	seq                          int // the passage most like the query, if found by meaning only
+	seq                          int
 }
 
-// The characters that mark matches in FTS5 snippets; cleanBody keeps them out of the text.
 const (
 	markStart = '\x02'
 	markEnd   = '\x03'
 )
 
-// rankSQL is the full-text rank, lower first: bm25 with weights for path, title and body.
-// bm25 favours short rows, and an upload's row is only its path and title, so uploads
-// count half: a document named like the query comes before an upload named like it.
 const rankSQL = `bm25(search_fts, 2.0, 5.0, 1.0) * CASE WHEN d.markdown THEN 1.0 ELSE 0.5 END`
 
-// hybridDepth is how many results of each ranking a hybrid search fuses: enough for the
-// deepest page.
 const hybridDepth = MaxOffset + MaxLimit + 1
 
-// snippetSQL is a document's full-text snippet, matches marked: from a Markdown document's
-// text, or from an upload's path or title (it has no text), whichever matched. It is 24
-// words long, or 64 (the most FTS5 allows) in a text with an unspaced script, whose words
-// are single characters (segment): about as much to read.
 const snippetSQL = `snippet(search_fts, CASE WHEN d.markdown THEN 2 ELSE -1 END, char(2), char(3), '…',
 	CASE WHEN instr(search_fts.body, char(31)) THEN 64 ELSE 24 END)`
 
-// fullText returns the documents of the spaces in (a JSON array of IDs) that match the
-// FTS5 query match, best first, from offset, at most limit; with their snippets if
-// snippets is set.
 func (x *Index) fullText(ctx context.Context, in, match string, limit, offset int, snippets bool) ([]hit, error) {
 	snippet := `''`
 	if snippets {
@@ -375,7 +390,7 @@ func (x *Index) fullText(ctx context.Context, in, match string, limit, offset in
 		FROM search_fts
 		JOIN search_docs d ON d.id = search_fts.rowid
 		JOIN search_spaces s ON s.space_id = d.space_id
-		WHERE search_fts MATCH ? AND d.space_id IN (SELECT value FROM json_each(?))
+		WHERE search_fts MATCH ? AND d.space_id IN (`+scopeSQL+`)
 		ORDER BY `+rankSQL+`, d.path, d.id LIMIT ? OFFSET ?`, match, in, limit, offset)
 	if err != nil {
 		return nil, err
@@ -394,9 +409,6 @@ func (x *Index) fullText(ctx context.Context, in, match string, limit, offset in
 	return hits, rows.Err()
 }
 
-// passages sets the snippets of the hits found by meaning only: each one's passage most
-// like the query. A document changed since it was ranked may have none: its snippet is
-// then empty.
 func (x *Index) passages(ctx context.Context, hits []hit) error {
 	var keys [][2]int64
 	at := map[[2]int64]int{}
@@ -432,8 +444,6 @@ func (x *Index) passages(ctx context.Context, hits []hit) error {
 	return rows.Err()
 }
 
-// textSnippets sets the snippets of the hits full-text search found, those of a hybrid
-// search's page.
 func (x *Index) textSnippets(ctx context.Context, match string, hits []hit) error {
 	var ids []int64
 	at := map[int64]int{}
@@ -468,9 +478,6 @@ func (x *Index) textSnippets(ctx context.Context, match string, hits []hit) erro
 	return rows.Err()
 }
 
-// segments splits an FTS5 snippet at its marks. The characters of a phrase in an
-// unspaced script are marked one by one, so with the separators between them taken out,
-// neighbouring pieces are joined.
 func segments(snippet string) []Segment {
 	out := []Segment{}
 	match := false
@@ -497,50 +504,53 @@ func segments(snippet string) []Segment {
 	return out
 }
 
-// near is a document found by meaning, and its passage (seq) most like the query.
 type near struct {
 	doc        int64
 	seq        int
 	similarity float64
 }
 
-// nearest returns the documents of the spaces in (a JSON array of IDs, of workspaceID)
-// whose passages, embedded with the model key, are most like qv, at most limit, best first.
-// It compares the vector cache's vectors, and reads those of the spaces it doesn't have
-// from SQLite.
-func (x *Index) nearest(ctx context.Context, workspaceID int64, in, key string, qv []float32, limit int) ([]near, error) {
-	// Only spaces consented to the endpoint the query went to: another's vectors, of an
-	// endpoint changed since, aren't compared with it. Asked of SQLite on every search,
-	// never cached.
-	rows, err := x.db.QueryContext(ctx, `SELECT sp.id FROM spaces sp
+func (x *Index) nearest(ctx context.Context, workspaceID int64, in string, ep rankEndpoint, qv []float32, limit int) ([]near, error) {
+	key := ep.key
+	rows, err := x.db.QueryContext(ctx, `SELECT sp.id, sp.generation FROM spaces sp
 		JOIN search_settings e ON e.workspace_id = sp.workspace_id
-		WHERE sp.id IN (SELECT value FROM json_each(?)) AND sp.workspace_id = ? AND `+embeddableSQL+`
-		ORDER BY sp.id`, in, workspaceID)
+		WHERE sp.id IN (`+scopeSQL+`) AND sp.workspace_id = ? AND `+keySQL+` = ? AND `+embeddableAtSQL+`
+		ORDER BY sp.id`, in, workspaceID, key, ep.baseURL)
 	if err != nil {
 		return nil, err
 	}
-	var spaces []int64
+	var spaces []spaceRef
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var sp spaceRef
+		if err := rows.Scan(&sp.id, &sp.generation); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		spaces = append(spaces, id)
+		spaces = append(spaces, sp)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err
 	}
-	found, rest, err := x.vectors.nearest(ctx, x.db, workspaceID, spaces, key, qv)
+	found, rest, err := x.vectors.nearest(ctx, x.db, workspaceID, spaces, ep, qv)
 	if err != nil {
 		return nil, err
 	}
 	if len(rest) > 0 {
-		raw, err := json.Marshal(rest)
+		var entries []scopeEntry
+		var all []scopeEntry
+		if err := json.Unmarshal([]byte(in), &all); err != nil {
+			return nil, err
+		}
+		for _, e := range all {
+			if slices.Contains(rest, e.ID) {
+				entries = append(entries, e)
+			}
+		}
+		raw, err := json.Marshal(entries)
 		if err != nil {
 			return nil, err
 		}
-		more, err := x.nearestBrute(ctx, string(raw), key, qv)
+		more, err := x.nearestBrute(ctx, string(raw), ep, qv)
 		if err != nil {
 			return nil, err
 		}
@@ -549,17 +559,13 @@ func (x *Index) nearest(ctx context.Context, workspaceID int64, in, key string, 
 	return rank(found, limit), nil
 }
 
-// nearestBrute returns each document of the spaces in whose passages are embedded with
-// the model key with its passage most like qv, unordered, reading every vector from
-// SQLite: without the vector cache, or for a space that doesn't fit in it, and the
-// reference the cache is tested against.
-func (x *Index) nearestBrute(ctx context.Context, in, key string, qv []float32) ([]near, error) {
+func (x *Index) nearestBrute(ctx context.Context, in string, ep rankEndpoint, qv []float32) ([]near, error) {
 	rows, err := x.db.QueryContext(ctx, `SELECT c.doc_id, c.seq, c.vector FROM search_chunks c
 		JOIN search_docs d ON d.id = c.doc_id
 		JOIN spaces sp ON sp.id = d.space_id
 		JOIN search_settings e ON e.workspace_id = sp.workspace_id
-		WHERE d.space_id IN (SELECT value FROM json_each(?)) AND d.embed_key = ? AND d.embed_version = d.version
-			AND `+embeddableSQL, in, key)
+		WHERE d.space_id IN (`+scopeSQL+`) AND d.embed_key = ? AND d.embed_version = d.version
+			AND `+keySQL+` = ? AND `+embeddableAtSQL, in, ep.key, ep.key, ep.baseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -574,7 +580,7 @@ func (x *Index) nearestBrute(ctx context.Context, in, key string, qv []float32) 
 			return nil, err
 		}
 		if len(vec) != 4*len(qv) {
-			continue // of another size
+			continue
 		}
 		decodeVectorInto(v, vec)
 		sim := float64(dot32(qv, v))
@@ -592,7 +598,6 @@ func (x *Index) nearestBrute(ctx context.Context, in, key string, qv []float32) 
 	return all, nil
 }
 
-// rank orders documents found by meaning, most alike first, and keeps the first limit.
 func rank(found []near, limit int) []near {
 	slices.SortFunc(found, func(a, b near) int {
 		return cmp.Or(cmp.Compare(b.similarity, a.similarity), cmp.Compare(a.doc, b.doc))
@@ -600,12 +605,8 @@ func rank(found []near, limit int) []near {
 	return found[:min(len(found), limit)]
 }
 
-// rrfK is reciprocal rank fusion's constant: a document's score is the sum, over the
-// rankings that found it, of 1/(rrfK + its rank there). 60 is the usual choice: it keeps
-// one ranking's top result from outweighing agreement between both.
 const rrfK = 60
 
-// fuse merges the full-text and semantic rankings by reciprocal rank fusion, best first.
 func (x *Index) fuse(ctx context.Context, in string, text []hit, sem []near) ([]hit, error) {
 	byDoc := map[int64]*hit{}
 	var all []*hit
@@ -634,7 +635,7 @@ func (x *Index) fuse(ctx context.Context, in string, text []hit, sem []near) ([]
 		}
 		rows, err := x.db.QueryContext(ctx, `SELECT d.id, d.space_id, d.path, d.title, d.version, s.commit_id
 			FROM search_docs d JOIN search_spaces s ON s.space_id = d.space_id
-			WHERE d.id IN (SELECT value FROM json_each(?)) AND d.space_id IN (SELECT value FROM json_each(?))`, string(docs), in)
+			WHERE d.id IN (SELECT value FROM json_each(?)) AND d.space_id IN (`+scopeSQL+`)`, string(docs), in)
 		if err != nil {
 			return nil, err
 		}
@@ -654,7 +655,7 @@ func (x *Index) fuse(ctx context.Context, in string, text []hit, sem []near) ([]
 	}
 	out := make([]hit, 0, len(all))
 	for _, h := range all {
-		if h.path != "" { // a document gone since its vectors were read is left out
+		if h.path != "" {
 			out = append(out, *h)
 		}
 	}
@@ -664,10 +665,8 @@ func (x *Index) fuse(ctx context.Context, in string, text []hit, sem []near) ([]
 	return out, nil
 }
 
-// passageLen is the most characters of a passage a semantic result shows.
 const passageLen = 300
 
-// passage is a semantic result's snippet: the start of its passage most like the query.
 func passage(text string) []Segment {
 	text = strings.Join(strings.Fields(text), " ")
 	if utf8.RuneCountInString(text) > passageLen {

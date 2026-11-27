@@ -46,8 +46,6 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
-// TestPrecedence sets every value in each layer and checks that the higher layer wins:
-// flag > environment > file > default.
 func TestPrecedence(t *testing.T) {
 	file := writeConfig(t, `
 # every setting, from the file
@@ -287,8 +285,6 @@ func TestCLIProxy(t *testing.T) {
 		t.Error("a proxy URL without a listener accepted")
 	}
 
-	// The Compose file's: a socket the worker relays, since the worker's network can't reach
-	// the server (docs/cli-workers.md).
 	container := []string{"-cli-workers", "container", "-cli-worker-socket", "/run/taskto-cli/worker.sock"}
 	cfg, err = Load(append(container, "-cli-proxy-listen", "unix:/run/taskto-cli/proxy/proxy.sock", "-cli-proxy-url", "http://127.0.0.1:8081"), env(nil), io.Discard)
 	if err != nil || cfg.CLIProxyListen != "unix:/run/taskto-cli/proxy/proxy.sock" {
@@ -307,7 +303,6 @@ func TestCLIProxy(t *testing.T) {
 	}
 }
 
-// The agent browser runs in the CLI worker: it needs CLI workers on.
 func TestBrowser(t *testing.T) {
 	cfg, err := Load(nil, env(nil), io.Discard)
 	if err != nil || cfg.Browser {
@@ -360,7 +355,6 @@ func TestPushContact(t *testing.T) {
 		t.Fatalf("push contact by default = %q, want none (the server's default applies)", got)
 	}
 	file := writeConfig(t, `push_contact = "mailto:file@example.org"`)
-	// The file, then the environment over it, then the flag over both.
 	if got := load(t, []string{"-config", file}, nil).PushContact; got != "mailto:file@example.org" {
 		t.Fatalf("from the file: %q", got)
 	}
@@ -428,7 +422,7 @@ func TestSSOValidation(t *testing.T) {
 	}
 	for name, tt := range map[string]struct {
 		env  map[string]string
-		fail string // a part of the error; "" means it loads
+		fail string
 	}{
 		"providers need a public url":           {sso, "-public-url"},
 		"https":                                 {with(map[string]string{"TASKTO_PUBLIC_URL": "https://taskto.example.com"}), ""},
@@ -442,7 +436,7 @@ func TestSSOValidation(t *testing.T) {
 		"a path":                                {with(map[string]string{"TASKTO_PUBLIC_URL": "https://taskto.example.com/app"}), "without a path"},
 		"a query":                               {with(map[string]string{"TASKTO_PUBLIC_URL": "https://taskto.example.com?a=b"}), "without a path"},
 		"a fragment":                            {with(map[string]string{"TASKTO_PUBLIC_URL": "https://taskto.example.com#a"}), "without a path"},
-		"credentials":                           {with(map[string]string{"TASKTO_PUBLIC_URL": "https://user:fake@taskto.example.com"}), "without a path"}, //nolint:gosec // G101: a fake, to be refused
+		"credentials":                           {with(map[string]string{"TASKTO_PUBLIC_URL": "https://user:fake@taskto.example.com"}), "without a path"},
 		"no host":                               {with(map[string]string{"TASKTO_PUBLIC_URL": "https://"}), "without a path"},
 		"another scheme":                        {with(map[string]string{"TASKTO_PUBLIC_URL": "ftp://taskto.example.com"}), "must be https"},
 		"passwords off without providers":       {map[string]string{"TASKTO_DISABLE_PASSWORD_LOGIN": "true"}, "-disable-password-login needs -sso-providers"},
@@ -474,8 +468,6 @@ func TestUpdateStatusDir(t *testing.T) {
 	}
 }
 
-// Integrations' providers are reached through addresses checked on every connection unless the
-// operator says otherwise: the default is "public", not "any".
 func TestIntegrationEgress(t *testing.T) {
 	cfg, err := Load(nil, env(nil), io.Discard)
 	if err != nil {
@@ -497,7 +489,6 @@ func TestIntegrationEgress(t *testing.T) {
 	}
 }
 
-// An empty setting is "public", never "any": it must not open calls that carry credentials.
 func TestIntegrationEgressEmptyIsPublic(t *testing.T) {
 	file := writeConfig(t, `integration_egress = ""`)
 	for name, tt := range map[string]struct {
@@ -517,7 +508,6 @@ func TestIntegrationEgressEmptyIsPublic(t *testing.T) {
 			t.Errorf("%s: policy = %q, want public", name, p.String())
 		}
 	}
-	// The method fails closed on its own: an unset, blank or unparsable field is "public".
 	for _, v := range []string{"", "  ", "nonsense!", "any, public", ",,"} {
 		if p := (Config{IntegrationEgress: v}).IntegrationEgressPolicy(); p.IsAny() || p.String() != "public" {
 			t.Errorf("IntegrationEgress = %q: policy = %q, want public", v, p.String())
@@ -528,7 +518,6 @@ func TestIntegrationEgressEmptyIsPublic(t *testing.T) {
 	}
 }
 
-// "any." is a host name, not the opt-out: it must stay one when the policy is stored and read back.
 func TestIntegrationEgressKeepsWhatWasWritten(t *testing.T) {
 	for _, v := range []string{"any.", "ANY.", "public, any."} {
 		cfg, err := Load([]string{"-integration-egress", v}, env(nil), io.Discard)
@@ -546,7 +535,7 @@ func TestIntegrationEgressKeepsWhatWasWritten(t *testing.T) {
 }
 
 func TestSMTPSettings(t *testing.T) {
-	cfg, err := Load(nil, env(map[string]string{ //nolint:gosec // G101: names of settings and a path, not credentials
+	cfg, err := Load(nil, env(map[string]string{
 		"TASKTO_SMTP_HOST": "smtp.example.com", "TASKTO_SMTP_FROM": "taskto <taskto@example.com>",
 		"TASKTO_SMTP_USERNAME": "taskto", "TASKTO_SMTP_PASSWORD_FILE": "/run/secrets/smtp",
 		"TASKTO_SMTP_EGRESS": "public",
@@ -620,8 +609,6 @@ func TestSMTPValidation(t *testing.T) {
 	}
 }
 
-// An IPv6 address is a host, bracketed or not, and is kept without brackets, as the connection
-// joins it to the port; a host with a port is still refused.
 func TestSMTPHostTakesIPv6Literals(t *testing.T) {
 	for in, want := range map[string]string{
 		"smtp.example.com": "smtp.example.com", "::1": "::1", "[::1]": "::1", "[2001:DB8::25]": "2001:db8::25", "2001:db8::25": "2001:db8::25",
@@ -652,7 +639,6 @@ func TestAuditRetention(t *testing.T) {
 		t.Fatalf("by default %v, want a year", got)
 	}
 	file := writeConfig(t, `audit_retention = "90"`)
-	// The file, then the environment over it, then the flag over both.
 	if got := load(t, []string{"-config", file}, nil).AuditRetention(); got != 90*24*time.Hour {
 		t.Fatalf("from the file: %v", got)
 	}
@@ -663,7 +649,6 @@ func TestAuditRetention(t *testing.T) {
 	if got := load(t, []string{"-config", file, "-audit-retention", "7"}, env).AuditRetention(); got != 7*24*time.Hour {
 		t.Fatalf("flag over env: %v", got)
 	}
-	// Off keeps everything: a retention of zero, which the sweep reads as no limit.
 	if got := load(t, []string{"-audit-retention", "off"}, nil).AuditRetention(); got != 0 {
 		t.Fatalf("off: %v, want 0", got)
 	}

@@ -11,9 +11,6 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// The ceiling is lowered (or the integration switched off) after a resend under an unknown key was
-// written ahead and before it leaves: the call is not sent, and is noted as one that never ran, so the
-// key's outcome is as it was and nothing is made past the new limits.
 func TestALimitChangedBeforeTheCallLeavesStopsIt(t *testing.T) {
 	for name, change := range map[string]string{
 		"the ceiling lowered":          `UPDATE integrations SET max_amount_minor = 500 WHERE id = ?`,
@@ -50,9 +47,6 @@ func TestALimitChangedBeforeTheCallLeavesStopsIt(t *testing.T) {
 	}
 }
 
-// The final check before the call leaves fails for a reason that isn't a refusal (the try's context
-// ended, the settings couldn't be read): the call never left, so it is noted as one that never ran,
-// and the key's outcome stays known. The next try asks the same key, with no lookup first.
 func TestAFailedFinalCheckLeavesTheCallNotExecuted(t *testing.T) {
 	p := newPay(t, publicURL)
 	req := p.direct(p.invoice(10, "EUR"), "op-final-0001")

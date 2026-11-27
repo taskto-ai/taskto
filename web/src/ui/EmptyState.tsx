@@ -1,20 +1,11 @@
-// What a place shows when it has nothing yet: a line that says what this place is for, a line
-// more if it helps, and the action to take (a button or two).
-
 import type { ReactNode } from 'react'
 import './EmptyState.css'
 
 export interface EmptyStateProps {
-  // What this place is for, or that there is nothing here yet: "No apps in Product team yet".
   title: ReactNode
-  // What to do about it.
   children?: ReactNode
-  // The buttons.
   actions?: ReactNode
-  // A visual above the title.
   icon?: ReactNode
-  // The title as a heading of this level, where the empty state is what the page is (a screen of
-  // its own, such as "you are in no workspace"): it looks the same, and is in the outline.
   level?: 1 | 2 | 3 | 4 | 5 | 6
 }
 

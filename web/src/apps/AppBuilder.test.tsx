@@ -50,7 +50,6 @@ const draft = {
   },
   actions: { add_expense: { kind: 'insert' }, delete_expense: { kind: 'delete' } },
 }
-// What the agent saved: a draft nobody has published yet, in space 2.
 const app = (over: Record<string, unknown> = {}) => ({
   id: 1,
   space_id: 2,
@@ -74,7 +73,6 @@ const conversation = (id: number) => ({
   updated_at: '2026-11-18T10:00:00.000Z',
 })
 
-// The agent called create_app, and the server answered with the app.
 function savedEntries(id: number, saved: unknown) {
   return [
     {
@@ -99,11 +97,9 @@ function savedEntries(id: number, saved: unknown) {
 }
 
 const apps = '/api/workspaces/1/spaces/2/apps/1'
-// What this browser keeps for user 7, who is signed in: every key names its user.
 const USER = 7
 const SESSION = `taskto:builder:${USER}:1:9`
 const MESSAGE = `taskto:message:${USER}:/api/workspaces/1/conversations/9`
-// What was sent to the agent, as the conversation's messages route took it.
 const sentToAgent = (calls: Call[]) =>
   String(
     (calls.find((c) => c.path.endsWith('/conversations/9/messages'))?.body as { content?: string } | undefined)
@@ -127,7 +123,6 @@ function Routed() {
   return route ? <AppsPage workspace={route.workspace} open={route.item} streams={streams.factory} /> : null
 }
 
-// The builder, in conversation 9, as the page is at this URL.
 function builderRoutes(extra: Record<string, Parameters<typeof fakeFetch>[0][string]> = {}) {
   return fakeFetch({
     'GET /api/workspaces/1/spaces': { body: spaces },
@@ -150,10 +145,8 @@ async function openBuilder(saved = true) {
   act(() => streams.sources[0].open())
 }
 
-// The builder's two panes, by their names: the conversation, and the preview of the draft.
 const panel = (name: 'build' | 'preview') =>
   screen.getByRole('region', { name: name === 'build' ? 'Build' : 'Preview' })
-// The switch between them on a phone.
 const SWITCH = { name: 'Builder view' }
 
 beforeEach(() => {
@@ -206,12 +199,10 @@ test('a new app starts in the private space unless a shared one is chosen, and t
   })
   render(<Routed />)
   const what = await screen.findByLabelText('What should the app do?')
-  // On a phone the choice is a select, which fits any width in any language.
   const where = screen.getByRole('combobox', { name: 'Where should it live?' }) as HTMLSelectElement
   expect(where.value).toBe('private')
   expect([...where.options].map((o) => o.textContent)).toEqual(['In my private space', 'In a shared space'])
   expect(screen.queryByRole('radio')).toBeNull()
-  // The start needs a description.
   expect((screen.getByRole('button', { name: 'Start building' }) as HTMLButtonElement).disabled).toBe(true)
   fireEvent.change(what, { target: { value: 'An expense tracker' } })
   fireEvent.click(screen.getByRole('button', { name: 'Start building' }))
@@ -221,7 +212,6 @@ test('a new app starts in the private space unless a shared one is chosen, and t
   expect(content).toContain('An expense tracker')
   expect(content).toContain('my private space (space id 2)')
   expect(content).toMatch(/Don’t publish it/)
-  // Where it was started is kept, and the builder opens on the conversation.
   expect(JSON.parse(window.localStorage.getItem(SESSION) ?? '{}')).toEqual({ space: 2, since: 0 })
   await screen.findByRole('radiogroup', SWITCH)
 })
@@ -250,18 +240,15 @@ test('on a phone, Build and Preview switch without losing the message or the pre
   const calls = builderRoutes()
   await openBuilder(false)
 
-  // Build is showing; Preview is out of reach, and says there is nothing yet.
   const tabs = screen.getByRole('radiogroup', SWITCH)
   const build = within(tabs).getByRole('radio', { name: 'Build' }) as HTMLInputElement
   expect(build.checked).toBe(true)
   expect(panel('preview').hasAttribute('inert')).toBe(true)
   expect(panel('build').hasAttribute('inert')).toBe(false)
 
-  // The person starts a message the agent hasn't got yet.
   const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
   fireEvent.change(box, { target: { value: 'Also add a category' } })
 
-  // The agent saves the app: the Preview tab says it changed, without moving the person.
   act(() => streams.sources[0].send({ type: 'value', value: { entries: savedEntries(1, app()) } }))
   const preview = within(tabs).getByRole('radio', { name: /Preview/ }) as HTMLInputElement
   await within(tabs).findByText('(updated)')
@@ -271,23 +258,19 @@ test('on a phone, Build and Preview switch without losing the message or the pre
   expect(preview.checked).toBe(true)
   expect(panel('build').hasAttribute('inert')).toBe(true)
   expect(panel('preview').hasAttribute('inert')).toBe(false)
-  // Focus stays on the switch, where the arrow keys go on working, and a screen reader hears the change.
   expect(screen.getByText('Showing Preview: the draft of the app.')).toBeTruthy()
   expect(within(tabs).queryByText('(updated)')).toBeNull()
 
-  // It is a preview, and says so: sample data, nothing real changes.
   const stage = await within(panel('preview')).findByText('Preview · sample data')
   expect(stage).toBeTruthy()
   await within(panel('preview')).findByText('Coffee')
   expect(within(panel('preview')).getByText(/change nothing real/)).toBeTruthy()
 
-  // Try it: the button runs on the sample rows, never on the app's own actions.
   fireEvent.click(within(panel('preview')).getByRole('button', { name: 'Delete' }))
   await waitFor(() => expect(previews(calls).some((c) => (c.body as { action?: unknown }).action)).toBe(true))
   expect(calls.some((c) => c.path.endsWith('/actions'))).toBe(false)
   expect(calls.some((c) => c.path.includes('/records'))).toBe(false)
 
-  // Back to Build: the message is where it was, and the preview wasn't drawn again meanwhile.
   const drawn = previews(calls).length
   fireEvent.click(build)
   expect(screen.getByText('Showing Build: the conversation with the agent.')).toBeTruthy()
@@ -304,8 +287,6 @@ test('the switch is one group of two choices, so the arrow keys move between the
   const tabs = await screen.findByRole('radiogroup', SWITCH)
   const build = within(tabs).getByRole('radio', { name: 'Build' }) as HTMLInputElement
   const preview = within(tabs).getByRole('radio', { name: 'Preview' }) as HTMLInputElement
-  // Radios of one name are one stop for Tab, and the browser moves the choice with the arrow keys:
-  // the change it makes is the one a click makes.
   expect(build.name).toBe(preview.name)
   fireEvent.click(preview)
   expect(preview.checked).toBe(true)
@@ -334,7 +315,6 @@ test('leaving and reopening keeps the message, the app being built and the pane'
   fireEvent.click(screen.getByRole('radio', { name: 'Preview' }))
   await within(panel('preview')).findByText('Preview · sample data')
 
-  // Leave for the list of apps and come back to the same address.
   cleanup()
   streams = fakeStreams()
   window.history.replaceState(null, '', '/w/1/apps')
@@ -353,7 +333,6 @@ test('leaving and reopening keeps the message, the app being built and the pane'
   window.history.replaceState(null, '', '/w/1/apps/build-9')
   render(<Routed />)
   await waitFor(() => expect(streams.sources).toHaveLength(1))
-  // The same app is shown, on the pane that was showing, and the message is still there.
   await within(panel('preview')).findByText('Preview · sample data')
   expect(again.some((c) => c.method === 'GET' && c.path === apps)).toBe(true)
   expect((screen.getByRole('radio', { name: 'Preview' }) as HTMLInputElement).checked).toBe(true)
@@ -361,10 +340,8 @@ test('leaving and reopening keeps the message, the app being built and the pane'
   expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Add a category field')
   expect(calls.length).toBeGreaterThan(0)
 
-  // Sending it forgets it.
   fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' })
   await waitFor(() => expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(''))
-  // The draft is forgotten by an effect after the field is emptied: under load it can be a beat later.
   await waitFor(() => expect(window.localStorage.getItem(MESSAGE)).toBeNull())
 })
 
@@ -383,7 +360,6 @@ test('a private app is published in one step, and the panel says who can use it 
   await openBuilder()
   fireEvent.click(screen.getByRole('radio', { name: 'Preview' }))
   const section = await within(panel('preview')).findByRole('region', { name: 'Publish' })
-  // Who can use it, and what it can read and change, in plain words.
   expect(within(section).getByText('Only you: it is in your private space.')).toBeTruthy()
   expect(
     within(section).getByText('It reads and keeps records with these fields: description (text) and amount (number).'),
@@ -392,13 +368,10 @@ test('a private app is published in one step, and the panel says who can use it 
   expect(within(section).getByText('Delete records (a deleted record can be restored).')).toBeTruthy()
   expect(within(section).queryByText('Change records.')).toBeNull()
 
-  // One tap.
   fireEvent.click(within(section).getByRole('button', { name: 'Publish' }))
   await within(section).findByText('Published as release 1. It is live in your private space.')
   const post = calls.find((c) => c.path === `${apps}/publish`)
   expect(post?.body).toEqual({ version: 1, acknowledge: [] })
-  // The draft is the live release now, so there is nothing to preview: the live app is shown, labelled
-  // Live, with no sample-data preview and no way back to one, and nothing left to publish.
   await within(panel('preview')).findByText('Live · release 1')
   expect(within(panel('preview')).queryByText('Preview · sample data')).toBeNull()
   expect(within(panel('preview')).queryByRole('button', { name: 'Back to the live release' })).toBeNull()
@@ -437,13 +410,11 @@ test('a shared app needs the publisher role, and publishing it names who it goes
   await waitFor(() => expect(streams.sources).toHaveLength(1))
   fireEvent.click(screen.getByRole('radio', { name: 'Preview' }))
   const section = await within(panel('preview')).findByRole('region', { name: 'Publish' })
-  // Who has a role, by name; and a builder without the publisher role can't publish.
   await within(section).findByText('Ann: Builder, Publisher')
   expect(within(section).getByText('Everyone else: User')).toBeTruthy()
   expect(within(section).getByText(/publishing it needs the publisher role in this app/)).toBeTruthy()
   expect(within(section).queryByRole('button', { name: /ublish/ })).toBeNull()
 
-  // With the role, it takes a second step that says who it goes to.
   access = { ...access, publish: true, roles: ['builder', 'publisher'] }
   cleanup()
   streams = fakeStreams()
@@ -453,7 +424,6 @@ test('a shared app needs the publisher role, and publishing it names who it goes
   const again = await within(panel('preview')).findByRole('region', { name: 'Publish' })
   fireEvent.click(await within(again).findByRole('button', { name: 'Review and publish…' }))
   expect(calls.some((c) => c.path === `${base}/publish`)).toBe(false)
-  // The second step is a dialog that names who it goes to.
   const confirm = await screen.findByRole('dialog', { name: 'Publish for Team' })
   expect(within(confirm).getByText(/live for everyone in Team who may use it/)).toBeTruthy()
   fireEvent.click(within(confirm).getByRole('button', { name: 'Publish for Team' }))
@@ -544,7 +514,6 @@ test('Edit with AI asks the agent to change the draft of that app, and the live 
   })
   render(<Routed />)
   expect(await screen.findByText('Editing Expenses, in Private.')).toBeTruthy()
-  // The space is the app's: there is nothing to choose.
   expect(screen.queryByRole('radio')).toBeNull()
   fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: 'Add a notes field' } })
   fireEvent.click(screen.getByRole('button', { name: 'Start editing' }))
@@ -554,9 +523,7 @@ test('Edit with AI asks the agent to change the draft of that app, and the live 
   expect(content).toContain('app id 1, in space id 2')
   expect(content).toMatch(/Change its draft only/)
   expect(JSON.parse(window.localStorage.getItem(SESSION) ?? '{}')).toEqual({ space: 2, since: 0, app: 1 })
-  // Nothing was published or changed by asking.
   expect(calls.some((c) => c.path.endsWith('/publish') || (c.method === 'PATCH' && c.path === apps))).toBe(false)
-  // The builder opens on the app: its draft is previewed, and the live release is one tap away.
   await screen.findByRole('radiogroup', SWITCH)
 })
 
@@ -574,7 +541,6 @@ test('Edit with AI is refused to someone who may not design the app', async () =
   expect((screen.getByRole('button', { name: 'Start editing' }) as HTMLButtonElement).disabled).toBe(true)
 })
 
-// The agent called create_app in entry id, under call id callId, and the server answered with saved.
 function saveAt(id: number, callId: string, saved: unknown) {
   return savedEntries(id, saved).map((e) => JSON.parse(JSON.stringify(e).replaceAll(`c${id}`, callId)))
 }
@@ -602,27 +568,23 @@ test('building in a conversation that has saved other apps opens the builder, an
   fireEvent.change(await screen.findByLabelText('What should the app do?'), { target: { value: 'A better tracker' } })
   fireEvent.click(await screen.findByRole('button', { name: 'Start building' }))
 
-  // The address is the one the page is on: the builder opens on the conversation all the same.
   await waitFor(() => expect(streams.sources).toHaveLength(1))
   expect(window.location.pathname).toBe('/w/1/apps/build-9')
   expect(screen.getByLabelText('Message')).toBeTruthy()
   expect(sentToAgent(calls)).toContain('A better tracker')
   act(() => streams.sources[0].open())
 
-  // The conversation's earlier save is not this build's: nothing is shown, nothing is published from it.
   act(() => streams.sources[0].send({ type: 'value', value: { entries: olderEntries } }))
   await within(panel('preview')).findByText(NOTHING)
   expect(getsOf(calls, older)).toHaveLength(0)
   expect(within(panel('preview')).queryByRole('region', { name: 'Publish' })).toBeNull()
 
-  // The one saved after it is.
   act(() =>
     streams.sources[0].send({ type: 'value', value: { entries: [...olderEntries, ...savedEntries(5, app())] } }),
   )
   await within(panel('preview')).findByText('Preview · sample data')
   expect(getsOf(calls, older)).toHaveLength(0)
 
-  // After a reload the same holds: the older app is still not picked from the transcript.
   cleanup()
   streams = fakeStreams()
   window.localStorage.setItem(SESSION, JSON.stringify({ space: 2, since: 2 }))
@@ -668,11 +630,9 @@ test('a tab left open by another account never writes the unsent message where t
   fireEvent.change(box, { target: { value: 'Alice’s secret plan' } })
   expect(window.localStorage.getItem(MESSAGE)).toBe('Alice’s secret plan')
 
-  // Bob signs in through another tab: it forgets what was kept, and the browser is his.
   window.localStorage.clear()
   window.localStorage.setItem('taskto:drafts-of', '8')
 
-  // Alice's tab goes on: what she types is kept nowhere Bob reads.
   fireEvent.change(box, { target: { value: 'Alice’s secret plan, continued' } })
   expect(Object.values({ ...window.localStorage }).join('|')).not.toContain('Alice')
 })
@@ -684,7 +644,6 @@ test('a second save under the same tool call id reads the app again', async () =
   act(() => streams.sources[0].send({ type: 'value', value: { entries: saveAt(1, 'call_0', app()) } }))
   await within(panel('preview')).findByText('Preview · sample data')
   const first = getsOf(calls, apps).length
-  // Some providers number a turn's calls from 0: the next save has the same id.
   act(() =>
     streams.sources[0].send({
       type: 'value',
@@ -747,14 +706,12 @@ test('a shared publish confirmation closes when the draft changes, and publishes
   fireEvent.click(await within(section).findByRole('button', { name: 'Review and publish…' }))
   expect((await screen.findByRole('dialog', { name: 'Publish for Team' })).textContent).toContain('Team')
 
-  // The agent saves again while the confirmation is open: the draft is not the one that was reviewed.
   version = 2
   act(() => streams.sources[0].send({ type: 'value', value: { entries: savedEntries(1, shared({ version: 2 })) } }))
   await within(section).findByText(/changed while you were reviewing it/)
   expect(screen.queryByRole('dialog', { name: 'Publish for Team' })).toBeNull()
   expect(calls.some((c) => c.path === `${base}/publish`)).toBe(false)
 
-  // Confirming again publishes the version now shown.
   fireEvent.click(within(section).getByRole('button', { name: 'Review and publish…' }))
   fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Publish for Team' }))
   await waitFor(() => expect(calls.some((c) => c.path === `${base}/publish`)).toBe(true))
@@ -775,14 +732,12 @@ test('a draft the agent saves for a published app leaves the live form as it is,
   const field = (await within(stage).findByLabelText('Description')) as HTMLInputElement
   fireEvent.change(field, { target: { value: 'Half-typed lunch' } })
 
-  // The agent saves a new draft: the live form stays, with what was typed, and a notice says a draft is ready.
   saved = true
   act(() => streams.sources[0].send({ type: 'value', value: { entries: savedEntries(1, app({ version: 3 })) } }))
   await within(stage).findByText(/A new draft is ready/)
   expect(within(stage).queryByText('Preview · sample data')).toBeNull()
   expect((within(stage).getByLabelText('Description') as HTMLInputElement).value).toBe('Half-typed lunch')
 
-  // Looking at the draft and coming back finds the form as it was left.
   fireEvent.click(within(stage).getByRole('button', { name: 'Preview the draft' }))
   await within(stage).findByText('Preview · sample data')
   fireEvent.click(within(stage).getByRole('button', { name: 'Back to the live release' }))
@@ -841,7 +796,6 @@ test('a publish refused after the acknowledgement keeps the schema dialog, with 
   fireEvent.click(within(dialog).getByRole('checkbox', { name: 'I understand these changes' }))
   fireEvent.click(within(dialog).getByRole('button', { name: 'Publish with these changes' }))
 
-  // Refused: the dialog stays, says why, and keeps the acknowledgement for another try.
   expect((await within(dialog).findByRole('alert')).textContent).toBe(
     'You can’t publish this app: that needs the publisher role in it.',
   )
@@ -850,7 +804,6 @@ test('a publish refused after the acknowledgement keeps the schema dialog, with 
     (within(dialog).getByRole('checkbox', { name: 'I understand these changes' }) as HTMLInputElement).checked,
   ).toBe(true)
 
-  // Cancelled: the focus is back on the button that started it, not lost on the page.
   fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
   await waitFor(() => expect(screen.queryByRole('dialog', { name })).toBeNull())
   const again = within(section).getByRole('button', { name: 'Publish' })
@@ -883,11 +836,6 @@ test('on a phone a shared space is chosen with the select, then the shared space
   expect(sentToAgent(calls)).toContain('the shared space “Team” (space id 3)')
 })
 
-// --- A build whose session ends, or whose page goes, between its steps ---------------------
-
-// The steps of starting a build, each held in turn: after the person leaves the page or their
-// session ends while one waits, nothing more is sent (not their prompt, not its title), no draft is
-// kept and nothing is opened.
 const NEW = 'POST /api/workspaces/1/conversations'
 const MESSAGES = 'POST /api/workspaces/1/conversations/9/messages'
 const TITLE = 'PATCH /api/workspaces/1/conversations/9'
@@ -944,7 +892,6 @@ for (const [hold, page, ending] of [
 
 test('a build whose session changed while it waited leaves its button ready on the page that is still here', async () => {
   const started = await startHeld(NEW, '/w/1/apps/build')
-  // Logging out began and was then called off (records to ask about): a new session, same page.
   endSession()
   beginSession(USER)
   await started.release()

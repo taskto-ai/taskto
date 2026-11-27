@@ -10,19 +10,8 @@ import (
 	"slices"
 )
 
-// Add-ons are programs the operator installs, from vendors whose licences keep them out of
-// this repository and its image. taskto only knows of them: their name, the notice to show
-// before an admin turns one on, and the attribution to show while it is on. The operator
-// installs one at <addons_dir>/<id>/<entry>, and the server finds it at start.
-//
-// Desert Ant's other models (Redact, Schemer, …) would be more entries, of other kinds.
-
-// KindSpeechToText is an add-on that is a dictation engine. Its entry, "transcribe", reads
-// a WAV (16-bit PCM, mono, 16 kHz) on standard input, takes "--language <code>" when the
-// language is known, and writes {"text": "…"} on standard output.
 const KindSpeechToText = "speech-to-text"
 
-// Addon is an add-on taskto knows of.
 type Addon struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -30,14 +19,11 @@ type Addon struct {
 	Kind        string `json:"kind"`
 	LicenceName string `json:"licence_name"`
 	LicenceURL  string `json:"licence_url"`
-	// Notice is what an admin must read and confirm before turning it on.
-	Notice string `json:"notice"`
-	// Attribution is the credit shown while it is on.
+	Notice      string `json:"notice"`
 	Attribution Credit `json:"attribution"`
-	entry       string // the program's name in its folder
+	entry       string
 }
 
-// Addons are the add-ons taskto knows of.
 var Addons = []Addon{{
 	ID: "desertant-voz", Name: "Voz", Vendor: "Desert Ant Labs", Kind: KindSpeechToText,
 	LicenceName: "Desert Ant Labs Source-Available License 1.1", LicenceURL: "https://license.desertant.com/",
@@ -54,7 +40,6 @@ var Addons = []Addon{{
 	entry: "transcribe",
 }}
 
-// addonByID is the known add-on id, if any.
 func addonByID(id string) (Addon, bool) {
 	i := slices.IndexFunc(Addons, func(a Addon) bool { return a.ID == id })
 	if i < 0 {
@@ -63,14 +48,11 @@ func addonByID(id string) (Addon, bool) {
 	return Addons[i], true
 }
 
-// Installed is an add-on the operator installed.
 type Installed struct {
 	Addon
-	Path string // its entry program
+	Path string
 }
 
-// DetectAddons finds the known add-ons installed under dir: an executable regular file at
-// dir/<id>/<entry>.
 func DetectAddons(dir string) []Installed {
 	var found []Installed
 	for _, a := range Addons {
@@ -84,11 +66,10 @@ func DetectAddons(dir string) []Installed {
 	return found
 }
 
-// addonEngine runs a speech-to-text add-on, one dictation at a time.
 type addonEngine struct {
 	Installed
-	scratch string        // where each run gets a folder of its own
-	jobs    chan struct{} // shared by every workspace using it
+	scratch string
+	jobs    chan struct{}
 }
 
 func (a *addonEngine) Transcribe(ctx context.Context, audio Audio, opts Options) (string, error) {

@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// tone is n samples of a loud square wave, with silence where quiet says.
 func tone(n int, quiet func(i int) bool) Audio {
 	s := make([]int16, n)
 	for i := range s {
@@ -44,10 +43,9 @@ func TestWAVRoundTrip(t *testing.T) {
 
 func TestParseWAVSkipsOtherChunks(t *testing.T) {
 	wav := Audio{Samples: []int16{5, 6}}.WAV()
-	// A LIST chunk of odd size (padded) between fmt and data, as some recorders write.
-	list := []byte("LIST\x03\x00\x00\x00abc\x00")
+	const list = "LIST\x03\x00\x00\x00abc\x00"
 	b := append(append(append([]byte{}, wav[:36]...), list...), wav[36:]...)
-	binary.LittleEndian.PutUint32(b[4:], uint32(len(b)-8)) //nolint:gosec // a few bytes
+	binary.LittleEndian.PutUint32(b[4:], binary.LittleEndian.Uint32(wav[4:])+uint32(len(list)))
 	got, err := ParseWAV(b)
 	if err != nil || len(got.Samples) != 2 || got.Samples[1] != 6 {
 		t.Fatalf("got %v, %v", got.Samples, err)
@@ -56,12 +54,10 @@ func TestParseWAVSkipsOtherChunks(t *testing.T) {
 
 func TestParseWAVRefuses(t *testing.T) {
 	good := Audio{Samples: []int16{1, 2, 3}}.WAV()
-	with := func(at int, v uint32, size int) []byte {
+	with := func(at int, v any) []byte {
 		b := append([]byte{}, good...)
-		if size == 2 {
-			binary.LittleEndian.PutUint16(b[at:], uint16(v)) //nolint:gosec // the tests pass 16-bit values
-		} else {
-			binary.LittleEndian.PutUint32(b[at:], v)
+		if _, err := binary.Encode(b[at:], binary.LittleEndian, v); err != nil {
+			t.Fatal(err)
 		}
 		return b
 	}
@@ -70,10 +66,10 @@ func TestParseWAVRefuses(t *testing.T) {
 		want error
 	}{
 		"not RIFF":   {[]byte("hello world, not a wav"), errNotWAV},
-		"stereo":     {with(22, 2, 2), errNotWAV},
-		"44.1 kHz":   {with(24, 44100, 4), errNotWAV},
-		"8-bit":      {with(34, 8, 2), errNotWAV},
-		"float":      {with(20, 3, 2), errNotWAV},
+		"stereo":     {with(22, uint16(2)), errNotWAV},
+		"44.1 kHz":   {with(24, uint32(44100)), errNotWAV},
+		"8-bit":      {with(34, uint16(8)), errNotWAV},
+		"float":      {with(20, uint16(3)), errNotWAV},
 		"no fmt":     {append([]byte("RIFF\x00\x00\x00\x00WAVE"), good[36:]...), errNotWAV},
 		"truncated":  {good[:30], errTruncated},
 		"no data":    {good[:36], errTruncated},
@@ -85,19 +81,16 @@ func TestParseWAVRefuses(t *testing.T) {
 			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
 		}
 	}
-	// A streaming recorder's placeholder size is taken as "what is there".
-	streamed := with(40, 0xFFFFFFFF, 4)
+	streamed := with(40, uint32(0xFFFFFFFF))
 	if a, err := ParseWAV(streamed); err != nil || len(a.Samples) != 3 {
 		t.Fatalf("placeholder size: %v, %v", a.Samples, err)
 	}
-	// Ten minutes and a moment is fine.
 	if _, err := ParseWAV(tone(SampleRate*601, nil).WAV()); err != nil {
 		t.Fatalf("ten minutes: %v", err)
 	}
 }
 
 func TestSplitCutsAtTheQuietestMoment(t *testing.T) {
-	// 70 s of sound with a short pause at 25 s and at 52 s.
 	pause := func(at float64) func(int) bool {
 		return func(i int) bool {
 			s := float64(i) / SampleRate

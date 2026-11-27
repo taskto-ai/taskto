@@ -13,7 +13,6 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// planner is the bundled app with three screens, a choice, a time and a conditional requirement.
 func planner(t *testing.T) Definition {
 	t.Helper()
 	all, err := Examples()
@@ -34,8 +33,6 @@ var plannerSeed = []Row{
 	{ID: 2, Revision: 1, Data: map[string]any{"title": "Fix the shelf", "category": "other", "category_note": "errand", "done": true}},
 }
 
-// The golden files are the contract with the web renderer, as the expenses ones are: it draws the
-// planner, opens screens with the answers the server gives, and checks the form keeps what was typed.
 func TestPlannerGoldens(t *testing.T) {
 	def := planner(t)
 	golden(t, "planner.surface.json", Surface(surfaceID, def, plannerSeed))
@@ -61,7 +58,6 @@ func TestExamplesValidate(t *testing.T) {
 			t.Errorf("requires %v lacks %s", def.Requires, need)
 		}
 	}
-	// Every example is also drawn by a surface the strict check accepts again after storage.
 	for _, ex := range all {
 		stored, _ := json.Marshal(ex.Definition)
 		var again Definition
@@ -78,7 +74,6 @@ func TestExamplesValidate(t *testing.T) {
 	}
 }
 
-// A definition of version 1 is read, checked and drawn as it always was, and can't use version 2.
 func TestVersionOneDefinitionsAreReadUnchanged(t *testing.T) {
 	def := example(t)
 	v1 := def
@@ -92,7 +87,6 @@ func TestVersionOneDefinitionsAreReadUnchanged(t *testing.T) {
 	if string(a) != string(b) {
 		t.Fatal("a version 1 definition draws a different surface")
 	}
-	// Stored with no version at all (before definitions said it): still read as version 1.
 	var old Definition
 	raw, _ := json.Marshal(map[string]any{"components": def.Components, "collection": def.Collection, "actions": def.Actions, "summaries": def.Summaries})
 	if err := json.Unmarshal(raw, &old); err != nil {
@@ -101,7 +95,6 @@ func TestVersionOneDefinitionsAreReadUnchanged(t *testing.T) {
 	if decoded, err := decodeDefinition(string(raw), 1, nil); err != nil || decoded.DefinitionVersion != 1 {
 		t.Fatalf("a definition stored without a version = %+v, %v", decoded.DefinitionVersion, err)
 	}
-	// No version says the current one.
 	if again, err := old.Check(); err != nil || again.DefinitionVersion != DefinitionVersion {
 		t.Fatalf("no version = %d, %v", again.DefinitionVersion, err)
 	}
@@ -282,7 +275,6 @@ func TestParseTimeAndChoice(t *testing.T) {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}
-	// A value stored before the options shrank is still shown, and not refused when read.
 	shrunk := fieldsOf(def, "category", func(f *Field) { f.Options = []string{"work"} })
 	if it := item(shrunk, Row{ID: 1, Data: map[string]any{"category": "home"}}); it["category"] != "home" {
 		t.Fatalf("item = %v", it)
@@ -315,8 +307,6 @@ func TestPlanNavigate(t *testing.T) {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}
-	// The web app sends the revision of the record a button is on with every action: a navigate,
-	// which only reads, opens the record all the same.
 	if ch, err := Plan(surfaceID, def, ClientAction{Name: "open_task", SurfaceID: surfaceID, Context: map[string]any{"id": 2.0}, ExpectedRevision: rev(1)}); err != nil || ch.Screen != "detail" || ch.ID != 2 || ch.Expected != nil {
 		t.Errorf("a revision on a navigate: %+v, %v", ch, err)
 	}
@@ -334,20 +324,16 @@ func TestAnswersKeepTheScreenAndTheForm(t *testing.T) {
 	if !strings.Contains(string(raw), `"path":"/items"`) || !strings.Contains(string(raw), `"path":"/open"`) {
 		t.Fatalf("a refresh lacks the rows or summaries: %s", raw)
 	}
-	// The one open count counts rows not done: the row with no done value too.
 	if !strings.Contains(string(raw), `"value":"1"`) {
 		t.Fatalf("open = %s", raw)
 	}
 	if raw, _ := json.Marshal(Refreshed(surfaceID, def, plannerSeed, true)); !strings.Contains(string(raw), `"path":"/draft"`) {
 		t.Fatal("an insert doesn't clear the form")
 	}
-	// An app with one screen is answered as it always was: the whole data model.
 	if got := Refreshed(surfaceID, example(t), seed, false); len(got) != 1 || got[0]["updateDataModel"].(map[string]any)["path"] != "/" {
 		t.Fatalf("a single-screen answer = %v", got)
 	}
 }
-
-// ---- the service: who may navigate, what is stored, older releases, schema changes ----
 
 func (w *world) createFrom(u *user, s access.Space, def Definition) App {
 	w.e.t.Helper()
@@ -364,10 +350,9 @@ func (w *world) post(u *user, s access.Space, a App, release *int64, name string
 
 func TestNavigationAndConditionalRequirementsOverHTTP(t *testing.T) {
 	w := newWorld(t)
-	s := w.shared // alice edits, bob views
+	s := w.shared
 	a := w.createFrom(w.alice, s, planner(t))
 
-	// The launched app has the host and every screen, on the entry screen.
 	body := w.surfaceBody(w.alice, s, a, "")
 	for _, want := range []string{`"component":"Screens"`, `"value":{"draft":{},"items":[],"open":"0","record":{},"screen":"tasks"}`} {
 		if !strings.Contains(body, want) {
@@ -375,7 +360,6 @@ func TestNavigationAndConditionalRequirementsOverHTTP(t *testing.T) {
 		}
 	}
 
-	// A required field the rule asks for, a choice outside its options, a bad time: refused.
 	for name, tt := range map[string]struct {
 		ctx  map[string]any
 		code string
@@ -395,8 +379,6 @@ func TestNavigationAndConditionalRequirementsOverHTTP(t *testing.T) {
 		t.Fatalf("refused actions stored %v", rows)
 	}
 
-	// The accepted ones: the answer keeps the screen and the form's other paths, and goes on to
-	// the screen the action says.
 	rec := w.post(w.alice, s, a, nil, "add_task", map[string]any{"title": "Fix", "category": []any{"other"}, "category_note": "errand", "due_time": "08:15"})
 	expect(t, rec, http.StatusOK)
 	for _, want := range []string{`"path":"/items"`, `"path":"/draft"`, `"path":"/screen"`, `"value":"tasks"`, `"due_time":"08:15"`} {
@@ -412,7 +394,6 @@ func TestNavigationAndConditionalRequirementsOverHTTP(t *testing.T) {
 	id := int64(items[0]["id"].(float64))
 	home := int64(items[1]["id"].(float64))
 
-	// An update is held to the rule too: making a row "other" without a note, or clearing the note.
 	expect(t, w.post(w.alice, s, a, nil, "complete_task", map[string]any{"id": id, "done": true}), http.StatusOK)
 	nonote := w.post(w.alice, s, a, nil, "complete_task", map[string]any{"id": home, "category": "other"})
 	expect(t, nonote, http.StatusUnprocessableEntity)
@@ -420,7 +401,6 @@ func TestNavigationAndConditionalRequirementsOverHTTP(t *testing.T) {
 		t.Fatalf("an update making the note required: %s", nonote.Body)
 	}
 
-	// Navigating: the reader's, and it answers the screen and the record alone.
 	rec = w.post(w.bob, s, a, nil, "new_task", nil)
 	expect(t, rec, http.StatusOK)
 	if got := rec.Body.String(); !strings.Contains(got, `"value":"new"`) || strings.Contains(got, "items") || strings.Contains(got, "draft") {
@@ -431,25 +411,19 @@ func TestNavigationAndConditionalRequirementsOverHTTP(t *testing.T) {
 	if got := rec.Body.String(); !strings.Contains(got, `"value":"detail"`) || !strings.Contains(got, "errand") {
 		t.Fatalf("open answer = %s", got)
 	}
-	// A viewer still can't change a row.
 	expect(t, w.post(w.bob, s, a, nil, "add_task", map[string]any{"title": "x", "category": "work"}), http.StatusForbidden)
-	// A record that isn't there, or isn't the caller's to read, is the same answer.
 	rec = w.post(w.alice, s, a, nil, "open_task", map[string]any{"id": 9999})
 	expect(t, rec, http.StatusUnprocessableEntity)
 	if errorCode(t, rec) != "app_row_not_found" {
 		t.Fatalf("a missing record: %s", rec.Body)
 	}
-	// Another user's private app: a stranger can't navigate it at all.
 	pa := w.createFrom(w.alice, w.alicePrivate, planner(t))
 	expect(t, w.post(w.bob, w.alicePrivate, pa, nil, "new_task", nil), http.StatusNotFound)
 	expect(t, w.post(w.mallory, w.shared, a, nil, "new_task", nil), http.StatusNotFound)
-	// An offline app isn't navigated, nor an unpublished one.
 	draft := decode[App](t, w.alice.do(http.MethodPost, appsPath(s, ""), map[string]any{"name": "Draft", "definition": planner(t)}))
 	expect(t, w.post(w.alice, s, draft, nil, "new_task", nil), http.StatusConflict)
 }
 
-// Records are read through one filter: a user who reads only their own records can't open
-// another's through a detail screen.
 func TestADetailScreenOpensOnlyWhatTheCallerReads(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -465,19 +439,15 @@ func TestADetailScreenOpensOnlyWhatTheCallerReads(t *testing.T) {
 	expect(t, w.post(w.alice, s, a, nil, "open_task", map[string]any{"id": id}), http.StatusOK)
 }
 
-// A screen drawn from an older release submits a field the live release now requires on a
-// condition: the live collection refuses it, whichever screen sent it.
 func TestAnOlderReleaseCannotSkipAConditionalRequirement(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
 	loose := fieldsOf(planner(t), "category_note", func(f *Field) { f.RequiredWhen = nil })
 	a := w.createFrom(w.alice, s, loose)
-	// A row with no note where the next release will want one.
 	expect(t, w.post(w.alice, s, a, nil, "add_task", map[string]any{"title": "Fix", "category": "other"}), http.StatusOK)
 
 	cur := w.view(w.alice, s, a)
 	cur = w.mustPatchDraft(w.alice, s, cur, planner(t))
-	// Alice reads every row, so the publish is judged by them: the stored row would be refused.
 	rec := w.tryPublish(w.alice, s, cur)
 	expect(t, rec, http.StatusConflict)
 	if errorCode(t, rec) != "app_migration_required" {
@@ -485,24 +455,19 @@ func TestAnOlderReleaseCannotSkipAConditionalRequirement(t *testing.T) {
 	}
 	expect(t, w.tryPublish(w.alice, s, cur, SchemaChange{ChangeFieldRequiredWhen, "category_note"}), http.StatusOK)
 
-	// Release 1's screen, which doesn't know of the rule, submits "other" with no note.
 	rec = w.post(w.alice, s, a, release(1), "add_task", map[string]any{"title": "Again", "category": "other"})
 	expect(t, rec, http.StatusUnprocessableEntity)
 	if errorCode(t, rec) != "app_field_required_when" {
 		t.Fatalf("an older release's insert = %s", rec.Body)
 	}
 	expect(t, w.post(w.alice, s, a, release(1), "add_task", map[string]any{"title": "Again", "category": "other", "category_note": "n"}), http.StatusOK)
-	// The row from before the rule can't be updated without the note either; with it, it can.
 	id := int64(w.items(w.alice, s, a)[0]["id"].(float64))
 	expect(t, w.post(w.alice, s, a, release(1), "complete_task", map[string]any{"id": id, "done": true}), http.StatusUnprocessableEntity)
 	expect(t, w.post(w.alice, s, a, nil, "complete_task", map[string]any{"id": id, "done": true, "category_note": "later"}), http.StatusOK)
-	// A rollback to the release without the rule is judged by the rows only if the collections differ.
 	rec = w.tryRollback(w.alice, s, w.view(w.alice, s, a), 1)
 	expect(t, rec, http.StatusOK)
 }
 
-// Schema changes of choices and conditional requirements are judged by the two schemas alone for
-// a publisher who doesn't read every row, so the answer never depends on what the rows hold.
 func TestNewKindsOfSchemaChangeAreJudgedBlindForWhoReadsNoRows(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -518,7 +483,6 @@ func TestNewKindsOfSchemaChangeAreJudgedBlindForWhoReadsNoRows(t *testing.T) {
 		if cur.Access.ReadRecords != access.ScopeNone {
 			t.Fatalf("the owner reads records: %+v", cur.Access)
 		}
-		// A new conditional requirement: counted whatever the rows hold.
 		cur = w.mustPatchDraft(w.owner, s, cur, planner(t))
 		rec := w.tryPublish(w.owner, s, cur)
 		expect(t, rec, http.StatusConflict)
@@ -526,7 +490,6 @@ func TestNewKindsOfSchemaChangeAreJudgedBlindForWhoReadsNoRows(t *testing.T) {
 			t.Fatalf("with a row = %v: %s", withRow, rec.Body)
 		}
 		cur = decode[App](t, w.tryPublish(w.owner, s, cur, SchemaChange{ChangeFieldRequiredWhen, "category_note"}))
-		// Options that shrink: counted whatever the rows hold, as a narrowed field.
 		cur = w.mustPatchDraft(w.owner, s, cur, shrunk)
 		rec = w.tryPublish(w.owner, s, cur)
 		expect(t, rec, http.StatusConflict)
@@ -537,7 +500,6 @@ func TestNewKindsOfSchemaChangeAreJudgedBlindForWhoReadsNoRows(t *testing.T) {
 	}
 }
 
-// For a publisher who reads every row, only a change some row is affected by is counted.
 func TestNewKindsOfSchemaChangeAreJudgedByRowsForWhoReadsThemAll(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -545,13 +507,10 @@ func TestNewKindsOfSchemaChangeAreJudgedByRowsForWhoReadsThemAll(t *testing.T) {
 	a := w.createFrom(w.alice, s, loose)
 	expect(t, w.post(w.alice, s, a, nil, "add_task", map[string]any{"title": "Run", "category": "work"}), http.StatusOK)
 	cur := w.view(w.alice, s, a)
-	// No stored row is "other" without a note, and none holds "other" at all.
 	cur = w.mustPatchDraft(w.alice, s, cur, fieldsOf(planner(t), "category", func(f *Field) { f.Options = []string{"work", "home", "other", "more"} }))
 	expect(t, w.tryPublish(w.alice, s, cur), http.StatusOK)
 	cur = w.mustPatchDraft(w.alice, s, w.view(w.alice, s, a), fieldsOf(planner(t), "category", func(f *Field) { f.Options = []string{"work", "other"} }))
-	// "home" is gone, but no row holds it: nothing stored is affected, so nothing to acknowledge.
 	expect(t, w.tryPublish(w.alice, s, cur), http.StatusOK)
-	// With a row that holds it, the same shrinking needs acknowledging.
 	expect(t, w.post(w.alice, s, a, nil, "add_task", map[string]any{"title": "Mop", "category": "work"}), http.StatusOK)
 	cur = w.mustPatchDraft(w.alice, s, w.view(w.alice, s, a), fieldsOf(planner(t), "category", func(f *Field) {
 		f.Options = []string{"other"}

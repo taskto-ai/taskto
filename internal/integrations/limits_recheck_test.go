@@ -11,9 +11,6 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// The admin's limits are read again right before a call under a new key leaves, not only when the try
-// began: a try that goes from a key whose object expired to the next one asks for a new link, and the
-// ceiling an admin lowered meanwhile refuses it. Nothing is sent under the new key.
 func TestTheLimitsAreReadAgainBeforeANewKeysCall(t *testing.T) {
 	for name, change := range map[string]string{
 		"the ceiling lowered":  `UPDATE integrations SET max_amount_minor = 500 WHERE id = ?`,
@@ -30,12 +27,7 @@ func TestTheLimitsAreReadAgainBeforeANewKeysCall(t *testing.T) {
 			if _, err := p.fake.Expire(p.fake.Sessions()[0].ID); err != nil {
 				t.Fatal(err)
 			}
-			// The lookup can't be read, so the key is asked again, and Stripe answers with the session it
-			// kept, which has expired: the try moves on to the next key. The admin changes the limits
-			// meanwhile.
 			p.fake.Fail(testprovider.Unavailable().On(http.MethodGet, "/v1/checkout/sessions"))
-			// The change commits once the replay has left, before the next key's call is written ahead
-			// (one after the write-ahead is TestALimitChangedBeforeTheCallLeavesStopsIt's).
 			p.svc.beforeSettle = func(string) {
 				p.svc.beforeSettle = nil
 				p.exec(change, p.in.ID)
@@ -55,9 +47,6 @@ func TestTheLimitsAreReadAgainBeforeANewKeysCall(t *testing.T) {
 	}
 }
 
-// Limits an admin lowered while a key's outcome is unknown don't stop the lookup of what its call may
-// have made: the object that turns up is the link (one link, and its payment is recorded), and nothing is
-// asked under the key or a new one past the limits.
 func TestLoweredLimitsNeverStopTheLookupOfAnUnknownKey(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -78,7 +67,6 @@ func TestLoweredLimitsNeverStopTheLookupOfAnUnknownKey(t *testing.T) {
 		t.Fatalf("%d calls: want the first only", len(posts))
 	}
 
-	// With nothing to find, the key is not asked again past the limits: the entry waits on the lookup.
 	p = newPay(t, publicURL)
 	req = p.direct(p.invoice(10, "EUR"), "op-limits-0003")
 	p.fake.Fail(testprovider.ServerError().KeptUnderKey().On(http.MethodPost, "/v1/checkout/sessions"))

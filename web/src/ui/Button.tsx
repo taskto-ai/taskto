@@ -1,20 +1,3 @@
-// The app's buttons (docs/design.md, "The buttons"): pills, in four variants.
-//
-// - primary: the one thing a screen asks you to press, at most one per screen. Mint with ink on it,
-//   an ink outline and the short hard lift that presses in.
-// - secondary (the default): a white pill with the control's edge.
-// - ghost: no ground until hovered, for the quieter actions of a row or a toolbar.
-// - danger: what deletes or can't be undone, in the danger colour.
-//
-// Two sizes, md (36px) and sm (28px); on a touch screen both are 44px, as the fields are, so a
-// row of controls of one size still lines up. A disabled button has a look of its own (a flat grey pill), never
-// a faded copy of its variant. A loading one keeps its width and its name, shows a spinner over
-// its label, says "Loading" to a screen reader and can't be pressed, but keeps the focus it has.
-// `type` is "button" unless said otherwise, so a button in a form doesn't submit it by accident.
-//
-// ButtonLink is the same look for a link: the app's router Link for a path in the app, or a plain
-// anchor (`plain`) for a download, another site or a page outside the app.
-
 import type { AnchorHTMLAttributes, ComponentPropsWithRef, MouseEvent, ReactNode } from 'react'
 import { useT } from '../i18n'
 import { Link } from '../router'
@@ -36,12 +19,9 @@ const VARIANT_CLASS = {
 interface Look {
   variant?: ButtonVariant
   size?: ButtonSize
-  // An icon before the label.
   icon?: IconName
 }
 
-// The classes of a button's look, for an element that must be something else (a <summary>, a
-// <label> over a file input).
 export function buttonClass({ variant = 'secondary', size = 'md', className }: Look & { className?: string } = {}) {
   return ['ui-control', 'ui-button', VARIANT_CLASS[variant], size === 'sm' ? 'ui-button-sm' : '', className ?? '']
     .filter(Boolean)
@@ -74,7 +54,6 @@ export function Button({
   ...rest
 }: ButtonProps) {
   const t = useT()
-  // While loading, a press does nothing: not the handler, and not a form's submission.
   const click = (e: MouseEvent<HTMLButtonElement>) => {
     if (loading) {
       e.preventDefault()
@@ -106,8 +85,6 @@ export function Button({
 export type ButtonLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> &
   Look & {
     href: string
-    // A plain anchor, not the app's router: a download, another site, a page outside the app. One
-    // with a `target` other than _self is always a plain anchor.
     plain?: boolean
   }
 
@@ -126,12 +103,8 @@ export function ButtonLink({
       {children}
     </Content>
   )
-  // A link to another browsing context (target="_blank") is the browser's to follow: the router
-  // would take the click over and open it here instead.
   if (plain || (rest.target && rest.target !== '_self'))
     return (
-      // A new browsing context gets no hold on this page (window.opener) nor its address as the
-      // referrer, unless the caller says otherwise with a rel of its own.
       <a
         className={cls}
         rel={rest.target === '_blank' && rest.rel === undefined ? 'noopener noreferrer' : undefined}

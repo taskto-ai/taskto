@@ -8,14 +8,11 @@ import (
 	"taskto.ai/taskto/internal/apps"
 )
 
-// The integration's key replaced by one of the other mode while Stripe makes the link: the link is of
-// the old mode, and the record never gets it (integration_account_changed).
 func TestALinkOfTheModeBeforeTheKeyChangedIsNotWritten(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
 	p.svc.afterCall = func() error {
 		p.svc.afterCall = nil
-		// What the admin's replacement of the key with a live one records of the integration.
 		p.exec(`UPDATE integrations SET mode = ? WHERE id = ?`, ModeLive, p.in.ID)
 		return nil
 	}

@@ -6,7 +6,6 @@ import { Dialog } from '../ui/Dialog'
 import { Field } from '../ui/Field'
 import { Input } from '../ui/Input'
 
-// A board's name, asked in a dialog: renaming one, or a new one.
 function NameDialog({
   title,
   formLabel,
@@ -65,7 +64,6 @@ export function RenameBoard({
   onCancel,
 }: {
   board: Board
-  // Why the last save failed.
   error: string | null
   onSave: (name: string) => Promise<void>
   onCancel: () => void

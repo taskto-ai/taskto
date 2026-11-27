@@ -1,9 +1,13 @@
-// The composer: one box holding the message (kept as a draft in this browser), the model picker,
-// dictation into the message, and send; while the agent works, steer, queue a follow-up or stop.
-// When nothing can be sent (the conversation is archived, or can't be read), the box is off and
-// the line above it says why.
-
-import { type FormEvent, type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useRef,
+  useState,
+} from 'react'
 import { api, errorText } from '../api'
 import { browserLocale, useT } from '../i18n'
 import { Button } from '../ui/Button'
@@ -33,32 +37,24 @@ export function Composer({
   workspace: number
   base: string
   archived: boolean
-  // The conversation couldn't be read: nothing can be sent to it.
   unreadable?: boolean
   running: boolean
   onSent: () => void
-  // In the box, under the message: the model picker.
   children?: ReactNode
 }) {
   const t = useT()
-  // Generated, as the view can be on a page twice (the builder).
   const id = useId()
   const off = archived || unreadable
-  // An unsent message is kept in this browser, so leaving and coming back finds it where it was.
-  // The key names the signed-in user, so no other account's tab reads or writes it.
   const messageKey = draftKey('message', base)
   const [text, setText] = useState(() => readDraft(messageKey) ?? '')
-  // biome-ignore lint/correctness/useExhaustiveDependencies: written when the text changes
-  useEffect(() => writeDraft(messageKey, text.trim() ? text : null), [text])
+  const keepText = useEffectEvent((text: string) => writeDraft(messageKey, text.trim() ? text : null))
+  useEffect(() => keepText(text), [text])
   const [busy, setBusy] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // One ID per message, so a retry after a lost answer doesn't send it twice.
   const pendingId = useRef<string | null>(null)
   const box = useRef<HTMLTextAreaElement>(null)
 
-  // Dictated text goes where the cursor is, with a space on either side as needed, to edit
-  // before sending.
   const insert = (spoken: string) => {
     const el = box.current
     setText((current) => {
@@ -74,8 +70,6 @@ export function Composer({
   }
   const dictation = useDictation({ workspace, disabled: off, onText: insert })
 
-  // While the agent works, a message steers it (joins the running work at its next step), or
-  // waits for the work to end (follow_up). Otherwise it starts new work.
   const send = async (whenBusy?: WhenBusy) => {
     const content = text.trim()
     if (!content || busy) return
@@ -84,8 +78,6 @@ export function Composer({
     setBusy(true)
     setError(null)
     try {
-      // The agent replies in the user's language; the server weighs the browser's against
-      // the user's own pick and the workspace's default (docs/i18n.md).
       const body = {
         content,
         request_id: pendingId.current,
@@ -94,7 +86,6 @@ export function Composer({
       }
       await api(`${base}/messages`, { method: 'POST', body })
       pendingId.current = null
-      // Only what was sent: text typed while it was sending stays.
       setText((current) => (current === draft ? '' : current))
       onSent()
     } catch (err) {
@@ -125,7 +116,6 @@ export function Composer({
     }
   }
   const empty = !text.trim()
-  // Why the box is off, or what a message does now.
   const hint = unreadable
     ? t('conversations.composer.unreadable')
     : archived

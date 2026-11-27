@@ -2,10 +2,6 @@
 
 package main
 
-// The agent runtime's wiring, with a fake sidecar: this test binary, re-executed with
-// TASKTO_FAKE_SIDECAR=1 as the "Node.js executable". It writes what the server passed it to
-// <database>.env and serves /healthz until SIGTERM or the end of its stdin.
-
 import (
 	"bytes"
 	"context"
@@ -31,7 +27,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	clitest.Main() // the fake Claude Code, Codex and Grok Build CLIs run as this binary
+	clitest.Main()
 	if os.Getenv("TASKTO_FAKE_SIDECAR") == "1" {
 		os.Exit(fakeSidecar())
 	}
@@ -41,19 +37,19 @@ func TestMain(m *testing.M) {
 func fakeSidecar() int {
 	socket, db := os.Getenv("TASKTO_AGENT_SOCKET"), os.Getenv("TASKTO_AGENT_DB")
 	env := fmt.Sprintf("providers=%s eof=%s", os.Getenv("TASKTO_AGENT_PROVIDERS"), os.Getenv(agentrt.ExitOnEOFEnv))
-	if err := os.WriteFile(db+".env", []byte(env), 0o600); err != nil { //nolint:gosec // G703: the test's own temp dir
+	if err := os.WriteFile(db+".env", []byte(env), 0o600); err != nil {
 		panic(err)
 	}
 	terms := make(chan os.Signal, 1)
 	signal.Notify(terms, syscall.SIGTERM)
-	_ = os.Remove(socket) //nolint:gosec // G703: the test's own temp dir
+	_ = os.Remove(socket)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		panic(err)
 	}
 	srv := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if os.Getenv("TASKTO_FAKE_SIDECAR_HANG") == "1" && r.URL.Path != "/healthz" {
-			<-r.Context().Done() // a runtime that takes a call and never answers
+			<-r.Context().Done()
 			return
 		}
 		_, _ = fmt.Fprintf(w, `{"status":"ok","pid":%d}`, os.Getpid())
@@ -71,7 +67,6 @@ func fakeSidecar() int {
 	return 0
 }
 
-// shortDataDir returns a data directory short enough for the agent runtime's socket.
 func shortDataDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "taskto-cmd-")
@@ -82,16 +77,15 @@ func shortDataDir(t *testing.T) string {
 	return dir
 }
 
-// fakeAgentConfig returns a config that runs the fake sidecar.
 func fakeAgentConfig(t *testing.T) config.Config {
 	t.Helper()
-	t.Setenv("TASKTO_FAKE_SIDECAR", "1") // inherited by the sidecar
+	t.Setenv("TASKTO_FAKE_SIDECAR", "1")
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	dataDir := shortDataDir(t)
-	entry := filepath.Join(dataDir, "index.js") // checked, then passed to the fake, which ignores it
+	entry := filepath.Join(dataDir, "index.js")
 	if err := os.WriteFile(entry, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -105,10 +99,6 @@ func fakeAgentConfig(t *testing.T) config.Config {
 	return cfg
 }
 
-// privilegedTestMachine reports whether the tests run as root or with a passwordless sudo
-// (a CI job in a container, say), where the server would refuse to start the sidecar: the
-// tests that aren't about that check then set its override. TestRunRefusesPrivilegedAgents
-// tests the check itself.
 func privilegedTestMachine(t *testing.T) bool {
 	t.Helper()
 	problems := privcheck.Process{}.Problems(context.Background())
@@ -118,8 +108,6 @@ func privilegedTestMachine(t *testing.T) bool {
 	return len(problems) > 0
 }
 
-// startRun runs the server in the background and returns its address, and a function that
-// stops it and returns run's error.
 func startRun(t *testing.T, cfg config.Config) (addr string, stop func() error) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -167,7 +155,6 @@ func getHealthz(t *testing.T, addr string) map[string]string {
 	return body
 }
 
-// waitFor polls cond until it holds or 20 s pass.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
@@ -179,17 +166,14 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// processGone reports whether pid has exited. A zombie has: an orphan whose server was
-// killed waits for PID 1 to reap it, which some containers' PID 1 never does.
 func processGone(pid int) bool {
 	if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
 		return true
 	}
-	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)) // Linux only; elsewhere the reaper is reliable
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		return false
 	}
-	// "pid (comm) state ...": comm may hold spaces and parentheses, so the state follows the last ')'.
 	i := bytes.LastIndexByte(stat, ')')
 	return i >= 0 && i+2 < len(stat) && stat[i+2] == 'Z'
 }
@@ -201,8 +185,6 @@ func TestAgentPaths(t *testing.T) {
 	}
 }
 
-// The server starts the sidecar with its paths under the data directory, reports it in
-// /healthz, and stops it when it stops.
 func TestRunWithTheAgentRuntime(t *testing.T) {
 	cfg := fakeAgentConfig(t)
 	cfg.AgentProviders = filepath.Join(cfg.DataDir, "operator.json")
@@ -219,7 +201,6 @@ func TestRunWithTheAgentRuntime(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o700 {
 		t.Fatalf("socket directory: %v, %v; want mode 700", info, err)
 	}
-	// The sidecar reads the file the server writes, which starts with the operator's providers.
 	generated := filepath.Join(filepath.Dir(db), "providers.json")
 	env, err := os.ReadFile(db + ".env")
 	if want := "providers=" + generated + " eof=1"; err != nil || string(env) != want {
@@ -255,8 +236,6 @@ func TestRunWithTheAgentRuntime(t *testing.T) {
 	}
 }
 
-// A setup that can never start the sidecar stops the server at once with a clear error,
-// instead of leaving the supervisor to retry forever.
 func TestRunFailsFastWithoutTheAgentRuntime(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -307,8 +286,6 @@ func writeTemp(t *testing.T, dir, content string) string {
 	return path
 }
 
-// Without -agent-entry, the entry point is looked for next to the binary and in the
-// working directory.
 func TestAgentEntryLookup(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -329,12 +306,9 @@ func TestAgentEntryLookup(t *testing.T) {
 	}
 }
 
-// The sidecar and local CLI workers run as the server's user, so a server that could act as
-// root (here, through a passwordless sudo) refuses to start them, unless the development
-// override says otherwise (docs/agent-safety.md).
 func TestRunRefusesPrivilegedAgents(t *testing.T) {
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec // G306: a fake sudo
+	if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -348,7 +322,6 @@ func TestRunRefusesPrivilegedAgents(t *testing.T) {
 			change(&cfg)
 			cfg.UnsafePrivilegedAgents = false
 			err := run(context.Background(), cfg, func(net.Addr) { t.Error("the server started listening") })
-			// The fake sudo is the problem; a test job that runs as root has that one instead.
 			want := "`sudo -n true` runs as root without a password"
 			if os.Geteuid() == 0 {
 				want = "it runs as root"
@@ -369,8 +342,6 @@ func TestRunRefusesPrivilegedAgents(t *testing.T) {
 	}
 }
 
-// A purge's recorded steps are done in the background: with a runtime that never answers the
-// server still listens and answers, and the step stays recorded.
 func TestPendingPurgeStepsDoNotHoldUpTheServersStart(t *testing.T) {
 	cfg := fakeAgentConfig(t)
 	t.Setenv("TASKTO_FAKE_SIDECAR_HANG", "1")

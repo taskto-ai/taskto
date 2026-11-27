@@ -1,8 +1,3 @@
-// The workspace switcher, at the top of the sidebar: the current workspace (a square avatar and its
-// name) on a button that opens a menu of the person's workspaces, and "New workspace" when the
-// server lets them make one. A long name is cut with an ellipsis; the whole of it is the button's
-// tooltip and is in its name. Picking a workspace keeps the section the person is in.
-
 import { useState } from 'react'
 import type { Me, Workspace } from '../api'
 import type { T } from '../i18n'
@@ -16,7 +11,6 @@ export interface WorkspaceSwitcherProps {
   me: Me
   workspace: Workspace
   section: Section
-  // The account's new state, when a workspace was made; absent, "New workspace" isn't offered.
   onMe?: (me: Me) => void
   t: T
 }
@@ -30,8 +24,6 @@ export function WorkspaceSwitcher({ me, workspace, section, onMe, t }: Workspace
         <Tooltip content={workspace.name} describes={false} side="inline-end">
           <MenuButton label={t('shell.workspace')} indicator="chevron-updown" className="ui-shell-switcher-button">
             <Avatar name={workspace.name} shape="square" size="sm" decorative />
-            {/* A workspace's name keeps its own direction: a Latin one in a right-to-left page
-                loses its end, not its start, to the ellipsis. */}
             <span className="ui-shell-switcher-name" dir="auto">
               {workspace.name}
             </span>

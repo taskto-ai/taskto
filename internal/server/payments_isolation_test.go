@@ -12,18 +12,11 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// The isolation scenarios of payments, through the real server (payments_e2e_test.go has its
-// fixtures): what an event, an integration, an approval or a space may and may not reach. In each, the
-// thing that must not cross is shown to be there, so the test proves something: the record that is left
-// alone is one a payment would have changed.
-
-// lastEffect is the newest entry of the apps' outbox: its state and its code.
 func (p *payStack) lastEffect() (state, code string) {
 	p.t.Helper()
 	return p.text(`SELECT state FROM app_effects ORDER BY id DESC LIMIT 1`), p.text(`SELECT coalesce(error_code, '') FROM app_effects ORDER BY id DESC LIMIT 1`)
 }
 
-// failsWith waits for the newest entry to fail with the code.
 func (p *payStack) failsWith(code string) {
 	p.t.Helper()
 	p.eventually("the entry fails with "+code, func() bool {
@@ -32,7 +25,6 @@ func (p *payStack) failsWith(code string) {
 	})
 }
 
-// payAndDeliver pays the session at the fake and has the provider's events delivered to the integration.
 func (p *payStack) payAndDeliver(sh *shop, session string) {
 	p.t.Helper()
 	evs, err := p.fake.Pay(session)
@@ -42,7 +34,6 @@ func (p *payStack) payAndDeliver(sh *shop, session string) {
 	p.deliver(sh, evs)
 }
 
-// tokenOf is the reference token of the session's payment link: what the provider echoes back.
 func (p *payStack) tokenOf(session string) string {
 	p.t.Helper()
 	s, ok := p.fake.Session(session)
@@ -52,19 +43,13 @@ func (p *payStack) tokenOf(session string) string {
 	return *s.ClientReferenceID
 }
 
-// ----- another workspace -----
-
 func TestAnotherWorkspacesIntegrationAndAdminsReachNothing(t *testing.T) {
 	s := newInvoicing(t)
 	record, session := s.sentInvoice(s.bob, s.app, "A-1", 50)
 	before := s.record(s.bob, s.app, record)
 
-	// Alice administers workspace two too, and connects her own integration there.
 	two := s.connect(s.alice, s.two, "other", keyB, hookW2)
 
-	// The provider's event for workspace one's payment, delivered to workspace two's route with its own
-	// secret: authentic there, and it names nothing there. It is ignored, and workspace one's invoice
-	// stays as it is.
 	s.deliver(two, []testprovider.Event{s.completed(session, nil)})
 	events := s.settled(s.alice, two, 1)
 	if e := events[0]; e.State != integrations.EventIgnored || e.Code != "integration_event_ref_unknown" {
@@ -76,7 +61,6 @@ func TestAnotherWorkspacesIntegrationAndAdminsReachNothing(t *testing.T) {
 	if n := len(s.eventsOf(s.alice, s.in)); n != 0 {
 		t.Fatalf("workspace one's integration got %d events", n)
 	}
-	// One workspace's secret opens the other's route no more than a wrong one: the plain 404.
 	for name, d := range map[string]*shop{
 		"workspace one's secret on two's route": {hook: two.hook, secret: hookA},
 		"workspace two's secret on one's route": {hook: s.in.hook, secret: hookW2},
@@ -90,8 +74,6 @@ func TestAnotherWorkspacesIntegrationAndAdminsReachNothing(t *testing.T) {
 		t.Fatalf("a forged delivery was stored (%d events)", n)
 	}
 
-	// The routes: workspace one's integration, approval and events don't exist in workspace two, and the
-	// ones of workspace two don't exist in one, for an admin of both.
 	approval := s.app.approval
 	for name, req := range map[string]struct {
 		method, path string
@@ -111,13 +93,11 @@ func TestAnotherWorkspacesIntegrationAndAdminsReachNothing(t *testing.T) {
 			t.Errorf("%s: %d %s", name, status, code)
 		}
 	}
-	// Nothing was changed by them.
 	var got integrations.Integration
 	s.mustCall(http.StatusOK, s.alice.cookie, http.MethodGet, s.ws(s.one, fmt.Sprintf("integrations/%d", s.in.id)), nil, &got)
 	if got.Disabled {
 		t.Fatal("workspace two's route disabled workspace one's integration")
 	}
-	// The lists are each workspace's own.
 	var list struct {
 		Integrations []integrations.Integration `json:"integrations"`
 	}
@@ -127,8 +107,6 @@ func TestAnotherWorkspacesIntegrationAndAdminsReachNothing(t *testing.T) {
 	}
 }
 
-// Who may do what: the admin's routes are for admins, with a session. A member, a person of another
-// workspace and an access token are refused every one.
 func TestOnlyAnAdminWithASessionMayConnectAndDecide(t *testing.T) {
 	s := newInvoicing(t)
 	_, session := s.sentInvoice(s.bob, s.app, "A-1", 50)
@@ -158,22 +136,18 @@ func TestOnlyAnAdminWithASessionMayConnectAndDecide(t *testing.T) {
 		"unlinked": {http.MethodGet, s.ws(s.one, in+"/payment-links/unresolved"), nil},
 	}
 	for name, r := range routes {
-		// A member of the workspace who isn't an admin: forbidden.
 		for who, cookie := range map[string]string{"bob": s.bob.cookie, "carol": s.carol.cookie} {
 			if status, code := s.code(cookie, r.method, r.path, r.body); status != http.StatusForbidden {
 				t.Errorf("%s as %s: %d %s", name, who, status, code)
 			}
 		}
-		// An access token is not a session: refused, whoever's it is.
 		if rec := s.request(r.method, r.path, r.body, bearer(token)); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"token_refused"`) {
 			t.Errorf("%s with an access token: %d %s", name, rec.Code, rec.Body)
 		}
-		// Nobody at all.
 		if rec := s.request(r.method, r.path, r.body, sameOrigin("")); rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s with no session: %d", name, rec.Code)
 		}
 	}
-	// Nothing of what they tried took effect.
 	var got integrations.Integration
 	s.mustCall(http.StatusOK, s.alice.cookie, http.MethodGet, s.ws(s.one, in), nil, &got)
 	if got.Disabled || len(got.Spaces) != 1 || got.Spaces[0] != s.team {
@@ -188,15 +162,9 @@ func TestOnlyAnAdminWithASessionMayConnectAndDecide(t *testing.T) {
 	}
 }
 
-// ----- a private space -----
-
-// An app in a space the admin can't open is approved without opening it, and what the admin sees of it
-// is its name, its space and its contract: never its records, and never a way to its events' records.
 func TestAnAppInAPrivateSpaceStaysClosedToAnAdminAndToOthers(t *testing.T) {
 	s := newInvoicing(t)
 
-	// Carol builds the app in her private space, where nobody else is: the integration isn't allowed
-	// there, and the admin who approves says it is (allow_space), without being able to open the space.
 	inv := s.draft(s.carol, s.carol.private, "Carol's invoices", payInvoiceApp)
 	s.askApproval(s.carol, &inv)
 	if status, code := s.code(s.alice.cookie, http.MethodPost, s.ws(s.one, fmt.Sprintf("integration-approvals/%d/approve", inv.approval)),
@@ -207,8 +175,6 @@ func TestAnAppInAPrivateSpaceStaysClosedToAnAdminAndToOthers(t *testing.T) {
 		map[string]any{"integration_id": s.in.id, "allow_space": true}, nil)
 	s.publish(s.carol, inv)
 
-	// Nobody else can reach the app, its integrations or its records: bob, who is in other spaces; and
-	// alice, the admin, who decided on it. The space doesn't exist for them.
 	for name, who := range map[string]person{"bob": s.bob, "alice": s.alice} {
 		for what, path := range map[string]string{
 			"the app":                  s.appPath(inv.space, fmt.Sprintf("/%d", inv.app)),
@@ -228,13 +194,10 @@ func TestAnAppInAPrivateSpaceStaysClosedToAnAdminAndToOthers(t *testing.T) {
 			t.Errorf("%s asks for an approval in a private space: %d", name, status)
 		}
 	}
-	// The same for carol's Secret space and the app of one in it that someone else isn't a member of.
 	if status, _ := s.code(s.bob.cookie, http.MethodPost, s.appPath(s.secret, ""), map[string]any{"name": "Sneaky", "definition": rawDefinition(payInvoiceApp)}); status != http.StatusNotFound {
 		t.Errorf("bob makes an app in a space he isn't in: %d", status)
 	}
 
-	// What the admin sees: the approval, with the app's name and its space, and the integration's own
-	// answers hold no space of a person's private one but a count.
 	var queue struct {
 		Approvals []struct {
 			AppName   string `json:"app_name"`
@@ -254,9 +217,6 @@ func TestAnAppInAPrivateSpaceStaysClosedToAnAdminAndToOthers(t *testing.T) {
 		t.Fatalf("the integration's spaces: %+v", got)
 	}
 
-	// Carol sends an invoice from her app: the link is made, and the payment is applied to her record by
-	// the integration. The admin, who runs the integration, is told of the event, and has no way to the
-	// record through it.
 	record, session := s.sentInvoice(s.carol, inv, "C-1", 75)
 	s.payAndDeliver(s.in, session)
 	events := s.settled(s.alice, s.in, 1)
@@ -266,20 +226,16 @@ func TestAnAppInAPrivateSpaceStaysClosedToAnAdminAndToOthers(t *testing.T) {
 	if s.record(s.carol, inv, record).Data["status"] != "paid" {
 		t.Fatal("carol's invoice isn't paid")
 	}
-	// The events' answer is its closed fields, with nothing of the app, the record or the reference.
 	rec := s.request(http.MethodGet, s.ws(s.one, fmt.Sprintf("integrations/%d/events", s.in.id)), nil, sameOrigin(s.alice.cookie))
 	for _, leak := range []string{"Carol", "C-1", "app_id", "record", "token", s.tokenOf(session), session} {
 		if strings.Contains(rec.Body.String(), leak) {
 			t.Errorf("the admin's event list holds %q: %s", leak, rec.Body)
 		}
 	}
-	// And the Team's app, which the same integration serves, is not carol's.
 	if n := len(s.records(s.bob, s.app)); n != 0 {
 		t.Fatalf("the team's app has %d records", n)
 	}
 }
-
-// ----- an event of one integration or app never moves another's record -----
 
 func TestAnEventNeverMovesARecordOfAnotherIntegrationOrApp(t *testing.T) {
 	s := newInvoicing(t)
@@ -290,7 +246,6 @@ func TestAnEventNeverMovesARecordOfAnotherIntegrationOrApp(t *testing.T) {
 
 	recA, sessA := s.sentInvoice(s.bob, s.app, "A-1", 50)
 	recC, sessC := s.sentInvoice(s.bob, appC, "C-1", 50)
-	// The fake accepts one key at a time: the second integration's link is made under its own.
 	s.fake.SetAPIKey(keyB)
 	recB, sessB := s.sentInvoice(s.bob, appB, "B-1", 50)
 	if n := s.refRows(s.one); n != 3 {
@@ -298,8 +253,6 @@ func TestAnEventNeverMovesARecordOfAnotherIntegrationOrApp(t *testing.T) {
 	}
 	revA, revB, revC := s.record(s.bob, s.app, recA).Revision, s.record(s.bob, appB, recB).Revision, s.record(s.bob, appC, recC).Revision
 
-	// The first integration's webhook told of the second integration's payment (its token, signed with
-	// the first's own secret) names nothing of the first's, and the other way round.
 	s.deliver(s.in, []testprovider.Event{s.completed(sessB, nil)})
 	s.deliver(b, []testprovider.Event{s.completed(sessA, nil)})
 	for _, sh := range []*shop{s.in, b} {
@@ -316,25 +269,19 @@ func TestAnEventNeverMovesARecordOfAnotherIntegrationOrApp(t *testing.T) {
 		}
 	}
 
-	// A real payment of the first app's invoice moves that record and no other, though the integration,
-	// the space and the definition are the same as the third app's.
 	s.payAndDeliver(s.in, sessA)
 	s.eventually("the first invoice is paid", func() bool { return s.record(s.bob, s.app, recA).Data["status"] == "paid" })
 	if s.record(s.bob, appC, recC).Data["status"] != "sent" || s.record(s.bob, appB, recB).Data["status"] != "sent" {
 		t.Fatal("a payment moved another app's invoice")
 	}
-	// And the payment of the third's moves only the third's.
 	s.payAndDeliver(s.in, sessC)
 	s.eventually("the third invoice is paid", func() bool { return s.record(s.bob, appC, recC).Data["status"] == "paid" })
 	if s.record(s.bob, appB, recB).Data["status"] != "sent" || s.record(s.bob, appB, recB).Revision != revB {
 		t.Fatal("a payment moved another integration's invoice")
 	}
-	// Its own integration's route does move it.
 	s.payAndDeliver(b, sessB)
 	s.eventually("the second invoice is paid", func() bool { return s.record(s.bob, appB, recB).Data["status"] == "paid" })
 }
-
-// ----- a revoked approval -----
 
 func TestARevokedApprovalAppliesNoPaymentAndMakesNoLink(t *testing.T) {
 	s := newInvoicing(t)
@@ -343,8 +290,6 @@ func TestARevokedApprovalAppliesNoPaymentAndMakesNoLink(t *testing.T) {
 
 	s.mustCall(http.StatusOK, s.alice.cookie, http.MethodPost, s.ws(s.one, fmt.Sprintf("integration-approvals/%d/revoke", s.app.approval)), map[string]any{}, nil)
 
-	// The payment arrives after the revocation: it is stored, not applied, failed with its reason, left
-	// for the admin to retry, and told to them. The money isn't dropped and the record isn't touched.
 	s.payAndDeliver(s.in, session)
 	events := s.settled(s.alice, s.in, 1)
 	if e := events[0]; e.State != integrations.EventFailed || e.Code != "integration_event_unavailable" || !e.Retriable {
@@ -357,7 +302,6 @@ func TestARevokedApprovalAppliesNoPaymentAndMakesNoLink(t *testing.T) {
 		t.Fatalf("the admin has %d notices", n)
 	}
 
-	// A new invoice sent after the revocation makes no link: the entry fails, the provider isn't called.
 	posts := len(s.sessionPosts())
 	record2 := s.draftInvoice(s.bob, s.app, "A-2", 60)
 	if got := s.send(s.bob, s.app, record2); got != http.StatusOK {
@@ -371,14 +315,11 @@ func TestARevokedApprovalAppliesNoPaymentAndMakesNoLink(t *testing.T) {
 		t.Fatalf("a link was written: %q", url)
 	}
 
-	// Approved again, the failed event is retried by the admin and applies: nothing was lost.
 	s.askApproval(s.bob, &s.app)
 	s.approve(s.alice, s.in, s.app)
 	s.mustCall(http.StatusOK, s.alice.cookie, http.MethodPost, s.ws(s.one, fmt.Sprintf("integrations/%d/events/%d/retry", s.in.id, events[0].ID)), map[string]any{}, nil)
 	s.eventually("the retried payment is applied", func() bool { return s.record(s.bob, s.app, record).Data["status"] == "paid" })
 }
-
-// ----- a disabled integration -----
 
 func TestADisabledIntegrationTakesNoEventAndMakesNoLink(t *testing.T) {
 	s := newInvoicing(t)
@@ -394,7 +335,6 @@ func TestADisabledIntegrationTakesNoEventAndMakesNoLink(t *testing.T) {
 	}
 	patch(true)
 
-	// Its route is the plain 404 of an id that doesn't exist, whatever the signature, and stores nothing.
 	unknown, err := s.sender(&shop{hook: strings.Repeat("a", 32), secret: hookA}).Send(context.Background(), evs[len(evs)-1])
 	if err != nil {
 		t.Fatal(err)
@@ -408,7 +348,6 @@ func TestADisabledIntegrationTakesNoEventAndMakesNoLink(t *testing.T) {
 	if n := len(s.eventsOf(s.alice, s.in)); n != 0 {
 		t.Fatalf("a disabled integration stored %d events", n)
 	}
-	// A new invoice makes no link.
 	posts := len(s.sessionPosts())
 	record2 := s.draftInvoice(s.bob, s.app, "A-2", 60)
 	if got := s.send(s.bob, s.app, record2); got != http.StatusOK {
@@ -422,18 +361,14 @@ func TestADisabledIntegrationTakesNoEventAndMakesNoLink(t *testing.T) {
 		t.Fatal("a disabled integration changed a record")
 	}
 
-	// Switched on again, the provider's retry of the same events is accepted and applied: no payment was
-	// lost to the pause.
 	patch(false)
 	s.deliver(s.in, evs)
 	s.eventually("the payment is applied", func() bool { return s.record(s.bob, s.app, record).Data["status"] == "paid" })
 }
 
-// ----- test mode and live mode -----
-
 func TestATestModeEventNeverMovesALiveReference(t *testing.T) {
 	s := newPayStack(t)
-	s.fake.SetAPIKey(keyLv) // from now on the provider's objects are live money
+	s.fake.SetAPIKey(keyLv)
 	live := s.connect(s.alice, s.one, "live", keyLv, hookLv)
 	var got integrations.Integration
 	s.mustCall(http.StatusOK, s.alice.cookie, http.MethodGet, s.ws(s.one, fmt.Sprintf("integrations/%d", live.id)), nil, &got)
@@ -448,9 +383,6 @@ func TestATestModeEventNeverMovesALiveReference(t *testing.T) {
 	}
 	before := s.record(s.bob, app, record)
 
-	// A test-mode event with the live reference's token, with a signature that verifies (the same
-	// secret): stored, as every signed event is (a payment is never acknowledged and dropped), and
-	// ignored against the live reference, whose mode it isn't.
 	test := s.completed(session, func(o map[string]any) { o["livemode"] = false })
 	test.Livemode = false
 	s.deliver(live, []testprovider.Event{test})
@@ -461,7 +393,6 @@ func TestATestModeEventNeverMovesALiveReference(t *testing.T) {
 		t.Fatalf("a test-mode event moved a live reference: %+v", after)
 	}
 
-	// The live payment itself does.
 	s.payAndDeliver(live, session)
 	events := s.settled(s.alice, live, 2)
 	applied := 0
@@ -478,12 +409,9 @@ func TestATestModeEventNeverMovesALiveReference(t *testing.T) {
 	}
 }
 
-// ----- what a definition can't do -----
-
 func TestADefinitionCannotSteerMoneyOrWriteWhatWasNotApproved(t *testing.T) {
 	s := newInvoicing(t)
 
-	// No address, header, redirect or secret in a definition: it is refused when it is saved.
 	for name, tc := range map[string]struct{ from, to string }{
 		"a url in a slot":          {`"kind": "payments", "on"`, `"kind": "payments", "url": "https://example.com", "on"`},
 		"a header in a handler":    {`"payment.expired": {"set"`, `"payment.expired": {"headers": {"a": "b"}, "set"`},
@@ -493,7 +421,6 @@ func TestADefinitionCannotSteerMoneyOrWriteWhatWasNotApproved(t *testing.T) {
 		"a provider in a slot":     {`"kind": "payments", "on"`, `"kind": "payments", "provider": "stripe", "on"`},
 		"a limit in a slot":        {`"kind": "payments", "on"`, `"kind": "payments", "max_amount": 5, "on"`},
 	} {
-		// The definition has no "payment.expired" handler: the header goes in one that does.
 		def := strings.Replace(payInvoiceApp, `"payment.succeeded"`, `"payment.expired": {"set": {"status": {"value": "overdue"}}}, "payment.succeeded"`, 1)
 		if !strings.Contains(def, tc.from) {
 			t.Fatalf("%s: the definition has no %q", name, tc.from)
@@ -504,14 +431,10 @@ func TestADefinitionCannotSteerMoneyOrWriteWhatWasNotApproved(t *testing.T) {
 			t.Errorf("%s: %d %s", name, status, code)
 		}
 	}
-	// None of them is an app.
 	if n := s.scalar(`SELECT count(*) FROM apps WHERE name = 'Steer'`); n != 0 {
 		t.Fatalf("%d apps were made from refused definitions", n)
 	}
 
-	// A change of what a payment writes is a new contract: it can't be published until an admin approves
-	// it, and until then the live release's contract is the authority, so a payment writes only what was
-	// approved.
 	wider := strings.Replace(payInvoiceApp, `"paid_at": {"from": "occurred_at"}`, `"paid_at": {"from": "occurred_at"}, "customer": {"value": "Paid"}`, 1)
 	var a struct{ Version int64 }
 	app := s.appPath(s.team, fmt.Sprintf("/%d", s.app.app))
@@ -537,8 +460,6 @@ func TestADefinitionCannotSteerMoneyOrWriteWhatWasNotApproved(t *testing.T) {
 	}
 }
 
-// The payee is the credential's, the amount has the admin's ceiling and the currency the admin's list:
-// an app can't ask for more, in another currency or for nothing.
 func TestAnAppCannotAskForMoreThanTheAdminAllowed(t *testing.T) {
 	s := newInvoicing(t)
 	for name, tc := range map[string]struct {
@@ -572,14 +493,9 @@ func TestAnAppCannotAskForMoreThanTheAdminAllowed(t *testing.T) {
 	}
 }
 
-// ----- the secret -----
-
-// The keys and secrets are write-only: no answer, no log line and no row of the database holds them
-// after they were saved, whether the provider answers or fails.
 func TestASecretIsNeverInAnAnswerALogOrARow(t *testing.T) {
 	s := newInvoicing(t)
 
-	// Everything an admin and a member can ask, including a change of the secrets and the connection check.
 	in := fmt.Sprintf("integrations/%d", s.in.id)
 	s.mustCall(http.StatusOK, s.alice.cookie, http.MethodGet, s.ws(s.one, "integrations"), nil, nil)
 	s.mustCall(http.StatusOK, s.alice.cookie, http.MethodGet, s.ws(s.one, in), nil, nil)
@@ -587,7 +503,6 @@ func TestASecretIsNeverInAnAnswerALogOrARow(t *testing.T) {
 	s.mustCall(http.StatusOK, s.alice.cookie, http.MethodGet, s.ws(s.one, "integration-approvals"), nil, nil)
 	s.mustCall(http.StatusOK, s.bob.cookie, http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces/%d/integrations", s.one, s.team), nil, nil)
 
-	// A provider that refuses the key, that fails and that never answered: each ends an entry with a code.
 	s.fake.Fail(testprovider.Unauthorized().Times(1))
 	record := s.draftInvoice(s.bob, s.app, "A-1", 50)
 	if got := s.send(s.bob, s.app, record); got != http.StatusOK {
@@ -597,7 +512,6 @@ func TestASecretIsNeverInAnAnswerALogOrARow(t *testing.T) {
 	s.fake.ClearFaults()
 	s.mustCall(http.StatusOK, s.alice.cookie, http.MethodPost, s.ws(s.one, in+"/check"), map[string]any{}, nil)
 
-	// A rotation of the webhook secret keeps the old one for an overlap, and shows neither.
 	s.mustCall(http.StatusOK, s.alice.cookie, http.MethodPatch, s.ws(s.one, in), map[string]any{"secrets": map[string]string{"webhook_secret": hookB}}, nil)
 	s.mustCall(http.StatusOK, s.alice.cookie, http.MethodGet, s.ws(s.one, in), nil, nil)
 	_, session := s.sentInvoice(s.bob, s.app, "A-2", 60)
@@ -608,7 +522,6 @@ func TestASecretIsNeverInAnAnswerALogOrARow(t *testing.T) {
 	s.deliver(&shop{hook: s.in.hook, secret: hookB, ws: s.one, id: s.in.id}, evs)
 	s.settled(s.alice, s.in, 1)
 	s.eventsOf(s.alice, s.in)
-	// A forged delivery too, and a wrong-secret one.
 	if d, err := s.sender(&shop{hook: s.in.hook, secret: keyA}).Send(context.Background(), evs[len(evs)-1]); err != nil || d.Status != http.StatusNotFound {
 		t.Fatalf("a delivery signed with the API key: %v %d", err, d.Status)
 	}
@@ -617,7 +530,6 @@ func TestASecretIsNeverInAnAnswerALogOrARow(t *testing.T) {
 	if len(answers) < 10 {
 		t.Fatalf("only %d answers were kept", len(answers))
 	}
-	// A control: the webhook routes' replies (the delivery above, and the two forged ones) are among them.
 	if n := len(s.hookAnswers()); n < 2 {
 		t.Fatalf("%d webhook replies were recorded: the check of the answers proves nothing for the webhook routes", n)
 	}
@@ -631,28 +543,23 @@ func TestASecretIsNeverInAnAnswerALogOrARow(t *testing.T) {
 		if strings.Contains(logs, secret) {
 			t.Errorf("the log holds %s", name)
 		}
-		// The sealed value isn't the secret: it is in no column of any table.
 		if n := s.dbHolds(secret); n != 0 {
 			t.Errorf("%s is in %d cells of the database, unsealed", name, n)
 		}
-		// And the secret's own middle, in case it was cut or quoted.
 		if mid := secret[len(secret)/2-4 : len(secret)/2+4]; strings.Contains(logs, mid) && strings.Contains(logs, "api_key") {
 			t.Errorf("the log holds a piece of %s", name)
 		}
 	}
-	// The answers show them as "set", never a value.
 	var got integrations.Integration
 	s.mustCall(http.StatusOK, s.alice.cookie, http.MethodGet, s.ws(s.one, in), nil, &got)
 	if got.Secrets["api_key"] != "set" || got.Secrets["webhook_secret"] != "set" {
 		t.Fatalf("secrets = %v", got.Secrets)
 	}
-	// A control: the scan of the answers does find what an answer holds.
 	if !strings.Contains(strings.Join(answers, "\n"), "\"shop\"") {
 		t.Fatal("the answers kept don't hold the integration's name: the search proves nothing")
 	}
 }
 
-// floatNoise is 0.30000000000000004: a sum of floats at run time (as a constant it would be exactly 0.3).
 func floatNoise() float64 {
 	a, b := 0.1, 0.2
 	return a + b

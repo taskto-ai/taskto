@@ -1,11 +1,3 @@
-// One widget on Home, in a panel of its own: its name, the app it comes from as a quiet line, what
-// the app draws for it, and the one way to open the app. While Home is being customized, a widget of
-// the person's own carries its controls (move earlier, move later, remove), and a space's default
-// the one it has (hide). The controls show short or as icons; their names say which widget they act
-// on, for whoever hears them.
-//
-// How the widget draws its own content is the app's renderer's (AppView): Home frames it.
-
 import { useMemo } from 'react'
 import { type HomeItem, ws } from '../api'
 import { LazyAppView as AppView } from '../apps/LazyAppView'
@@ -122,7 +114,6 @@ export function WidgetCard({
                 label={title}
                 release={item.release}
                 transport={transport}
-                // Bare: the widget is its frame. The app keeps the room its rings and the primary's lift need.
                 frame="bare"
               />
             </div>
@@ -142,8 +133,6 @@ export function WidgetCard({
   )
 }
 
-// In place of a widget that failed to draw: it says so, and a widget of the person's own can still
-// be taken off Home. Nothing of the widget's answer is trusted here, not even its title.
 export function WidgetFailed({ item, onRemove }: { item: HomeItem; onRemove?: () => void }) {
   const t = useT()
   return (
@@ -163,7 +152,6 @@ export function WidgetFailed({ item, onRemove }: { item: HomeItem; onRemove?: ()
   )
 }
 
-// While Home loads for the first time: the shape of a row of widgets, and a word for screen readers.
 export function WidgetSkeletons() {
   const t = useT()
   return (
@@ -171,8 +159,6 @@ export function WidgetSkeletons() {
       <VisuallyHidden>
         <span role="status">{t('app.loading')}</span>
       </VisuallyHidden>
-      {/* One row of widgets, about the height of what usually follows: a widget or two, or the empty
-          state. The second is shown only where the grid has two columns. */}
       {[0, 1].map((n) => (
         <div key={n} className="ui-home-cell ui-home-cell-skeleton" data-size="small">
           <Panel className="ui-home-widget" aria-hidden="true">

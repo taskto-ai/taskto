@@ -1,13 +1,3 @@
-// The workspace's settings, a tab each, found in a side list of three groups: the workspace's
-// (general, members and invites, shared spaces, the audit log, model providers, integrations and the
-// approvals of apps' use of them and what their providers' events became (admins), CLI accounts,
-// search, dictation, storage), your own (notifications, your password, your sessions, your data,
-// access tokens) and the server's (about). On a phone the list is a choice at the top of the page.
-// Admins see them all; members see model providers (their own accounts, and the workspace's to
-// read), their own CLI accounts, search (their spaces' consent), dictation (what is in use),
-// notifications, their own password, data, access tokens and storage, and about (the credits;
-// admins also see the server's backups there). The tab is the route's item.
-
 import type { Me, Workspace } from '../api'
 import { type Key, useT } from '../i18n'
 import { Link, navigate, routePath } from '../router'

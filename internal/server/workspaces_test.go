@@ -12,15 +12,11 @@ import (
 	"taskto.ai/taskto/internal/mail"
 )
 
-// A workspace made through the API is as separate from the others as the first one is: the
-// people, spaces, boards, apps, documents and tokens of one are 404 from the other, over REST
-// and MCP, whoever the caller is in either.
 func TestANewWorkspaceIsIsolatedFromTheFirst(t *testing.T) {
-	s := newStack(t) // alice made "Two" (s.two) through POST /api/workspaces
+	s := newStack(t)
 	three := s.createWorkspace(s.alice.cookie, "Three")
 	threePrivate := s.scalar(`SELECT id FROM spaces WHERE workspace_id = ? AND owner_id = ?`, three, s.alice.id)
 
-	// Alice's private space in each new workspace has its personal board, as in the first.
 	if n := s.scalar(`SELECT count(*) FROM boards WHERE space_id = ?`, threePrivate); n != 1 {
 		t.Fatalf("boards in the new private space = %d, want 1", n)
 	}
@@ -40,7 +36,6 @@ func TestANewWorkspaceIsIsolatedFromTheFirst(t *testing.T) {
 	w3 := fmt.Sprintf("/api/workspaces/%d", three)
 	w1 := fmt.Sprintf("/api/workspaces/%d", s.one)
 
-	// Bob and carol are members of the first workspace only: the new one doesn't exist for them.
 	for name, p := range map[string]person{"bob": s.bob, "carol": s.carol} {
 		for _, path := range []string{
 			w3 + "/members", w3 + "/spaces", w3 + "/tokens", w3 + "/invites",
@@ -60,8 +55,6 @@ func TestANewWorkspaceIsIsolatedFromTheFirst(t *testing.T) {
 			t.Errorf("%s changes the new workspace = %d, want 404", name, code)
 		}
 	}
-	// Alice isn't made a member of anyone's by being its creator's neighbour: the new workspace
-	// has her alone.
 	if n := s.scalar(`SELECT count(*) FROM memberships WHERE workspace_id = ?`, three); n != 1 {
 		t.Errorf("members of the new workspace = %d, want 1", n)
 	}
@@ -70,8 +63,6 @@ func TestANewWorkspaceIsIsolatedFromTheFirst(t *testing.T) {
 		t.Errorf("members of the new workspace = %d %v", code, members)
 	}
 
-	// Ids don't cross: a space, document or app of the new workspace through the first one's
-	// address, and the first one's through the new one's, even for someone in both.
 	for _, path := range []string{
 		fmt.Sprintf("%s/spaces/%d", w1, threePrivate),
 		s.docs(s.one, threePrivate) + "/three.md",
@@ -84,7 +75,6 @@ func TestANewWorkspaceIsIsolatedFromTheFirst(t *testing.T) {
 			t.Errorf("alice: GET %s = %d, want 404", path, code)
 		}
 	}
-	// The first workspace's spaces list has none of the new one's.
 	_, list := s.browser(s.alice.cookie, http.MethodGet, w1+"/spaces", nil)
 	for _, sp := range list["spaces"].([]any) {
 		if got := id(sp.(map[string]any)["id"]); got == threePrivate || got == s.alicePrivate2 {
@@ -92,7 +82,6 @@ func TestANewWorkspaceIsIsolatedFromTheFirst(t *testing.T) {
 		}
 	}
 
-	// Tokens are bound to the workspace they were made in, and see only it, over REST and MCP.
 	one, _ := s.newToken(s.alice.cookie, s.one, "agent in one")
 	tok3, _ := s.newToken(s.alice.cookie, three, "agent in three")
 	if code, _ := s.api(one, http.MethodGet, s.docs(three, threePrivate)+"/three.md", nil); code != http.StatusNotFound {
@@ -107,8 +96,6 @@ func TestANewWorkspaceIsIsolatedFromTheFirst(t *testing.T) {
 	if code, _ := s.api(tok3, http.MethodGet, w1+"/members", nil); code != http.StatusNotFound {
 		t.Errorf("a token of the new workspace reads one's members = %d, want 404", code)
 	}
-	// The document the reverse check reads exists, and the token of its own workspace reads it, so
-	// "not found" below can only be the isolation and not a missing file.
 	if code, body := s.api(one, http.MethodPut, s.docs(s.one, s.alice.private)+"/anything.md", map[string]any{"content": "# Anything\n"}); code != http.StatusCreated {
 		t.Fatalf("a token of one writes a document in one = %d %v", code, body)
 	}
@@ -126,13 +113,10 @@ func TestANewWorkspaceIsIsolatedFromTheFirst(t *testing.T) {
 			t.Errorf("a token of the new workspace lists space %d", got)
 		}
 	}
-	// Tokens made in the new workspace are its admin's own: bob has none there.
 	if code, _ := s.browser(s.bob.cookie, http.MethodPost, w3+"/tokens", map[string]any{"name": "x"}); code != http.StatusNotFound {
 		t.Errorf("bob makes a token in the new workspace = %d, want 404", code)
 	}
 
-	// Removing alice from nothing: bob (a member of one) making a workspace is refused by the
-	// default setting, and leaves nothing behind.
 	before := s.scalar(`SELECT count(*) FROM workspaces`)
 	if code, body := s.browser(s.bob.cookie, http.MethodPost, "/api/workspaces", map[string]any{"name": "Bob's"}); code != http.StatusForbidden || body["code"] != "workspace_creation_refused" {
 		t.Errorf("bob creates a workspace = %d %v, want 403 workspace_creation_refused", code, body)
@@ -142,8 +126,6 @@ func TestANewWorkspaceIsIsolatedFromTheFirst(t *testing.T) {
 	}
 }
 
-// With "anyone", a member who administers nothing makes a workspace of their own, and the
-// admin of the workspace they came from is a stranger there.
 func TestAnyoneMayCreateAWorkspaceWhenTheOperatorSaysSo(t *testing.T) {
 	s := newStackWith(t, func(o *Options) { o.Auth.WorkspaceCreation = "anyone" })
 	bobs := s.createWorkspace(s.bob.cookie, "Bob's")
@@ -156,15 +138,11 @@ func TestAnyoneMayCreateAWorkspaceWhenTheOperatorSaysSo(t *testing.T) {
 	if code, body := s.browser(s.bob.cookie, http.MethodGet, w+"/invites", nil); code != http.StatusOK {
 		t.Errorf("bob lists his workspace's invites = %d %v", code, body)
 	}
-	// Bob is still only a member of the workspace he came from.
 	if code, _ := s.browser(s.bob.cookie, http.MethodGet, fmt.Sprintf("/api/workspaces/%d/invites", s.one), nil); code != http.StatusForbidden {
 		t.Errorf("bob lists one's invites = %d, want 403", code)
 	}
 }
 
-// What belongs to the whole server (its backups, its outgoing email) is for operators, the
-// admins of the workspace setup made: not for someone who is admin of a workspace they made
-// themselves, where -workspace-creation=anyone lets any member make one.
 func TestServerWideViewsAreForOperatorsNotForAdminsOfCreatedWorkspaces(t *testing.T) {
 	rec := &recorder{}
 	s := newStackWith(t, func(o *Options) {
@@ -202,14 +180,12 @@ func TestServerWideViewsAreForOperatorsNotForAdminsOfCreatedWorkspaces(t *testin
 			}
 		}
 	}
-	// A test message goes through the operator's relay: not for them either.
 	if code, body := s.browser(s.bob.cookie, http.MethodPost, mailPath(bobs, "/test"), map[string]any{}); code != http.StatusForbidden || body["code"] != "operator_only" {
 		t.Errorf("bob's test email = %d %v", code, body)
 	}
 	if got := rec.messages(); len(got) != 0 {
 		t.Fatalf("a non-operator sent %d messages through the relay", len(got))
 	}
-	// /api/me says who may see them, which the web app uses.
 	for who, want := range map[string]bool{"alice": true, "bob": false, "carol": false} {
 		cookie := map[string]string{"alice": s.alice.cookie, "bob": s.bob.cookie, "carol": s.carol.cookie}[who]
 		if _, body := s.browser(cookie, http.MethodGet, "/api/me", nil); body["is_operator"] != want {
@@ -218,9 +194,6 @@ func TestServerWideViewsAreForOperatorsNotForAdminsOfCreatedWorkspaces(t *testin
 	}
 }
 
-// A form opened for one account and submitted after the browser's session became another's
-// (the web app names the account it is for) makes no workspace: 409, and the other account
-// ends up with nothing.
 func TestCreatingAWorkspaceNamingAnotherAccountMakesNone(t *testing.T) {
 	s := newStackWith(t, func(o *Options) { o.Auth.WorkspaceCreation = "anyone" })
 	before := s.scalar(`SELECT count(*) FROM workspaces`)

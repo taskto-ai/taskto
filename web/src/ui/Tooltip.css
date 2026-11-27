@@ -1,11 +1,8 @@
 @layer components {
-  /* The wrapper adds no box: the control is laid out as if it were alone. */
   .ui-tooltip-anchor {
     display: contents;
   }
 
-  /* Ink on light, paper on dark: the text colour as the ground, the page's as the text. Placed by
-     script (Tooltip.tsx) in the top layer; closed, a popover is not drawn. */
   .ui-tooltip {
     position: fixed;
     inset: auto;
@@ -25,7 +22,6 @@
     pointer-events: auto;
   }
 
-  /* Without the popover API (an old browser, the tests), it is shown by data-open. */
   .ui-tooltip:not([data-open]) {
     display: none;
   }

@@ -1,8 +1,3 @@
-// The server didn't answer, and nobody signed in on this device before (else the offline shell
-// opens): what happened, what was said, and Try again. In the frame's own form, its title in the
-// display face like every screen there, not a box of its own inside the card. The title is inside
-// the alert, so what is announced starts with what happened.
-
 import { useT } from '../i18n'
 import { Button } from '../ui/Button'
 import { Heading } from '../ui/Heading'

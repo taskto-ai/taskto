@@ -8,41 +8,26 @@ import (
 	"image/jpeg"
 	"net/http"
 
-	// The decoders of the picture types an attachment may be (inspect): the standard library's,
-	// and no other, so nothing outside it ever parses a stranger's bytes.
 	_ "image/gif"
 	_ "image/png"
 )
 
-// Pictures. An attachment is a JPEG, a PNG or a GIF; the type is found in the bytes, never taken
-// from what the client said. The server decodes each once, to check that it is a picture within
-// bounds and to make its thumbnail, with the standard library's decoders only.
-
-// ThumbSize is the longest side of a thumbnail, in pixels.
 const ThumbSize = 320
 
-// The most pixels a picture may have, by type: a PNG or a GIF is decoded to four bytes a pixel,
-// a JPEG to a little more than one, so a bound in pixels is a bound in the memory a decode takes.
 var maxPixels = map[string]int{"jpeg": 50_000_000, "png": 24_000_000, "gif": 24_000_000}
 
-// pictureTypes maps the format the image package found to the Content-Type served and the
-// extension of the name offered for it. Nothing else is accepted.
 var pictureTypes = map[string]struct{ contentType, ext string }{
 	"jpeg": {"image/jpeg", "jpg"},
 	"png":  {"image/png", "png"},
 	"gif":  {"image/gif", "gif"},
 }
 
-// sniffed describes what is in a file's bytes.
 type sniffed struct {
-	format        string // "jpeg", "png" or "gif"
+	format        string
 	contentType   string
-	width, height int // as the picture is shown, its orientation applied
+	width, height int
 }
 
-// inspect finds out what data is: it must be a JPEG, a PNG or a GIF by its own bytes (the
-// header the image package reads, which must agree with the type http.DetectContentType finds),
-// of at least one pixel and within the pixel bound of its type. It decodes nothing yet.
 func inspect(data []byte) (sniffed, error) {
 	head := data
 	if len(head) > 512 {
@@ -64,10 +49,6 @@ func inspect(data []byte) (sniffed, error) {
 	return s, nil
 }
 
-// thumbnail returns a JPEG of the picture in data no larger than ThumbSize on a side: sampled
-// from the decoded picture at a grid of points in each pixel's share of it (the standard library
-// has no resizer, and this is all a thumbnail needs), turned the way a JPEG's orientation says
-// (a phone's photo is stored as its sensor saw it), and laid on white where it is transparent.
 func thumbnail(data []byte, format string) ([]byte, error) {
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
@@ -95,9 +76,7 @@ func thumbnail(data []byte, format string) ([]byte, error) {
 					r, g, bl, a, n = r+uint64(cr), g+uint64(cg), bl+uint64(cb), a+uint64(ca), n+1
 				}
 			}
-			// The colours are premultiplied: over white, what the alpha doesn't cover is white.
 			white := 0xffff*n - a
-			// What is left after the average and the shift is at most 255.
 			small.SetRGBA(x, y, color.RGBA{
 				R: uint8((r + white) / n >> 8 & 0xff), G: uint8((g + white) / n >> 8 & 0xff), B: uint8((bl + white) / n >> 8 & 0xff), A: 0xff,
 			})
@@ -118,7 +97,6 @@ func orientationOfFormat(data []byte, format string) int {
 	return 1
 }
 
-// orient turns img as EXIF orientation o (1 to 8) says it is to be shown.
 func orient(img *image.RGBA, o int) image.Image {
 	if o < 2 || o > 8 {
 		return img
@@ -154,8 +132,6 @@ func orient(img *image.RGBA, o int) image.Image {
 	return out
 }
 
-// orientationOf reads the orientation (1 to 8) from a JPEG's EXIF segment, or 1 if it has none
-// or it can't be read. It reads only the segments before the picture's data, within bounds.
 func orientationOf(data []byte) int {
 	if len(data) < 4 || data[0] != 0xff || data[1] != 0xd8 {
 		return 1
@@ -166,7 +142,7 @@ func orientationOf(data []byte) int {
 			return 1
 		}
 		marker := data[i+1]
-		if marker == 0xda || marker == 0xd9 { // the picture's data starts
+		if marker == 0xda || marker == 0xd9 {
 			return 1
 		}
 		size := int(binary.BigEndian.Uint16(data[i+2:]))
@@ -183,7 +159,6 @@ func orientationOf(data []byte) int {
 	return 1
 }
 
-// tiffOrientation reads the orientation tag from an APP1 segment's payload, 0 if it isn't there.
 func tiffOrientation(seg []byte) int {
 	if !bytes.HasPrefix(seg, []byte("Exif\x00\x00")) || len(seg) < 6+8 {
 		return 0

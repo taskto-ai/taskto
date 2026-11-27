@@ -12,7 +12,6 @@ import (
 	"taskto.ai/taskto/internal/apps"
 )
 
-// addExpense is the example app's action that adds a row, as the screen's button sends it.
 func addExpense(appID int64, description string) map[string]any {
 	return map[string]any{
 		"name": "add_expense", "surfaceId": apps.SurfaceID(appID), "sourceComponentId": "add",
@@ -20,8 +19,6 @@ func addExpense(appID int64, description string) map[string]any {
 	}
 }
 
-// A token reads an app and its rows, and runs its actions, over REST, as its user in its
-// workspace: the same answers as the session's, the changes marked with the token's name.
 func TestTokensUseTheAppsRoutes(t *testing.T) {
 	s := newStack(t)
 	appID := s.app(s.alice.cookie, s.alice.private, "coffee")
@@ -42,7 +39,6 @@ func TestTokensUseTheAppsRoutes(t *testing.T) {
 		}
 	}
 
-	// An action as the token's user: the row is hers, marked with the token's name.
 	rec := s.request(http.MethodPost, base+"/actions", addExpense(appID, "tea"), bearer(token))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("action with a token = %d %s", rec.Code, rec.Body)
@@ -63,7 +59,6 @@ func TestTokensUseTheAppsRoutes(t *testing.T) {
 	if by := tea["created_by"].(map[string]any); id(by["id"]) != s.alice.id || by["agent"] != true || by["via"] != "laptop" {
 		t.Errorf("a row added with a token is by %v, want alice's, the agent's, via laptop", by)
 	}
-	// The row the browser added stays unmarked.
 	for _, r := range recs["records"].([]any) {
 		rec := r.(map[string]any)
 		if rec["data"].(map[string]any)["description"] != "coffee" {
@@ -73,23 +68,18 @@ func TestTokensUseTheAppsRoutes(t *testing.T) {
 			t.Errorf("a browser's row is by %v", by)
 		}
 	}
-	// A record's history and its effects are reachable too.
 	if code, _ := s.api(token, http.MethodGet, fmt.Sprintf("%s/records/%d/history", base, id(tea["id"])), nil); code != http.StatusOK {
 		t.Errorf("history with a token = %d", code)
 	}
 	if code, _ := s.api(token, http.MethodGet, fmt.Sprintf("%s/records/%d/effects", base, id(tea["id"])), nil); code != http.StatusOK {
 		t.Errorf("record effects with a token = %d", code)
 	}
-	// And the same row is there over MCP.
 	rows := s.toolOK(token, "list_app_rows", map[string]any{"space_id": s.alice.private, "app_id": appID})["rows"].([]any)
 	if len(rows) != 2 {
 		t.Errorf("list_app_rows = %v, want the same two rows", rows)
 	}
 }
 
-// What a token can't do over the apps' REST routes: everything that builds, publishes, shares
-// or serves the web app itself, 403 with or without a session cookie alongside. Alice is the
-// app's owner and a workspace admin, so only the token can be why.
 func TestTokensCannotBuildPublishOrShareApps(t *testing.T) {
 	s := newStack(t)
 	appID := s.app(s.alice.cookie, s.alice.private, "coffee")
@@ -132,8 +122,6 @@ func TestTokensCannotBuildPublishOrShareApps(t *testing.T) {
 				with = append(with, sameOrigin(s.alice.cookie))
 			}
 			rec := s.request(c.method, c.path, c.body, with...)
-			// Some of these routes only exist when the server keeps files: then it is the
-			// router's 404 or 405, which is no answer to a token either.
 			if rec.Code == http.StatusNotFound || rec.Code == http.StatusMethodNotAllowed {
 				if strings.Contains(c.path, "/uploads") || strings.Contains(c.path, "/attachments") {
 					continue
@@ -144,16 +132,12 @@ func TestTokensCannotBuildPublishOrShareApps(t *testing.T) {
 			}
 		}
 	}
-	// Nothing changed: the app is as it was published.
 	code, a := s.browser(s.alice.cookie, http.MethodGet, base, nil)
 	if code != http.StatusOK || a["name"] != "Expenses" || id(a["version"]) != 2 {
 		t.Errorf("the app = %d %v, want Expenses as published", code, a)
 	}
 }
 
-// A token reaches only the apps its user can, in its own workspace: not another user's
-// private space, not a shared space its user isn't in, not another workspace, and a viewer's
-// token can read but not act. All the same 404 or 403 a session gets.
 func TestAppsTokensKeepTheirUsersAccessAndWorkspace(t *testing.T) {
 	s := newStack(t)
 	carolApp := s.app(s.carol.cookie, s.carol.private, "needle")
@@ -161,8 +145,6 @@ func TestAppsTokensKeepTheirUsersAccessAndWorkspace(t *testing.T) {
 	bob, _ := s.newToken(s.bob.cookie, s.one, "bob's agent")
 	alice, _ := s.newToken(s.alice.cookie, s.one, "alice's agent")
 
-	// Bob's token against carol's private space and the shared space bob isn't in: 404, as on
-	// every other route that takes a token, for the list, the app, its rows and its actions.
 	for sp, app := range map[int64]int64{s.carol.private: carolApp, s.secret: secretApp} {
 		base := fmt.Sprintf("%s/%d", s.apps(s.one, sp), app)
 		for _, path := range []string{s.apps(s.one, sp), base, base + "/surface", base + "/records", base + "/records/query", base + "/releases", base + "/effects"} {
@@ -173,7 +155,6 @@ func TestAppsTokensKeepTheirUsersAccessAndWorkspace(t *testing.T) {
 		if code, _ := s.api(bob, http.MethodPost, base+"/actions", addExpense(app, "mine")); code != http.StatusNotFound {
 			t.Errorf("bob's token acts in space %d = %d, want 404", sp, code)
 		}
-		// Nor carol's app through bob's own space, whose path it isn't in.
 		through := fmt.Sprintf("%s/%d", s.apps(s.one, s.bob.private), app)
 		for _, path := range []string{through, through + "/records", through + "/surface"} {
 			if code, _ := s.api(bob, http.MethodGet, path, nil); code != http.StatusNotFound {
@@ -188,7 +169,6 @@ func TestAppsTokensKeepTheirUsersAccessAndWorkspace(t *testing.T) {
 		t.Errorf("%d rows in carol's apps, want her two", n)
 	}
 
-	// Another workspace of the same user: alice's token is for one.
 	for _, path := range []string{s.apps(s.two, s.alicePrivate2), s.apps(s.two, s.alicePrivate2) + "/1/surface"} {
 		if code, _ := s.api(alice, http.MethodGet, path, nil); code != http.StatusNotFound {
 			t.Errorf("alice's token: GET %s = %d, want 404", path, code)
@@ -198,7 +178,6 @@ func TestAppsTokensKeepTheirUsersAccessAndWorkspace(t *testing.T) {
 		t.Errorf("alice's token acts in two = %d, want 404", code)
 	}
 
-	// A viewer's token reads and can't act. Carol shares an app in a space bob only reads.
 	viewerSpace := s.sharedSpace("Reading", s.carol)
 	ws := fmt.Sprintf("/api/workspaces/%d/spaces/%d", s.one, viewerSpace)
 	if code, body := s.browser(s.alice.cookie, http.MethodPost, ws+"/members", map[string]any{"user_id": s.bob.id, "role": "viewer"}); code != http.StatusNoContent {
@@ -218,8 +197,6 @@ func TestAppsTokensKeepTheirUsersAccessAndWorkspace(t *testing.T) {
 	}
 }
 
-// A request that names an account, as the offline outbox's does, is the session's: with a
-// token it is refused, so a token can't be used to send someone else's queued work.
 func TestAppsTokensRefuseTheExpectedUserHeader(t *testing.T) {
 	s := newStack(t)
 	appID := s.app(s.alice.cookie, s.alice.private, "coffee")
@@ -233,10 +210,6 @@ func TestAppsTokensRefuseTheExpectedUserHeader(t *testing.T) {
 	}
 }
 
-// A user's tokens have a budget of actions in a workspace, whichever route they run them on:
-// over it the answer is a 429 with Retry-After and a code the web app translates. The budget is
-// the user's own: a session, another user's token and the same user's other workspace are
-// untouched by it.
 func TestAppsTokensHaveAnActionBudget(t *testing.T) {
 	s := newStack(t)
 	appID := s.app(s.alice.cookie, s.alice.private, "coffee")
@@ -249,7 +222,6 @@ func TestAppsTokensHaveAnActionBudget(t *testing.T) {
 	frozen := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
 	s.frozen = &frozen
 
-	// The burst is spent by two tokens of the same user between them.
 	for i := range apps.TokenActionBurst {
 		token := first
 		if i%2 == 1 {
@@ -266,7 +238,6 @@ func TestAppsTokensHaveAnActionBudget(t *testing.T) {
 			t.Fatalf("over the budget = %d %s, Retry-After %q", rec.Code, rec.Body, rec.Header().Get("Retry-After"))
 		}
 	}
-	// Over MCP the same budget refuses, as a tool error.
 	release := s.toolOK(first, "list_app_actions", map[string]any{"space_id": s.alice.private, "app_id": appID})["release"]
 	if code, refused, text := s.tool(first, "run_app_action", map[string]any{"space_id": s.alice.private, "app_id": appID, "expected_release": release, "action": "add_expense", "context": map[string]any{"description": "x", "amount": 4}}); code != http.StatusOK || !refused || !strings.Contains(text, "too many actions") {
 		t.Errorf("run_app_action over the budget = %d %v %s, want a refusal", code, refused, text)
@@ -275,11 +246,9 @@ func TestAppsTokensHaveAnActionBudget(t *testing.T) {
 		t.Errorf("%d rows, want the coffee and the %d the budget allowed", n, apps.TokenActionBurst)
 	}
 
-	// Reading is not an action: it is not limited.
 	if code, _ := s.api(first, http.MethodGet, base+"/records", nil); code != http.StatusOK {
 		t.Errorf("a token reads over its action budget = %d", code)
 	}
-	// A second later one action is back; no more.
 	frozen = frozen.Add(time.Second)
 	if rec := s.request(http.MethodPost, base+"/actions", addExpense(appID, "later"), bearer(first)); rec.Code != http.StatusOK {
 		t.Errorf("an action a second later = %d %s", rec.Code, rec.Body)
@@ -287,23 +256,18 @@ func TestAppsTokensHaveAnActionBudget(t *testing.T) {
 	if rec := s.request(http.MethodPost, base+"/actions", addExpense(appID, "too soon"), bearer(second)); rec.Code != http.StatusTooManyRequests {
 		t.Errorf("a second action in that second = %d %s, want 429", rec.Code, rec.Body)
 	}
-	// The user's session, who is a person, still acts.
 	if code, body := s.browser(s.alice.cookie, http.MethodPost, base+"/actions", addExpense(appID, "by hand")); code != http.StatusOK {
 		t.Errorf("a session acts after its user's tokens ran out = %d %v", code, body)
 	}
-	// Another user's token has a budget of its own.
 	if rec := s.request(http.MethodPost, fmt.Sprintf("%s/%d/actions", s.apps(s.one, s.bob.private), bobApp), addExpense(bobApp, "bob's"), bearer(bob)); rec.Code != http.StatusOK {
 		t.Errorf("bob's token after alice's ran out = %d %s", rec.Code, rec.Body)
 	}
 }
 
-// An app restricted to roles holds a token to them too: a reader's token reads the rows in a
-// space that lets her write, and can't insert.
 func TestAppsTokensKeepTheAppsRoles(t *testing.T) {
 	s := newStack(t)
 	bob, _ := s.newToken(s.bob.cookie, s.one, "bob's agent")
 
-	// Alice shares a space with bob as an editor, then restricts an app in it to a reader role.
 	space := s.sharedSpace("Cafe", s.bob)
 	shared := s.app(s.alice.cookie, space, "shared")
 	sharedBase := fmt.Sprintf("%s/%d", s.apps(s.one, space), shared)
@@ -320,8 +284,6 @@ func TestAppsTokensKeepTheAppsRoles(t *testing.T) {
 	}
 }
 
-// An action that committed is answered with its receipt over REST even when its token's budget is
-// spent, for a client that lost the answer; a new operation is still refused.
 func TestAppsTokensReplayACommittedActionOverTheBudget(t *testing.T) {
 	s := newStack(t)
 	appID := s.app(s.alice.cookie, s.alice.private, "coffee")

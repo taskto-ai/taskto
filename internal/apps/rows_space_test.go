@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// An app that moves to another space between a caller's access check and the read of its rows is
-// not read from the space it left: the statement that reads the rows asks for the app to be in the
-// space, and so does the one that reads the attachments' metadata.
 func TestRowsOfAnAppThatMovedAreNotReadFromTheSpaceItLeft(t *testing.T) {
 	w := newWorld(t)
 	ctx := t.Context()
@@ -22,7 +19,6 @@ func TestRowsOfAnAppThatMovedAreNotReadFromTheSpaceItLeft(t *testing.T) {
 		t.Fatalf("rows in the private space = %v, %v, want its one row", rows, err)
 	}
 
-	// The app moves to the shared space after the access check.
 	if _, err := w.e.db.Exec(`UPDATE apps SET space_id = ? WHERE id = ?`, w.shared.ID, w.aliceApp.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +29,6 @@ func TestRowsOfAnAppThatMovedAreNotReadFromTheSpaceItLeft(t *testing.T) {
 		t.Fatalf("ListRows of the app through the space it left = %v, want ErrNotFound", err)
 	}
 
-	// The attachments' metadata is asked for the same way.
 	const id = "0123456789abcdef0123456789abcdef"
 	if _, err := w.e.db.Exec(`INSERT INTO app_attachments (id, app_id, space_id, field, status, size, received, content_type)
 		VALUES (?, ?, ?, 'photos', 'ready', 3, 3, 'image/png')`, id, w.aliceApp.ID, w.shared.ID); err != nil {

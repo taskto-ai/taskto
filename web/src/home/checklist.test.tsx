@@ -48,10 +48,8 @@ test('an admin sees each step with its state and a link to the page where it is 
   const panel = await screen.findByRole('region', { name: 'Set up your workspace' })
   expect(within(panel).getByRole('status').textContent).toBe('1 of 4 steps handled')
 
-  // The steps have an order: an ordered list.
   expect(within(panel).getByRole('list').tagName).toBe('OL')
   const steps = within(panel).getAllByRole('listitem')
-  // Each step: its name, and its state in words (the mark before it is only a picture of it).
   const said = (step: HTMLElement, name: string) => {
     expect(within(step).getByText(name)).toBeTruthy()
     return within(step)
@@ -71,10 +69,8 @@ test('an admin sees each step with its state and a link to the page where it is 
   expect(link('Create a space')).toBe('/w/1/settings/spaces')
   expect(link('Browse templates')).toBe('/w/1/apps/templates')
   expect(link('See the backups')).toBe('/w/1/settings/about')
-  // A step that is done has nothing left to do or skip.
   expect(within(steps[1]).queryByRole('link')).toBeNull()
   expect(within(steps[1]).queryByRole('button')).toBeNull()
-  // The one thing to press next is the first step still to do.
   expect(within(panel).getByRole('link', { name: 'Invite people' }).className).toContain('ui-button-primary')
   expect(within(panel).getByRole('link', { name: 'Create a space' }).className).not.toContain('ui-button-primary')
 })
@@ -131,7 +127,6 @@ test('a step that doesn’t apply is skipped and taken back, keeping the keyboar
   const undo = await within(panel).findByRole('button', { name: 'Undo skip: Invite your team' })
   expect(within(panel).getByRole('status').textContent).toBe('2 of 4 steps handled')
   expect(within(panel).getByText('Skipped')).toBeTruthy()
-  // The same button, so a keyboard user's place isn't lost.
   expect(document.activeElement).toBe(undo)
 
   fireEvent.click(undo)
@@ -166,9 +161,7 @@ test('dismissing puts it away, moves the keyboard to the page, and Customize bri
 
   fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Show the setup checklist' }))
-  // The button that had the keyboard is gone, so the checklist's own heading has it.
   await waitFor(() => expect(document.activeElement?.id).toBe('ui-checklist-title'))
-  // Shown again, so there is nothing to bring back.
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Show the setup checklist' })).toBeNull())
   expect(calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`)).toEqual([
     'PUT /api/workspaces/1/checklist/dismissed',
@@ -218,7 +211,6 @@ test('while the list loads again after a change, the button being used stays, an
   hold = true
   fireEvent.click(skip)
   await waitFor(() => expect(release).toBeDefined())
-  // The answer is still on its way: what was shown, and the focus in it, are as they were.
   expect(screen.getByRole('region', { name: 'Set up your workspace' })).toBeTruthy()
   expect(document.activeElement).toBe(skip)
   release?.()
@@ -242,8 +234,6 @@ test('a failed bringing back keeps its message, even while the list loads again'
   fireEvent.click(await screen.findByRole('button', { name: 'Show the setup checklist' }))
   const alert = await screen.findByRole('alert')
   expect(alert.textContent).not.toBe('')
-  // The control is still there, with the message, once the list has loaded again.
-  // The list and the control each load it at first, and each again after the change.
   await waitFor(() => expect(calls.filter((c) => c.path === '/api/workspaces/1/checklist')).toHaveLength(4))
   expect(screen.getByRole('button', { name: 'Show the setup checklist' })).toBeTruthy()
   expect(screen.getByRole('alert')).toBe(alert)
@@ -306,6 +296,5 @@ test('a list that can’t be loaded again says so under what is shown', async ()
   fireEvent.click(within(panel).getByRole('button', { name: 'Skip: Invite your team' }))
   const alert = await within(panel).findByRole('alert')
   expect(alert.textContent).not.toBe('')
-  // What was shown is still there.
   expect(within(panel).getAllByRole('listitem')).toHaveLength(6)
 })

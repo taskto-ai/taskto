@@ -1,7 +1,3 @@
-/* The text controls: Input, Textarea and Select share this box, .ui-textbox (an edge inside a fixed height, the
-   control's radius, the surface), so a field lines up with a button of its size. Focus is the
-   ring, not a change of the edge, so an invalid field shows both. */
-
 @layer components {
   .ui-textbox {
     box-sizing: border-box;
@@ -46,8 +42,6 @@
     outline-offset: var(--line-focus-offset);
   }
 
-  /* Disabled: the neutral ground, muted text, no edge to press. Read-only keeps its look but loses
-     its edge's weight. */
   .ui-textbox:disabled {
     border-color: transparent;
     background: var(--color-neutral-soft);
@@ -60,13 +54,10 @@
     background: var(--color-bg-sunken);
   }
 
-  /* After the read-only rule, of the same weight: a read-only field that is invalid keeps the
-     danger edge. */
   .ui-textbox[aria-invalid]:not([aria-invalid="false"]) {
     border-color: var(--color-danger);
   }
 
-  /* Fingers: the touch height; the text at 16px so a phone doesn't zoom in on focus. */
   @media (pointer: coarse) {
     .ui-textbox-md,
     .ui-textbox-sm {

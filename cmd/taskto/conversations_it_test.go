@@ -2,11 +2,6 @@
 
 package main
 
-// The conversation API with the real sidecar and its scripted model, through the server
-// binary: create, send, steer, stream the events and rebuild the view from them in Node
-// with Chord's applyImmutable (as the browser will), and nobody else reaching any of it.
-// Gated by TASKTO_AGENT_IT=1 like the other integration tests.
-
 import (
 	"bufio"
 	"bytes"
@@ -28,7 +23,6 @@ import (
 	"taskto.ai/taskto/internal/db"
 )
 
-// streamEvent is one line of the sidecar's watch, as an SSE event carries it.
 type streamEvent struct {
 	Type  string          `json:"type"`
 	Value json.RawMessage `json:"value"`
@@ -36,8 +30,6 @@ type streamEvent struct {
 	Kind  string          `json:"kind"`
 }
 
-// eventsClient reads GET …/events in the background. Each event's data arrives on events;
-// the channel closes when the stream ends.
 type eventsClient struct {
 	events <-chan streamEvent
 	cancel context.CancelFunc
@@ -70,7 +62,7 @@ func (a *api) openEvents(path string) *eventsClient {
 			}
 			data, ok := strings.CutPrefix(strings.TrimSuffix(line, "\n"), "data: ")
 			if !ok {
-				continue // retry, heartbeats and the blank line between events
+				continue
 			}
 			var ev streamEvent
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {
@@ -83,7 +75,6 @@ func (a *api) openEvents(path string) *eventsClient {
 	return &eventsClient{events: events, cancel: cancel}
 }
 
-// next returns the next event, failing the test if none comes within a while.
 func (e *eventsClient) next(t *testing.T) streamEvent {
 	t.Helper()
 	select {
@@ -98,8 +89,6 @@ func (e *eventsClient) next(t *testing.T) streamEvent {
 	return streamEvent{}
 }
 
-// rebuild applies ops batches to value with Chord's applyImmutable in Node, from the agent
-// package, whose dependencies have it, and returns the view.
 func rebuild(t *testing.T, value json.RawMessage, batches []json.RawMessage) any {
 	t.Helper()
 	input, err := json.Marshal(map[string]any{"value": value, "batches": batches})
@@ -134,7 +123,6 @@ func TestConversationsThroughTheServer(t *testing.T) {
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
 	}
-	// test-entry.js: the sidecar with the pause tools the scripted model calls.
 	entry, err := filepath.Abs("../../agent/dist/test-entry.js")
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +156,6 @@ func TestConversationsThroughTheServer(t *testing.T) {
 	}
 	owner := newAPI()
 	var ownerMe me
-	// The setup token, from the server's log, as an operator reads it.
 	token := setupTokenLine.FindStringSubmatch(server.output.String())
 	if token == nil {
 		t.Fatal("the server logged no setup token")
@@ -202,7 +189,6 @@ func TestConversationsThroughTheServer(t *testing.T) {
 	}
 	one := fmt.Sprintf("%s/%d", base, conv.ID)
 
-	// Stream while a tool runs, and steer it.
 	stream := owner.openEvents(one + "/events")
 	first := stream.next(t)
 	if first.Type != "value" {
@@ -253,8 +239,6 @@ func TestConversationsThroughTheServer(t *testing.T) {
 		t.Fatalf("messages = %+v; want the steer answered in the same run", msgs.Messages)
 	}
 
-	// The view rebuilt from the stream is the one a new stream starts from. The answer streams
-	// in pieces, so read until the stream has been quiet for a while.
 	for quiet := false; !quiet; {
 		select {
 		case ev := <-stream.events:
@@ -278,7 +262,6 @@ func TestConversationsThroughTheServer(t *testing.T) {
 		t.Fatalf("rebuilt view differs from a fresh one:\nrebuilt %s\nfresh   %s", gotJSON, snapshot.Value)
 	}
 
-	// The model: the default, then the owner's own provider, which nobody else may use.
 	getModel := func(a *api, path string) map[string]string {
 		var m map[string]string
 		if err := json.Unmarshal(a.expect(http.StatusOK, http.MethodGet, path, nil), &m); err != nil {
@@ -313,7 +296,6 @@ func TestConversationsThroughTheServer(t *testing.T) {
 	}
 	member.expect(http.StatusBadRequest, http.MethodPut, fmt.Sprintf("%s/%d/model", base, mine.ID), personal)
 
-	// Another member of the workspace reaches nothing of the owner's conversation.
 	for _, r := range []struct {
 		method, path string
 		body         any
@@ -340,8 +322,6 @@ func TestConversationsThroughTheServer(t *testing.T) {
 		t.Fatalf("the member lists %+v, want only their own", listed.Conversations)
 	}
 
-	// The sidecar dies: the open stream ends, and a new one starts from the current view once
-	// the supervisor has restarted it.
 	h, err := sidecar.Health(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -370,10 +350,6 @@ func TestConversationsThroughTheServer(t *testing.T) {
 	}
 }
 
-// A conversation the agent runtime lost, through the real server and sidecar: its routes
-// answer 410 and the server logs the mismatch; `taskto conversations` finds it and, with
-// clean -lost, deletes it, while a conversation the sidecar created just now without a row
-// (one the server could be recording) isn't taken for an orphan.
 func TestLostConversationThroughTheServer(t *testing.T) {
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
@@ -423,13 +399,10 @@ func TestLostConversationThroughTheServer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// One with no row: as if recording it had failed a moment ago.
 	if _, err := sidecar.CreateConversation(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	// The agent runtime loses one: as if its data had been restored from an older backup
-	// than the server's. Retiring it makes the sidecar answer 404 for it, the same as that.
 	sqlDB, err := db.Open(ctx, filepath.Join(dataDir, db.FileName))
 	if err != nil {
 		t.Fatal(err)

@@ -15,29 +15,6 @@ import (
 	"taskto.ai/taskto/internal/auth"
 )
 
-// Home: each person's widgets and pins, and the defaults of shared spaces.
-//
-// What an app offers is in its definition (contributions.go); what is on a person's Home and in
-// their navigation is theirs, kept as placements that only name an app and a widget of it
-// (home_items). Nothing about a placement is trusted when it is read back: Home is worked out
-// afresh from the app's LIVE release and the caller's access to it, through the one place that
-// answers app access (access.Checker). An app the caller can no longer view, or that was
-// deleted, is left out as if it had never been there; an app that is offline, was never
-// published, or no longer has the widget is told as unavailable, with its name (the caller may
-// view the app) and never its data. The data of a widget is not here at all: the web app draws
-// it with the app's own surface and actions (surface?widget=, actions), whose checks are the
-// app's.
-//
-// Who sets defaults for a shared space: the people who may PUBLISH the app (Capability publish
-// in the app's roles, which the space's writers all have in an app without roles), since a
-// default changes what every member sees on opening the platform, as publishing changes what
-// every member uses. They are for the apps of shared spaces only, and a member sees them unless
-// they hide them (home_hidden). A default goes when its app moves to another space.
-//
-// All of it is bounded: a person has at most MaxHomeWidgets widgets and MaxHomePins pins in a
-// workspace, and a space at most MaxDefaultWidgets and MaxDefaultPins defaults.
-
-// Bounds of placements.
 const (
 	MaxHomeWidgets    = 24
 	MaxHomePins       = 20
@@ -45,7 +22,6 @@ const (
 	MaxDefaultPins    = 8
 )
 
-// The kinds of placement, and what a placed item is.
 const (
 	KindWidget = "widget"
 	KindPin    = "pin"
@@ -56,63 +32,45 @@ const (
 	StateReady       = "ready"
 	StateUnavailable = "unavailable"
 
-	// Why an item is unavailable: the app is offline, it has no release, or its live release no
-	// longer offers the widget.
 	ReasonOffline     = "offline"
 	ReasonUnpublished = "unpublished"
 	ReasonRemoved     = "removed"
 )
 
-// HomeItem is a widget on someone's Home or a pin in their navigation, as the caller sees it now.
 type HomeItem struct {
-	// ID is the caller's own placement; DefaultID is the space default it is, if it is one (an
-	// item the caller placed too is shown as theirs).
-	ID        int64  `json:"id,omitempty"`
-	DefaultID int64  `json:"default_id,omitempty"`
-	Source    string `json:"source"`
-	Kind      string `json:"kind"`
-	SpaceID   int64  `json:"space_id"`
-	AppID     int64  `json:"app_id"`
-	AppName   string `json:"app_name"`
-	// WidgetID and Widget are those of a widget placement; Widget is left out when the live
-	// release no longer has it. Label and Screen are those of a pin: the app's own pin if its live
-	// release has one, else the app's name and its entry.
-	WidgetID string  `json:"widget_id,omitempty"`
-	Widget   *Widget `json:"widget,omitempty"`
-	Label    string  `json:"label,omitempty"`
-	Screen   string  `json:"screen,omitempty"`
-	// State is ready or unavailable; Reason says why (offline, unpublished, removed).
-	State  string `json:"state"`
-	Reason string `json:"reason,omitempty"`
-	// Release is what a client needs to draw a ready item (the live release's number and needs).
-	Release *HomeRelease `json:"release,omitempty"`
-	// CanManage, on a default, is whether the caller may remove it.
-	CanManage bool `json:"can_manage,omitempty"`
+	ID        int64        `json:"id,omitempty"`
+	DefaultID int64        `json:"default_id,omitempty"`
+	Source    string       `json:"source"`
+	Kind      string       `json:"kind"`
+	SpaceID   int64        `json:"space_id"`
+	AppID     int64        `json:"app_id"`
+	AppName   string       `json:"app_name"`
+	WidgetID  string       `json:"widget_id,omitempty"`
+	Widget    *Widget      `json:"widget,omitempty"`
+	Label     string       `json:"label,omitempty"`
+	Screen    string       `json:"screen,omitempty"`
+	State     string       `json:"state"`
+	Reason    string       `json:"reason,omitempty"`
+	Release   *HomeRelease `json:"release,omitempty"`
+	CanManage bool         `json:"can_manage,omitempty"`
 }
 
-// HomeRelease is the live release an item is drawn from.
 type HomeRelease struct {
 	Number            int64    `json:"number"`
 	DefinitionVersion int      `json:"definition_version"`
 	Requires          []string `json:"requires" apitypes:"nonnull"`
 }
 
-// HomeView is a person's Home in one workspace.
 type HomeView struct {
-	// Widgets and Pins are in order: the defaults of the person's shared spaces first, then
-	// their own, in the order they chose.
 	Widgets []HomeItem `json:"widgets" apitypes:"nonnull"`
 	Pins    []HomeItem `json:"pins" apitypes:"nonnull"`
-	// Hidden are the defaults the person hid.
-	Hidden []HomeItem `json:"hidden" apitypes:"nonnull"`
-	Limits struct {
+	Hidden  []HomeItem `json:"hidden" apitypes:"nonnull"`
+	Limits  struct {
 		Widgets int `json:"widgets"`
 		Pins    int `json:"pins"`
 	} `json:"limits"`
 }
 
-// NewHomeItem is a request to place a widget or a pin, or to set one as a space's default. Widget
-// is the widget's id; empty for a pin.
 type NewHomeItem struct {
 	Kind    string `json:"kind"`
 	SpaceID int64  `json:"space_id"`
@@ -120,31 +78,24 @@ type NewHomeItem struct {
 	Widget  string `json:"widget"`
 }
 
-// AvailableApp is an app the caller may put on their Home or pin, with what it offers.
 type AvailableApp struct {
-	SpaceID   int64    `json:"space_id"`
-	SpaceName string   `json:"space_name"`
-	SpaceKind string   `json:"space_kind"`
-	AppID     int64    `json:"app_id"`
-	Name      string   `json:"name"`
-	Widgets   []Widget `json:"widgets" apitypes:"nonnull"`
-	Pin       *Pin     `json:"pin"`
-	// CanSetDefaults is whether the caller may set this app's widgets and pin as defaults of its
-	// shared space; Defaults are the ones set, which they may remove.
+	SpaceID        int64              `json:"space_id"`
+	SpaceName      string             `json:"space_name"`
+	SpaceKind      string             `json:"space_kind"`
+	AppID          int64              `json:"app_id"`
+	Name           string             `json:"name"`
+	Widgets        []Widget           `json:"widgets" apitypes:"nonnull"`
+	Pin            *Pin               `json:"pin"`
 	CanSetDefaults bool               `json:"can_set_defaults"`
 	Defaults       []AvailableDefault `json:"defaults" apitypes:"nonnull"`
 }
 
-// AvailableDefault is a default that is set for an app.
 type AvailableDefault struct {
 	ID     int64  `json:"id"`
 	Kind   string `json:"kind"`
 	Widget string `json:"widget,omitempty"`
 }
 
-// HomeRoutes mounts the home endpoints on mux: the caller's own Home under their workspace, behind
-// a's RequireMember, and a shared space's defaults under the space, behind RequireSpace. Every
-// route needs a session; the CSRF guard checks every one that isn't a GET.
 func (s *Service) HomeRoutes(mux *http.ServeMux, a *auth.Service) {
 	member := func(h http.HandlerFunc) http.Handler { return a.RequireMember(h) }
 	read := func(h http.HandlerFunc) http.Handler { return s.access.RequireSpace(access.Read, h) }
@@ -164,14 +115,12 @@ func (s *Service) HomeRoutes(mux *http.ServeMux, a *auth.Service) {
 	mux.Handle("DELETE "+space+"/{default}", write(s.handleDefaultRemove))
 }
 
-// homeCaller is the signed-in user and the workspace RequireMember checked.
 func homeCaller(r *http.Request) (user, workspace int64) {
 	u, _ := auth.UserFrom(r.Context())
 	m, _ := auth.MembershipFrom(r.Context())
 	return u.ID, m.WorkspaceID
 }
 
-// rawHome is a placement as stored, with the app it names as it is now.
 type rawHome struct {
 	id, defaultID  int64
 	kind, widget   string
@@ -185,8 +134,6 @@ type rawHome struct {
 	contributions  sql.NullString
 }
 
-// The release's own columns, and the contributions alone out of its definition (which can be
-// 48 KiB), from apps a and its live release r.
 const homeAppColumns = `a.id, a.space_id, a.name, a.archived_at IS NOT NULL, a.live_release,
 	r.definition_version, r.requires, json_extract(r.definition, '$.contributions')`
 const (
@@ -204,8 +151,6 @@ func (r *rawHome) scanApp(row scanner, dest ...any) error {
 	return row.Scan(append(dest, &r.appID, &r.spaceID, &r.appName, &r.archived, &r.live, &r.defVersion, &r.requires, &r.contributions)...)
 }
 
-// loadHome reads the caller's own placements in workspace, in order; only is one placement's ID, or 0
-// for all.
 func (s *Service) loadHome(ctx context.Context, userID, workspaceID, only int64) ([]rawHome, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT i.id, i.kind, i.widget, `+homeAppColumns+`
@@ -228,9 +173,6 @@ func (s *Service) loadHome(ctx context.Context, userID, workspaceID, only int64)
 	return all, rows.Err()
 }
 
-// loadDefaults reads the defaults of the shared spaces of workspace the caller is asked about:
-// those of one space if spaceID is set, else of every space of the workspace (access is judged
-// when they are resolved). userID's own hiding of each is noted. only is one default, or 0.
 func (s *Service) loadDefaults(ctx context.Context, userID, workspaceID, spaceID, only int64) ([]rawHome, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT d.id, d.kind, d.widget, EXISTS (SELECT 1 FROM home_hidden h WHERE h.default_id = d.id AND h.user_id = ?), `+homeAppColumns+`
@@ -253,13 +195,10 @@ func (s *Service) loadDefaults(ctx context.Context, userID, workspaceID, spaceID
 	return all, rows.Err()
 }
 
-// homeResolver works placements out against what the caller may do now.
 type homeResolver struct {
 	s      *Service
 	ctx    context.Context
 	userID int64
-	// spaces caches, per space, what the caller may do in each of its apps; nil: they can't
-	// read the space.
 	spaces map[int64]map[int64]access.AppAccess
 }
 
@@ -267,8 +206,6 @@ func (s *Service) resolver(ctx context.Context, userID int64) *homeResolver {
 	return &homeResolver{s: s, ctx: ctx, userID: userID, spaces: map[int64]map[int64]access.AppAccess{}}
 }
 
-// access is what the caller may do in app appID of space spaceID; ok is false if they can't view
-// it, which is to leave the item out.
 func (h *homeResolver) access(spaceID, appID int64) (acc access.AppAccess, ok bool, err error) {
 	accs, cached := h.spaces[spaceID]
 	if !cached {
@@ -289,7 +226,6 @@ func (h *homeResolver) access(spaceID, appID int64) (acc access.AppAccess, ok bo
 	return acc, found && acc.View, nil
 }
 
-// resolve returns raw as the caller sees it. ok is false for an item they can't see at all.
 func (h *homeResolver) resolve(raw rawHome) (item HomeItem, acc access.AppAccess, ok bool, err error) {
 	acc, ok, err = h.access(raw.spaceID, raw.appID)
 	if err != nil || !ok {
@@ -338,7 +274,6 @@ func (h *homeResolver) resolve(raw rawHome) (item HomeItem, acc access.AppAccess
 	return item, acc, true, nil
 }
 
-// homeView works out the caller's Home in workspace.
 func (s *Service) homeView(ctx context.Context, userID, workspaceID int64) (HomeView, error) {
 	view := HomeView{Widgets: []HomeItem{}, Pins: []HomeItem{}, Hidden: []HomeItem{}}
 	view.Limits.Widgets, view.Limits.Pins = MaxHomeWidgets, MaxHomePins
@@ -351,7 +286,6 @@ func (s *Service) homeView(ctx context.Context, userID, workspaceID int64) (Home
 		return HomeView{}, err
 	}
 	res := s.resolver(ctx, userID)
-	// What the caller placed themselves wins over the same default.
 	type key struct {
 		app  int64
 		kind string
@@ -395,9 +329,6 @@ func (s *Service) homeView(ctx context.Context, userID, workspaceID int64) (Home
 	return view, nil
 }
 
-// checkNewItem checks what a placement names, as the caller sees it: the space is one they can
-// read in workspace, the app one they may view, launchable (online, with a release), and a widget
-// one its live release offers. It returns the app's access too.
 func (s *Service) checkNewItem(ctx context.Context, userID, workspaceID int64, in NewHomeItem) (access.Space, access.AppAccess, error) {
 	switch {
 	case in.Kind == KindWidget && in.Widget == "", in.Kind == KindPin && in.Widget != "", in.Kind != KindWidget && in.Kind != KindPin:
@@ -429,8 +360,6 @@ func (s *Service) checkNewItem(ctx context.Context, userID, workspaceID int64, i
 	return sp, acc, nil
 }
 
-// addHomeItem places a widget or a pin for the caller; placing what is already placed changes
-// nothing. The new item goes last.
 func (s *Service) addHomeItem(ctx context.Context, userID, workspaceID int64, in NewHomeItem) (HomeItem, error) {
 	if _, _, err := s.checkNewItem(ctx, userID, workspaceID, in); err != nil {
 		return HomeItem{}, err
@@ -441,7 +370,6 @@ func (s *Service) addHomeItem(ctx context.Context, userID, workspaceID int64, in
 	}
 	var id int64
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		// Checked again under the write lock: access may have changed since.
 		if _, _, err := s.checkNewItem(ctx, userID, workspaceID, in); err != nil {
 			return err
 		}
@@ -473,7 +401,6 @@ func (s *Service) addHomeItem(ctx context.Context, userID, workspaceID int64, in
 	return s.placed(ctx, userID, workspaceID, id)
 }
 
-// placed returns one of the caller's placements as they see it.
 func (s *Service) placed(ctx context.Context, userID, workspaceID, id int64) (HomeItem, error) {
 	raws, err := s.loadHome(ctx, userID, workspaceID, id)
 	if err != nil {
@@ -492,8 +419,6 @@ func (s *Service) placed(ctx context.Context, userID, workspaceID, id int64) (Ho
 	return item, nil
 }
 
-// removeHomeItem takes one of the caller's own placements away. Someone else's, or one of
-// another workspace, is not found.
 func (s *Service) removeHomeItem(ctx context.Context, userID, workspaceID, id int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
@@ -512,9 +437,6 @@ func (s *Service) removeHomeItem(ctx context.Context, userID, workspaceID, id in
 	})
 }
 
-// orderHome puts the caller's placements of kind in the order of ids, those not listed after
-// them in the order they had. An id that isn't the caller's, of that kind and workspace, or is
-// listed twice, is refused and nothing changes.
 func (s *Service) orderHome(ctx context.Context, userID, workspaceID int64, kind string, ids []int64) error {
 	if kind != KindWidget && kind != KindPin {
 		return invalidf("kind is widget or pin")
@@ -560,8 +482,6 @@ func (s *Service) orderHome(ctx context.Context, userID, workspaceID int64, kind
 	})
 }
 
-// hideDefault hides a default of one of the shared spaces the caller reads, from them alone, or
-// shows it again.
 func (s *Service) hideDefault(ctx context.Context, userID, workspaceID, defaultID int64, hide bool) error {
 	raws, err := s.loadDefaults(ctx, userID, workspaceID, 0, defaultID)
 	if err != nil {
@@ -570,7 +490,6 @@ func (s *Service) hideDefault(ctx context.Context, userID, workspaceID, defaultI
 	if len(raws) == 0 {
 		return ErrNotFound
 	}
-	// A default of an app the caller can't view is as unseen as the app.
 	if _, ok, err := s.resolver(ctx, userID).access(raws[0].spaceID, raws[0].appID); err != nil {
 		return err
 	} else if !ok {
@@ -586,8 +505,6 @@ func (s *Service) hideDefault(ctx context.Context, userID, workspaceID, defaultI
 	})
 }
 
-// listDefaults lists the defaults of the shared space sp that the caller may see, with whether
-// they may remove each.
 func (s *Service) listDefaults(ctx context.Context, userID int64, sp access.Space) ([]HomeItem, error) {
 	out := []HomeItem{}
 	if sp.Kind != access.Shared {
@@ -611,8 +528,6 @@ func (s *Service) listDefaults(ctx context.Context, userID int64, sp access.Spac
 	return out, nil
 }
 
-// addDefault sets a widget or a pin of an app of the shared space sp as a default for its members.
-// The caller must be allowed to publish the app.
 func (s *Service) addDefault(ctx context.Context, sp access.Space, userID int64, in NewHomeItem) (HomeItem, error) {
 	if sp.Kind != access.Shared {
 		return HomeItem{}, apierr.New(http.StatusConflict, apierr.CodeHomeDefaultsShared, "defaults are for the apps of shared spaces")
@@ -670,8 +585,6 @@ func (s *Service) addDefault(ctx context.Context, sp access.Space, userID int64,
 	return item, nil
 }
 
-// removeDefault removes a default of the shared space sp; the caller must be allowed to publish
-// its app. Members who hid it have nothing left to hide.
 func (s *Service) removeDefault(ctx context.Context, sp access.Space, userID, id int64) error {
 	if err := may(sp, access.Write); err != nil {
 		return err
@@ -697,8 +610,6 @@ func (s *Service) removeDefault(ctx context.Context, sp access.Space, userID, id
 	})
 }
 
-// available lists the apps of the workspace the caller may place: those they may view, online and
-// published, with what each offers.
 func (s *Service) available(ctx context.Context, userID, workspaceID int64) ([]AvailableApp, error) {
 	spaces, err := s.access.Readable(ctx, userID, workspaceID)
 	if err != nil {
@@ -772,10 +683,6 @@ func (s *Service) available(ctx context.Context, userID, workspaceID int64) ([]A
 	return out, nil
 }
 
-// widgetSurface returns the messages that draw a widget of the app's LIVE release, with the
-// rows the caller reads: the same checks as the app's own surface, so a caller who may not view
-// the app, an offline or unpublished one, gets what they would get there, and a widget the
-// release doesn't offer is not found.
 func (s *Service) widgetSurface(ctx context.Context, sp access.Space, actor Actor, appID int64, widget string) ([]Message, error) {
 	if err := may(sp, access.Read); err != nil {
 		return nil, err
@@ -841,7 +748,6 @@ func (s *Service) handleHomeAdd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, item)
 }
 
-// pathID reads the numeric path value name; one that isn't a number is as unknown as any.
 func pathID(w http.ResponseWriter, r *http.Request, name string) (int64, bool) {
 	id, err := strconv.ParseInt(r.PathValue(name), 10, 64)
 	if err != nil || id < 1 {

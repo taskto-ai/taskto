@@ -1,19 +1,3 @@
-// A person's Home: the widgets they put there from their apps (and those a shared space sets for its
-// members), each a bounded view of an app drawn by the same renderer as the app and through the
-// app's own surface and actions, so what a widget shows and does is what its viewer may see and do in
-// the app, no more. Each widget is drawn inside an error boundary of its own, so one that fails (a
-// malformed answer, a render error, an app this client is too old to draw) leaves the others and the
-// shell as they were. An app that went offline, was unpublished or removed the widget says so, with
-// no data; one the person lost access to isn't there at all.
-//
-// A workspace's admins also see its setup checklist above the widgets until it is done or they put it
-// away (SetupChecklist.tsx).
-//
-// "Customize" is where people choose (HomeCustomize.tsx): which widgets to show and in what order,
-// which apps to pin to the navigation, the defaults they hid, and, for those who may publish an app
-// of a shared space, the widgets and pin it offers to all its members by default. While it is on,
-// each widget of the person's own carries its controls: move earlier, move later, remove.
-
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { type AvailableApp, api, errorText, type HomeItem, type HomeView, ws } from '../api'
 import { useFormat, useT } from '../i18n'
@@ -34,24 +18,15 @@ import { itemKey, WidgetCard, WidgetFailed, WidgetSkeletons } from './WidgetCard
 import './Home.css'
 
 export type Move = (kind: 'widget' | 'pin', item: HomeItem, step: -1 | 1) => Promise<void>
-// What follows a change: the words a screen reader is told once it is made, and where the keyboard
-// goes once Home is shown again (the first of these controls that is there and enabled; the
-// Customize button when none is).
 export type After = { message?: string; focus?: string[] }
 export type Run = (change: () => Promise<unknown>, after?: After) => Promise<void>
 export type Act = (item: HomeItem, name: string, focus?: string[]) => Promise<void>
 
-// The name a control carries so the keyboard can be put back on it after Home is shown again:
-// what it acts on (a widget, a pin, an offer) and which control it is.
 export const focusName = (scope: string, key: string, control: string) => `${scope}:${key}:${control}`
-// The control that carries a focus name, found by comparing the names, not by building a selector
-// from one (a name holds an item's key, which no selector should have to escape).
 function focusTarget(name: string): HTMLElement | undefined {
   return [...document.querySelectorAll<HTMLElement>('[data-home-focus]')].find((el) => el.dataset.homeFocus === name)
 }
 
-// Where the keyboard goes when a placement is taken off: the same control of the next one, or the
-// one before, of the same list.
 export function neighbours(scope: string, list: HomeItem[], item: HomeItem): string[] {
   const at = list.findIndex((i) => itemKey(i) === itemKey(item))
   return [list[at + 1], list[at - 1]]
@@ -65,22 +40,17 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
   const heading = useRef<HTMLHeadingElement>(null)
   const customize = useRef<HTMLButtonElement>(null)
   const version = useHomeVersion()
-  // With the version it was loaded at, so a change's focus waits for the load that follows it.
   const home = useHomeLoad(() => {
     const at = homeVersion()
     return api<HomeView>(`${ws(workspace)}/home`).then((view) => ({ view, at }))
   }, [workspace])
   const view = home.data?.view
   const [customizing, setCustomizing] = useState(false)
-  // Opened from the empty state's button, which goes away with it: the keyboard goes to what to add.
   const [openedFromEmpty, setOpenedFromEmpty] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [said, setSaid] = useState('')
-  // Where the keyboard goes after a change, and the version Home must be loaded at to show it: an
-  // earlier load arriving later says nothing of this change.
   const pendingFocus = useRef<{ names: string[]; at: number } | null>(null)
 
-  // Once Home is shown again after a change, the keyboard goes back where the change left it.
   const settleFocus = useCallback(() => {
     const pending = pendingFocus.current
     if (!pending || (home.data?.at ?? -1) < pending.at) return
@@ -97,10 +67,6 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
   }, [home.data])
   useLayoutEffect(settleFocus, [settleFocus])
 
-  // Runs a change, then tells everything that shows Home to load it again, whether it worked or not:
-  // after a refusal the lists show what is true now. What is shown stays while it loads.
-  // A change answered after its session ended (signed out, someone else signed in) says nothing and
-  // tells nothing to load again: what shows Home then is another session's.
   const run: Run = async (change, after = {}) => {
     pendingFocus.current = null
     const same = sameSession()
@@ -114,7 +80,6 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
       setError(errorText(e))
     }
     homeChanged()
-    // Settled by the load this change starts, not by one started before it.
     if (after.focus) pendingFocus.current = { names: after.focus, at: homeVersion() }
   }
   const base = ws(workspace)
@@ -130,7 +95,6 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
       message: t('home.announce.hidden', { name }),
       focus: focus ?? neighbours(scopeOf(item), listOf(item), item),
     })
-  // Moves one of the person's own placements among their own, one step.
   const move: Move = (kind, item, step) => {
     const own = (kind === 'widget' ? (view?.widgets ?? []) : (view?.pins ?? [])).filter((i) => i.source === 'personal')
     const from = own.findIndex((i) => i.id === item.id)
@@ -143,7 +107,6 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
     const [same, other] = step < 0 ? ['earlier', 'later'] : ['later', 'earlier']
     return run(() => api(`${base}/home/order`, { method: 'PUT', body: { kind, ids } }), {
       message: t('home.announce.moved', { name, position: f.number(to + 1), total: f.number(own.length) }),
-      // The same button, if the item can still go that way; the other one otherwise.
       focus: [focusName(kind, key, same), focusName(kind, key, other)],
     })
   }
@@ -171,11 +134,9 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
           </Button>
         }
       />
-      {/* What a change in customize mode did, said once it is made. */}
       <VisuallyHidden>
         <span role="status">{said}</span>
       </VisuallyHidden>
-      {/* Where the keyboard goes when the checklist, which had it, is put away or finished. */}
       {admin && (
         <SetupChecklist
           workspace={workspace}
@@ -239,14 +200,11 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
   )
 }
 
-// The columns a widget takes on a wide screen: what its app says, if it says one of the sizes we know.
 function sizeOf(item: HomeItem): string {
   const size = item.widget?.size
   return size === 'medium' || size === 'large' ? size : 'small'
 }
 
-// Nothing placed yet: what Home is for, and the first step. Customize when one of the person's apps
-// offers a widget; the apps otherwise, where one is built or installed.
 function EmptyHome({ workspace, onCustomize }: { workspace: number; onCustomize: () => void }) {
   const t = useT()
   const available = useHomeLoad(
@@ -254,7 +212,6 @@ function EmptyHome({ workspace, onCustomize }: { workspace: number; onCustomize:
     [workspace],
   )
   const offers = available.data?.some((a) => a.widgets.length > 0)
-  // Still asking: no step yet, rather than one that changes under the pointer.
   const settled = available.data !== undefined || available.error !== null
   return (
     <EmptyState

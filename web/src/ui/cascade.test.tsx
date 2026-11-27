@@ -1,10 +1,5 @@
 // @vitest-environment jsdom
 
-// What the controls' own stylesheets decide between their states, read from the stylesheets
-// themselves in jsdom, which applies weight and order (not layout or the user's input). A state
-// jsdom can't put an element in (the pointer over it, the keyboard's focus) is stood in for by an
-// attribute of the same weight: `:hover` and `[data-hover]` both weigh one class.
-
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { cleanup, render, screen } from '@testing-library/react'
@@ -14,7 +9,6 @@ import { Input } from './Input'
 
 const dir = import.meta.dirname
 
-// Stand-ins for the colour tokens, each its own, so a computed colour says which one won.
 const TOKENS = `:root {
   --color-danger: rgb(200, 0, 0);
   --color-border: rgb(1, 1, 1);
@@ -74,9 +68,7 @@ describe('the stylesheets, state against state', () => {
     const danger = edge(invalid)
     const plain = edge(hovered)
     for (const box of [invalid, hovered]) box.closest('.ui-check')?.setAttribute('data-hover', '')
-    // The hover still shows on a valid box…
     expect(edge(hovered)).not.toBe(plain)
-    // …and doesn't take the danger edge from an invalid one.
     expect(edge(invalid)).toBe(danger)
   })
 

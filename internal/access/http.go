@@ -15,12 +15,10 @@ import (
 	"taskto.ai/taskto/internal/auth"
 )
 
-// Routes mounts the space endpoints on mux. docs/api.md describes them.
 func (c *Checker) Routes(mux *http.ServeMux) {
 	member := func(h http.HandlerFunc) http.Handler { return c.auth.RequireMember(h) }
 	admin := func(h http.HandlerFunc) http.Handler { return c.auth.RequireAdmin(h) }
 
-	// Access tokens may read the spaces; managing them takes a session.
 	mux.Handle("GET /api/workspaces/{workspace}/spaces", auth.AcceptTokens(member(c.handleList)))
 	mux.Handle("POST /api/workspaces/{workspace}/spaces", admin(c.handleCreate))
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}", auth.AcceptTokens(member(c.handleGet)))
@@ -36,8 +34,6 @@ const (
 	maxNameLen = 100
 )
 
-// visibleSpace is spaceInPath, answering 404 unless the caller may read the space, or
-// manage it: a shared space, for a workspace admin.
 func (c *Checker) visibleSpace(w http.ResponseWriter, r *http.Request) (Space, bool) {
 	s, ok := c.spaceInPath(w, r)
 	if !ok {
@@ -51,8 +47,6 @@ func (c *Checker) visibleSpace(w http.ResponseWriter, r *http.Request) (Space, b
 	return s, true
 }
 
-// sharedSpace is visibleSpace for routes about shared spaces only: it answers 404 for
-// private ones too.
 func (c *Checker) sharedSpace(w http.ResponseWriter, r *http.Request) (Space, bool) {
 	s, ok := c.visibleSpace(w, r)
 	if !ok {
@@ -234,7 +228,6 @@ func (c *Checker) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// fail answers with the status for one of the package's errors, or 500.
 func (c *Checker) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -267,7 +260,6 @@ func validRole(w http.ResponseWriter, role Role) bool {
 	return true
 }
 
-// spaceName trims a space name and checks its length, answering 400 if it is wrong.
 func spaceName(w http.ResponseWriter, s string) (string, bool) {
 	s = strings.TrimSpace(s)
 	if n := utf8.RuneCountInString(s); n < 1 || n > maxNameLen {
@@ -278,8 +270,6 @@ func spaceName(w http.ResponseWriter, s string) (string, bool) {
 	return s, true
 }
 
-// readJSON decodes the request body into v, strictly: unknown fields and trailing data
-// are errors. It answers 400 and returns false on failure.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
 	dec.DisallowUnknownFields()
@@ -294,8 +284,6 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// writeJSON encodes before writing, so an encoding failure is a 500 rather than a 200
-// with a broken body.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {

@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-//
-// What a tab hears of the browser's account from the other tabs: each change as it was made, in
-// order, even when the tab handles them late (it was frozen, in the background).
 
 import { afterEach, expect, test } from 'vitest'
 import { onAccountSignal, watchAccount } from './account'
@@ -25,7 +22,6 @@ const marker = (id: number, name: string) => JSON.stringify({ id, name })
 
 test('a sign-out and the next sign-in, handled late, are heard as each was: nobody, then the other account', () => {
   const got = heard()
-  // By the time this tab handles them, storage already names the second person.
   localStorage.setItem(LAST, marker(2, 'Second'))
   window.dispatchEvent(new StorageEvent('storage', { key: LAST, newValue: null }))
   window.dispatchEvent(new StorageEvent('storage', { key: LAST, newValue: marker(2, 'Second') }))

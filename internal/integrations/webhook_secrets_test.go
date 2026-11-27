@@ -10,9 +10,6 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// shareSecret gives integration in the database a webhook secret directly, as a database from
-// before the route refused reuse can hold one: it is sealed for the integration with no check and
-// no fingerprint, and the server then gives it the one it gives secrets at start.
 func (r *rig) shareSecret(in Integration, id, secret string) {
 	r.t.Helper()
 	ctx := context.Background()
@@ -45,15 +42,10 @@ func (r *rig) checkOf(id int64) CheckResult {
 	return decode[CheckResult](r.t, rec)
 }
 
-// A webhook secret two integrations hold (an old install can have it) verifies a delivery for
-// neither, whichever workspace they are in: the delivery stores nothing and is the plain 404, the
-// check tells admins without saying whose it is, and once one of them rotates the other still refuses
-// (the secret is spent) until it has a fresh one too.
 func TestADuplicatedWebhookSecretVerifiesNothing(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
 	_, ws2 := r.otherWorkspace(r.owner)
-	// The second integration is in another workspace, as the worst case is.
 	rec := r.owner.do(http.MethodPost, wsPath(ws2, "integrations"), stripeBody("elsewhere"))
 	expect(t, rec, http.StatusCreated)
 	second := decode[Integration](t, rec)
@@ -101,12 +93,10 @@ func TestADuplicatedWebhookSecretVerifiesNothing(t *testing.T) {
 	if at := r.lastEvent(r.in.ID); at.Valid {
 		t.Fatal("a refused delivery noted an event on the integration")
 	}
-	// Every other secret still works.
 	if d, err := thirdSend.Send(ctx, ev); err != nil || d.Status != http.StatusOK {
 		t.Fatalf("an integration with a secret of its own = %v, %v", d.Status, err)
 	}
 
-	// The check says so, to the admin of each, without saying whose.
 	if got := r.checkOf(r.in.ID); got.OK || got.Code != "integration_webhook_secret_shared" || got.Params["secret"] != SecretWebhookSecret {
 		t.Fatalf("check of an integration with a shared secret = %+v", got)
 	}
@@ -118,8 +108,6 @@ func TestADuplicatedWebhookSecretVerifiesNothing(t *testing.T) {
 		t.Fatalf("check of an integration with a secret of its own = %+v", got)
 	}
 
-	// One of them rotates. The secret was found shared, so it is spent for both: the other
-	// integration, which now is the only one that holds it, still refuses, and says so.
 	expect(t, r.owner.do(http.MethodPatch, wsPath(ws2, fmt.Sprintf("integrations/%d", second.ID)),
 		map[string]any{"secrets": map[string]string{"webhook_secret": stripeHookNew}}), http.StatusOK)
 	var previous int
@@ -147,7 +135,6 @@ func TestADuplicatedWebhookSecretVerifiesNothing(t *testing.T) {
 	} else {
 		isNotFound(t, "the rotated integration with its old secret", d.Status, d.Response)
 	}
-	// Nobody may be given the spent secret again, even the integration that still holds it.
 	expectCode(t, r.owner.do(http.MethodPatch, wsPath(r.ws, fmt.Sprintf("integrations/%d", r.in.ID)),
 		map[string]any{"secrets": map[string]string{"webhook_secret": stripeHook}}), http.StatusConflict, "integration_webhook_secret_reused")
 	expectCode(t, r.owner.do(http.MethodPatch, wsPath(ws2, fmt.Sprintf("integrations/%d", second.ID)),
@@ -155,7 +142,6 @@ func TestADuplicatedWebhookSecretVerifiesNothing(t *testing.T) {
 	expectCode(t, r.owner.do(http.MethodPost, wsPath(r.ws, "integrations"), withHook(stripeBody("again"), stripeHook)),
 		http.StatusConflict, "integration_webhook_secret_reused")
 
-	// The first one gets a fresh secret from its provider too: now it works, with that one only.
 	expect(t, r.owner.do(http.MethodPatch, wsPath(r.ws, fmt.Sprintf("integrations/%d", r.in.ID)),
 		map[string]any{"secrets": map[string]string{"webhook_secret": hookFor("fresh")}}), http.StatusOK)
 	if err := r.db.QueryRow(`SELECT count(*) FROM integration_secrets WHERE integration_id = ? AND name = 'webhook_secret_previous'`,
@@ -178,8 +164,6 @@ func TestADuplicatedWebhookSecretVerifiesNothing(t *testing.T) {
 	}
 }
 
-// Deleting one of two integrations that share a secret doesn't make the survivor the only holder:
-// it keeps refusing until it has a fresh secret.
 func TestASecretFoundSharedStaysSpentWhenAHolderIsRemoved(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
@@ -199,8 +183,6 @@ func TestASecretFoundSharedStaysSpentWhenAHolderIsRemoved(t *testing.T) {
 	}
 }
 
-// A database that isn't started again since it was found to hold a secret twice is still safe: the
-// first change to either integration records the secret before it takes a copy away.
 func TestARotationRecordsASharedSecretNotYetFound(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
@@ -220,8 +202,6 @@ func TestARotationRecordsASharedSecretNotYetFound(t *testing.T) {
 	}
 }
 
-// The backfill that every create and rotation runs reads only the rows that wait for a fingerprint,
-// through their partial index, and not the table.
 func TestTheBackfillUsesItsPartialIndex(t *testing.T) {
 	r := newRig(t)
 	rows, err := r.db.Query(`EXPLAIN QUERY PLAN ` + backfillQuery)
@@ -242,7 +222,6 @@ func TestTheBackfillUsesItsPartialIndex(t *testing.T) {
 	if !strings.Contains(joined, "integration_secrets_unfingerprinted") || strings.Contains(joined, "SCAN s") && !strings.Contains(joined, "USING") {
 		t.Fatalf("the backfill's plan doesn't use its index:\n%s", joined)
 	}
-	// Nothing waits for a fingerprint, so it fills nothing in.
 	tx, err := r.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -253,15 +232,12 @@ func TestTheBackfillUsesItsPartialIndex(t *testing.T) {
 	}
 }
 
-// A secret that is a previous one of an integration, still in its overlap, is held too: a second
-// integration given it directly can't verify with it, nor can the first.
 func TestADuplicatedPreviousWebhookSecretVerifiesNothing(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
 	expect(t, r.owner.do(http.MethodPatch, wsPath(r.ws, fmt.Sprintf("integrations/%d", r.in.ID)),
 		map[string]any{"secrets": map[string]string{"webhook_secret": stripeHookNew}}), http.StatusOK)
 	other, otherID, _ := r.integration(stripeBody("other"), hookFor("other"))
-	// The first one's replaced secret is in its overlap: it still verifies there.
 	s, _ := r.session(2500, "eur")
 	r.must(r.fake.Pay(s.ID))
 	ev := r.completed()
@@ -277,7 +253,6 @@ func TestADuplicatedPreviousWebhookSecretVerifiesNothing(t *testing.T) {
 		}
 		isNotFound(t, "the shared previous secret, to the "+label, d.Status, d.Response)
 	}
-	// The current secret of the first integration is its own.
 	if d, err := r.sender(strings.TrimPrefix(*r.in.WebhookURL, hookOrigin+HookPrefix), stripeHookNew).Send(ctx, ev); err != nil || d.Status != http.StatusOK {
 		t.Fatalf("the first integration's current secret = %v, %v", d.Status, err)
 	}
@@ -286,8 +261,6 @@ func TestADuplicatedPreviousWebhookSecretVerifiesNothing(t *testing.T) {
 	}
 }
 
-// The fingerprint beside a webhook secret is a keyed MAC of it: not the secret, not a plain
-// hash, and the same for the same secret under the same key.
 func TestWebhookSecretFingerprintsAreKeyed(t *testing.T) {
 	r := newRig(t)
 	var fp []byte
@@ -306,8 +279,6 @@ func TestWebhookSecretFingerprintsAreKeyed(t *testing.T) {
 	}
 }
 
-// Whatever the integration behind a delivery's id, a well-formed signature costs the same number
-// of MACs over the body, so the work says nothing of which ids exist or what they hold.
 func TestEveryWellFormedSignatureCostsTheSameMACs(t *testing.T) {
 	body := []byte(`{"id":"evt_1","object":"event"}`)
 	good := sig(stripeHook, hookNow, string(body))
@@ -336,15 +307,11 @@ func TestEveryWellFormedSignatureCostsTheSameMACs(t *testing.T) {
 			t.Errorf("%s: %d MACs, want %d", c.name, count, c.want)
 		}
 	}
-	// A slot with no secret never matches, even a signature made with the empty key.
 	if err := (stripe{}).VerifyWebhook(sig("", hookNow, string(body)), body, WebhookSecrets{}, hookNow); err == nil {
 		t.Error("a delivery verified with no secret")
 	}
 }
 
-// The same through the route: an id in a rotation's overlap, one with a single secret, a disabled
-// one, one whose secret is shared, one that doesn't exist and one that isn't an id at all each run
-// the same number of MACs for a well-formed signature that doesn't verify.
 func TestTheRouteDoesTheSameMACsForEveryID(t *testing.T) {
 	r := newRig(t)
 	expect(t, r.owner.do(http.MethodPatch, wsPath(r.ws, fmt.Sprintf("integrations/%d", r.in.ID)),
@@ -380,8 +347,6 @@ func TestTheRouteDoesTheSameMACsForEveryID(t *testing.T) {
 	}
 }
 
-// A secret saved before fingerprints existed is still refused for a second integration: the write
-// gives it its fingerprint first, so reuse is found whether or not the server restarted since.
 func TestAnOldSecretWithoutAFingerprintIsStillRefused(t *testing.T) {
 	r := newRig(t)
 	if _, err := r.db.Exec(`UPDATE integration_secrets SET fingerprint = NULL`); err != nil {
@@ -391,9 +356,6 @@ func TestAnOldSecretWithoutAFingerprintIsStillRefused(t *testing.T) {
 		http.StatusConflict, "integration_webhook_secret_reused")
 }
 
-// The padding key of an empty slot does the work of a key and authenticates nothing: a delivery
-// signed with it, were it known, is refused, with one secret configured or none, while the same
-// number of MACs are computed.
 func TestThePaddingKeyAuthenticatesNothing(t *testing.T) {
 	body := []byte(`{"id":"evt_1","object":"event"}`)
 	known := "padding-key-known-to-the-test"
@@ -418,7 +380,6 @@ func TestThePaddingKeyAuthenticatesNothing(t *testing.T) {
 			t.Errorf("%s: %d MACs, want %d", name, count, verifyKeys)
 		}
 	}
-	// The configured secrets still verify.
 	if err := (stripe{}).VerifyWebhook(sig(stripeHook, hookNow, string(body)), body, WebhookSecrets{Current: Secret(stripeHook)}, hookNow); err != nil {
 		t.Errorf("a delivery signed with the configured secret = %v", err)
 	}

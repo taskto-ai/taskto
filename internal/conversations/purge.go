@@ -10,21 +10,11 @@ import (
 	"taskto.ai/taskto/internal/agentrt"
 )
 
-// The purge of a deleted account (internal/accountdeletion) deletes the conversations the person
-// owned. The agent runtime has no way to delete a conversation (Pi Durable keeps its records), so
-// the server retires each one first: its work stops and the runtime refuses it from then on, as
-// for one that never existed. The runtime then purges what it kept of it in its own database (what
-// was said, its tasks, its documents), and the server deletes its own row, which is the only thing
-// that says whose it was. Both steps are the runtime's to do, and are repeated until they are done
-// (the purge keeps a record of each until then, docs/install.md#privacy-and-account-deletion).
-
-// Owned is a conversation a user owns, as the purge needs it.
 type Owned struct {
 	ID      int64
 	AgentID int64
 }
 
-// OwnedBy lists the conversations owner owns, in every workspace.
 func OwnedBy(ctx context.Context, q interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }, owner int64) ([]Owned, error) {
@@ -44,16 +34,11 @@ func OwnedBy(ctx context.Context, q interface {
 	return out, rows.Err()
 }
 
-// Purger is the agent runtime as the purge of an account needs it: a Sidecar that can also purge
-// a retired conversation's records (an *agentrt.Client).
 type Purger interface {
 	Sidecar
 	PurgeConversation(ctx context.Context, conversation int64) error
 }
 
-// PurgeConversation retires the runtime's conversation agentID, if it isn't already, and purges its
-// records from the runtime's database. A conversation the runtime no longer has is done. It is
-// idempotent, so a step that stopped halfway is done again.
 func PurgeConversation(ctx context.Context, rt Purger, agentID int64) error {
 	var se *agentrt.StatusError
 	if err := rt.RetireConversation(ctx, agentID); err != nil {
@@ -70,9 +55,6 @@ func PurgeConversation(ctx context.Context, rt Purger, agentID int64) error {
 	return nil
 }
 
-// DeleteOwned deletes owner's conversations' rows (and, with them, the CLI sessions recorded for
-// each), and returns how many. Call it in the transaction that deletes the account, after
-// PurgeConversation.
 func DeleteOwned(ctx context.Context, tx interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }, owner int64) (int64, error) {

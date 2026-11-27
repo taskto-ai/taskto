@@ -25,15 +25,12 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// The tokens below are obviously fake: the server only looks at the prefix and the hash.
 const (
 	tokenA       = auth.AccessTokenPrefix + "fake-token-of-alice-in-one"
 	tokenB       = auth.AccessTokenPrefix + "fake-token-of-bob-in-two"
 	tokenExpired = auth.AccessTokenPrefix + "fake-token-expired"
 )
 
-// fixture is two workspaces with a member and a private space each, a token for each member,
-// and the endpoint's handlers over them.
 type fixture struct {
 	db             *sql.DB
 	tools          *agenttools.Service
@@ -41,8 +38,8 @@ type fixture struct {
 	userA, userB   int64
 	spaceA, spaceB int64
 	endpoint       http.Handler
-	browserTools   []string // the conversation-only tools
-	noTokenTools   []string // the tools of conversations that the access tokens' endpoint leaves out
+	browserTools   []string
+	noTokenTools   []string
 	definitions    map[string]agenttools.Definition
 }
 
@@ -75,7 +72,7 @@ func newFixture(t *testing.T) *fixture {
 			t.Fatal(err)
 		}
 	}
-	f.spaceA = scalar(`SELECT id FROM spaces WHERE workspace_id = ? AND owner_id = ?`, f.wsA, f.userA) // made with the membership
+	f.spaceA = scalar(`SELECT id FROM spaces WHERE workspace_id = ? AND owner_id = ?`, f.wsA, f.userA)
 	f.spaceB = scalar(`SELECT id FROM spaces WHERE workspace_id = ? AND owner_id = ?`, f.wsB, f.userB)
 	for _, tk := range []struct {
 		raw       string
@@ -120,7 +117,6 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
-// rpc posts one JSON-RPC message to h, as a stateless MCP client, with token if it isn't empty.
 func rpc(t *testing.T, h http.Handler, token, method string, params any) *httptest.ResponseRecorder {
 	t.Helper()
 	msg, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
@@ -147,7 +143,6 @@ type listedTool struct {
 	} `json:"annotations"`
 }
 
-// listTools asks h for its tools with token.
 func listTools(t *testing.T, h http.Handler, token string) []listedTool {
 	t.Helper()
 	rec := rpc(t, h, token, "tools/list", map[string]any{})
@@ -177,7 +172,6 @@ func names(tools []listedTool) []string {
 	return out
 }
 
-// callTool runs a tool and returns the HTTP status, whether the tool refused, and its text.
 func callTool(t *testing.T, h http.Handler, token, name string, args map[string]any) (int, bool, string) {
 	t.Helper()
 	rec := rpc(t, h, token, "tools/call", map[string]any{"name": name, "arguments": args})
@@ -207,7 +201,6 @@ func callTool(t *testing.T, h http.Handler, token, name string, args map[string]
 	return rec.Code, reply.Result.IsError, reply.Result.Content[0].Text
 }
 
-// forTurns is the turns' endpoint, for the caller authorize answers with.
 func (f *fixture) forTurns(browser bool, authorize Authorize) http.Handler {
 	return ForTurns("test", authorize, f.tools, browser)
 }
@@ -216,8 +209,6 @@ func (f *fixture) callerA(*http.Request) (agenttools.Caller, error) {
 	return agenttools.Caller{Workspace: f.wsA, User: f.userA, Conversation: 1}, nil
 }
 
-// /mcp lists the tools of people's own agents: every tool but the conversation-only ones and the
-// ones a token doesn't get, with their descriptions' hints, whatever token asks.
 func TestMCPListsNoConversationOnlyTools(t *testing.T) {
 	f := newFixture(t)
 	var want []string
@@ -238,7 +229,6 @@ func TestMCPListsNoConversationOnlyTools(t *testing.T) {
 			}
 		}
 	}
-	// And one can't be called by name either: it isn't there.
 	for _, name := range slices.Concat(f.browserTools, f.noTokenTools) {
 		if _, refused, text := callTool(t, f.endpoint, tokenA, name, map[string]any{}); !refused || !strings.Contains(text, "unknown tool") {
 			t.Errorf("/mcp calls %s: refused %v, %q; want an unknown tool", name, refused, text)
@@ -246,8 +236,6 @@ func TestMCPListsNoConversationOnlyTools(t *testing.T) {
 	}
 }
 
-// The turns' endpoint has the tools a token doesn't get, and the browser tools too while the agent
-// browser is on; with it off, it is /mcp's list and those.
 func TestForTurnsListsBrowserToolsOnlyWhenOn(t *testing.T) {
 	f := newFixture(t)
 	mcpTools := names(listTools(t, f.endpoint, tokenA))
@@ -266,8 +254,6 @@ func TestForTurnsListsBrowserToolsOnlyWhenOn(t *testing.T) {
 	}
 }
 
-// Every tool says whether it is read-only as tools.json does, so a client may call the reading
-// ones without asking, and none says it reaches the open world.
 func TestToolsAreAnnotatedAsTheirDefinitionsSay(t *testing.T) {
 	f := newFixture(t)
 	for _, h := range []struct {
@@ -292,7 +278,6 @@ func TestToolsAreAnnotatedAsTheirDefinitionsSay(t *testing.T) {
 			}
 		}
 	}
-	// A few that must be right whatever the file says: what only reads, and what changes things.
 	byName := map[string]listedTool{}
 	for _, tl := range listTools(t, f.endpoint, tokenA) {
 		byName[tl.Name] = tl
@@ -309,8 +294,6 @@ func TestToolsAreAnnotatedAsTheirDefinitionsSay(t *testing.T) {
 	}
 }
 
-// A token is one user's in one workspace: it sees that workspace's spaces and no other's, and
-// a space of another workspace is as unknown as one that doesn't exist.
 func TestATokenOfOneWorkspaceCannotActInAnother(t *testing.T) {
 	f := newFixture(t)
 
@@ -349,7 +332,6 @@ func TestATokenOfOneWorkspaceCannotActInAnother(t *testing.T) {
 				t.Errorf("%s's token: %s in %s's space = %d %v %q, want the error not found", c.name, call.tool, c.other, code, refused, text)
 			}
 		}
-		// Their own space answers.
 		for _, tool := range []string{"list_apps", "list_integrations"} {
 			if code, refused, text := callTool(t, f.endpoint, c.token, tool, map[string]any{"space_id": c.own}); code != http.StatusOK || refused {
 				t.Errorf("%s's token: %s in their own space = %d %v %q", c.name, tool, code, refused, text)
@@ -361,7 +343,6 @@ func TestATokenOfOneWorkspaceCannotActInAnother(t *testing.T) {
 		t.Errorf("%d apps (%v), want none made across workspaces", n, err)
 	}
 
-	// The turns' endpoint is the same for the workspace its caller is in.
 	turns := f.forTurns(false, f.callerA)
 	if code, refused, text := callTool(t, turns, "turn", "list_apps", map[string]any{"space_id": f.spaceB}); code != http.StatusOK || !refused || text != "error: not found" {
 		t.Errorf("a turn of workspace one in workspace two's space = %d %v %q, want not found", code, refused, text)
@@ -371,8 +352,6 @@ func TestATokenOfOneWorkspaceCannotActInAnother(t *testing.T) {
 	}
 }
 
-// Without a valid token nothing is served: 401 with a challenge, whatever the message is, and
-// the expired, unknown, and revoked look alike.
 func TestMCPRefusesWithoutAValidToken(t *testing.T) {
 	f := newFixture(t)
 	if _, err := f.db.Exec(`DELETE FROM memberships WHERE user_id = ?`, f.userB); err != nil {
@@ -393,7 +372,6 @@ func TestMCPRefusesWithoutAValidToken(t *testing.T) {
 			t.Errorf("%s: the reply echoes the token: %s", name, rec.Body)
 		}
 	}
-	// A session cookie is no credential here.
 	r := httptest.NewRequest(http.MethodPost, Path, strings.NewReader(`{}`))
 	r.Header.Set("Cookie", "taskto_session=anything")
 	r.Header.Set("Content-Type", "application/json")
@@ -404,7 +382,6 @@ func TestMCPRefusesWithoutAValidToken(t *testing.T) {
 	}
 }
 
-// A browser's cross-origin request is refused before the token is looked at.
 func TestMCPRefusesCrossOriginRequests(t *testing.T) {
 	f := newFixture(t)
 	for name, h := range map[string]http.Handler{"/mcp": f.endpoint, "turns": f.forTurns(false, f.callerA)} {
@@ -420,8 +397,6 @@ func TestMCPRefusesCrossOriginRequests(t *testing.T) {
 	}
 }
 
-// ForTurns answers what authorize says: a refusal with its status (and a challenge for a 401),
-// any other error as a plain 500 that says nothing of it.
 func TestForTurnsAnswersAuthorizeRefusals(t *testing.T) {
 	f := newFixture(t)
 	for _, c := range []struct {
@@ -445,7 +420,6 @@ func TestForTurnsAnswersAuthorizeRefusals(t *testing.T) {
 	}
 }
 
-// invoicing is an app that declares a slot of payments, as an agent would write it.
 const invoicing = `{
   "definition_version": 3,
   "components": [{"id":"root","component":"Text","text":"Invoices"}],
@@ -462,9 +436,6 @@ const invoicing = `{
   "integrations": {"payments": {"kind": "payments", "on": {"payment.succeeded": {"set": {"status": {"value": "paid"}}}}}}
 }`
 
-// An access token lists the integrations of its own space and the slots of its own apps, by name,
-// kind and status, and nothing of the account behind them; another workspace's space and apps are
-// not found, whoever's token asks.
 func TestATokenListsOnlySafeFieldsOfItsSpacesIntegrations(t *testing.T) {
 	f := newFixture(t)
 	integration := func(ws, space int64, name string) {
@@ -503,7 +474,6 @@ func TestATokenListsOnlySafeFieldsOfItsSpacesIntegrations(t *testing.T) {
 	}
 	appA, appB := made(tokenA, f.spaceA), made(tokenB, f.spaceB)
 
-	// Her own space: the integrations by name, kind and status, and an empty list of slots without an app.
 	code, refused, text := callTool(t, f.endpoint, tokenA, "list_integrations", map[string]any{"space_id": f.spaceA})
 	if code != http.StatusOK || refused {
 		t.Fatalf("list_integrations = %d %v %q", code, refused, text)
@@ -525,7 +495,6 @@ func TestATokenListsOnlySafeFieldsOfItsSpacesIntegrations(t *testing.T) {
 		}
 	}
 
-	// An app of hers: its slots, as names, kinds and statuses, never the contract.
 	code, refused, text = callTool(t, f.endpoint, tokenA, "list_integrations", map[string]any{"space_id": f.spaceA, "app_id": appA})
 	if code != http.StatusOK || refused || json.Unmarshal([]byte(text), &out) != nil || len(out.Slots) != 1 ||
 		out.Slots[0]["slot"] != "payments" || out.Slots[0]["status"] != "none" || len(out.Slots[0]) != 5 {
@@ -537,7 +506,6 @@ func TestATokenListsOnlySafeFieldsOfItsSpacesIntegrations(t *testing.T) {
 		}
 	}
 
-	// Another workspace's space and apps are not found, through any space.
 	for _, c := range []struct {
 		why   string
 		token string

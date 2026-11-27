@@ -14,30 +14,17 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// What indexes kept beside the repositories (the search index) need: to hear of every
-// change, and to find what differs between the commit they reflect and main.
-
-// Change is a file that differs between two commits: its path, and its version at the
-// later one, or "" if it is gone.
 type Change struct {
 	Path    string
 	Version string
 }
 
-// Diff is how main's head differs from an earlier commit.
 type Diff struct {
-	// Head is main's last commit, or "" without one.
-	Head string
-	// Changes are the files that differ, by path.
+	Head    string
 	Changes []Change
-	// Full is set when the earlier commit was empty or unknown: Changes then lists every
-	// file at Head, and nothing that is gone.
-	Full bool
+	Full    bool
 }
 
-// OnChange has fn called after every change to a space's repository, whatever its outcome
-// (a change can fail after main has moved), from the goroutine that made it, once the
-// space is unlocked: fn must return quickly. Call it before the Store is used.
 func (s *Store) OnChange(fn func(access.Space)) { s.onChange = append(s.onChange, fn) }
 
 func (s *Store) changed(sp access.Space) {
@@ -46,7 +33,6 @@ func (s *Store) changed(sp access.Space) {
 	}
 }
 
-// Head returns main's last commit in sp, or "" before the first.
 func (s *Store) Head(_ context.Context, sp access.Space) (string, error) {
 	var head string
 	err := s.read(sp, func(r *repo) error {
@@ -62,9 +48,6 @@ func (s *Store) Head(_ context.Context, sp access.Space) (string, error) {
 	return head, err
 }
 
-// Changes returns how main's head in sp differs from the commit since: every file if
-// since is empty, or a commit the repository doesn't have (Full). Paths are as git has
-// them: a change made outside the server can hold names the Store would refuse.
 func (s *Store) Changes(ctx context.Context, sp access.Space, since string) (Diff, error) {
 	var d Diff
 	err := s.read(sp, func(r *repo) error {
@@ -97,8 +80,6 @@ func (s *Store) Changes(ctx context.Context, sp access.Space, since string) (Dif
 	return d, err
 }
 
-// diff appends the files that differ between the trees a and b (zero for none), whose
-// path is dir. Folders that are the same in both are skipped whole.
 func (r *repo) diff(ctx context.Context, a, b plumbing.Hash, dir string, out *[]Change) error {
 	if a == b {
 		return nil
@@ -153,7 +134,6 @@ func (r *repo) diff(ctx context.Context, a, b plumbing.Hash, dir string, out *[]
 	return nil
 }
 
-// entries returns the tree h's entries by name; none for the zero hash.
 func (r *repo) entries(h plumbing.Hash) (map[string]object.TreeEntry, error) {
 	if h.IsZero() {
 		return nil, nil

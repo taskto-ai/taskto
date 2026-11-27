@@ -73,7 +73,6 @@ const link = (over: Partial<PaymentLinkOutcome> = {}): PaymentLinkOutcome => ({
   attempts: [],
   ...over,
 })
-// A reference is built at run time, as the server's are random: no literal that looks like a token.
 const reference = (digit: string) => digit.repeat(32)
 const attempt = (over: Partial<PaymentLinkAttempt> = {}): PaymentLinkAttempt => ({
   reference: reference('a'),
@@ -86,7 +85,6 @@ const attempt = (over: Partial<PaymentLinkAttempt> = {}): PaymentLinkAttempt => 
   ...over,
 })
 
-// What the server answers around the page: the workspace's integrations, its spaces and the registry.
 const around = {
   'GET /api/workspaces/1/integrations': { body: { integrations: [shop] } },
   'GET /api/workspaces/1/integration-providers': { body: registry },
@@ -182,17 +180,13 @@ test('a refund that waits for its payment is shown waiting, not failed, with no 
 test('an event says nothing of the record it touched: the server holds none, so none is asked for or shown', async () => {
   const calls = fakeFetch({
     ...around,
-    ...events(
-      // Even a server that sent more than it should would not have it shown.
-      { ...event({ state: 'applied' }), record_id: 9917, app_id: 4417, space_id: 8817 } as IntegrationEvent,
-    ),
+    ...events({ ...event({ state: 'applied' }), record_id: 9917, app_id: 4417, space_id: 8817 } as IntegrationEvent),
     ...links(),
   })
   open()
   await screen.findByRole('list', { name: 'Events' })
   const text = document.body.textContent ?? ''
   for (const leaked of ['9917', '4417', '8817']) expect(text).not.toContain(leaked)
-  // Nothing outside this workspace's integration, its spaces' names and the registry was read.
   expect(calls.map((c) => `${c.method} ${c.path}`).sort()).toEqual(
     [
       'GET /api/workspaces/1/integration-providers',
@@ -296,7 +290,6 @@ test('a refused retry that came too late is said in the section, and the event t
   fireEvent.click(await screen.findByRole('button', { name: /^Retry the event/ }))
   const refusal = await screen.findByText(/Only an event that failed can be retried\./)
   expect(refusal.closest('[role="alert"]')).toBeTruthy()
-  // What the server holds now replaces the row that was out of date.
   await waitFor(() => expect(reads).toBe(2))
   await waitFor(() => expect(screen.queryByRole('button', { name: /^Retry the event/ })).toBeNull())
   expect(screen.getByText(/Only an event that failed can be retried\./)).toBeTruthy()
@@ -324,13 +317,11 @@ test('with the Failed filter the refusal stays after the row leaves the list, an
   open()
   fireEvent.click(await screen.findByRole('radio', { name: 'Failed' }))
   fireEvent.click(await screen.findByRole('button', { name: /^Retry the event/ }))
-  // The list is read again and no longer holds the event, which had a row for the refusal.
   expect(await screen.findByText('No event has failed.')).toBeTruthy()
   expect(screen.queryByRole('button', { name: /^Retry the event/ })).toBeNull()
   const refusal = screen.getByText(/Only an event that failed can be retried\./)
   expect(refusal.closest('[role="alert"]')).toBeTruthy()
   expect(refusal.textContent).toContain('“Payment received” of Nov 26, 2026')
-  // Another filter is another question: the refusal is not carried to it.
   fireEvent.click(screen.getByRole('radio', { name: 'All' }))
   await waitFor(() => expect(screen.queryByText(/Only an event that failed can be retried\./)).toBeNull())
 })
@@ -373,7 +364,6 @@ test('a refusal that leaves the event failed stays under it and is said in words
   )
   expect(alert.textContent).not.toContain('boom')
   expect(alert.textContent).not.toContain('500')
-  // Still failed, still retriable.
   expect(screen.getByRole('button', { name: /^Retry the event/ })).toBeTruthy()
 })
 
@@ -406,7 +396,6 @@ test('the payment links to check say what to look for at Stripe; one still being
   open()
   const list = await screen.findByRole('list', { name: 'Payment links to check' })
   const [needs, looking, stopped, ceiling] = within(list).getAllByRole('listitem')
-  // A stopped lookup's reason names its values: which ceiling refused the amount.
   expect(ceiling.textContent).toContain('The amount is above the 500.00 EUR that an admin allows for one payment.')
   expect(needs.textContent).toContain('Payment link for €120.00')
   expect(needs.textContent).toContain('Record 88 of app 4 · Shop floor')
@@ -416,7 +405,6 @@ test('the payment links to check say what to look for at Stripe; one still being
   expect(looking.textContent).toContain('€75.50')
   expect(within(looking).getByText('Still looking')).toBeTruthy()
   expect(within(looking).queryByRole('button')).toBeNull()
-  // A lookup that stopped is not "still looking": its own status, its reason in words and what to do.
   expect(within(stopped).getByText('Lookup stopped')).toBeTruthy()
   expect(within(stopped).queryByText('Still looking')).toBeNull()
   expect(within(stopped).queryByText('Needs you')).toBeNull()
@@ -424,7 +412,6 @@ test('the payment links to check say what to look for at Stripe; one still being
   expect(stopped.textContent).toContain('Nothing can be confirmed here.')
   expect(within(stopped).queryByRole('button')).toBeNull()
   const check = screen.getByText('What to check at Stripe').closest('.ui-notice') as HTMLElement
-  // Each kind of object carries TaskTo's reference in its own field.
   expect(check.textContent).toContain('For a Checkout Session, open its details and look for “client_reference_id”.')
   expect(check.textContent).toContain('For a Payment Link, look for “metadata[taskto_ref]”.')
   expect(check.textContent).not.toContain('whose metadata holds')
@@ -460,7 +447,6 @@ test('confirming asks first, says it can make a second link, and cancelling send
   expect(text).toContain('One more attempt to make a payment link will be queued, once.')
   expect(text).not.toContain('One new payment link will be made')
   expect(text).toContain('If one does exist and you missed it, the payer ends up with two links and could pay twice.')
-  // The way out has the focus, so Enter doesn't confirm by habit.
   expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
   fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
   await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
@@ -523,10 +509,10 @@ test('with several integrations the admin picks one, and its events are the ones
     'GET /api/workspaces/1/integrations': { body: { integrations: [shop, other] } },
     ...events(event()),
     ...links(),
-    ['GET /api/workspaces/1/integrations/8/events']: {
+    'GET /api/workspaces/1/integrations/8/events': {
       body: { events: [event({ id: 3, kind: 'payment.failed' })], next_before: 0 },
     },
-    ['GET /api/workspaces/1/integrations/8/payment-links/unresolved']: { body: { payment_links: [] } },
+    'GET /api/workspaces/1/integrations/8/payment-links/unresolved': { body: { payment_links: [] } },
   })
   open()
   await screen.findByRole('list', { name: 'Events' })
@@ -580,11 +566,9 @@ test('each payment lists its attempts with the reference, the field to search, a
   expect(second.textContent).toContain('Object seen: obj_checked (accepted for this attempt)')
   expect(second.textContent).toContain('Account acct_shop · Live money')
   expect(second.textContent).toContain('First sent Nov 27, 2026')
-  // What isn't known is said, not left blank.
   expect(third.textContent).toContain('No object seen')
   expect(third.textContent).toContain('Account not recorded')
   expect(third.textContent).toContain('Never sent')
-  // The checklist says where to find them.
   expect(screen.getByText('What to check at Stripe').closest('.ui-notice')?.textContent).toContain(
     'Each payment below lists its attempts with the reference to look for.',
   )
@@ -602,7 +586,6 @@ test('copying an attempt’s reference puts that attempt’s reference on the cl
   const attempts = await screen.findByRole('list', { name: 'Attempts at this payment' })
   const [, second] = within(attempts).getAllByRole('listitem')
   fireEvent.click(within(second).getByRole('button', { name: 'Copy reference of attempt 2' }))
-  // The button says it copied, for that attempt only.
   expect(await within(second).findByText('Copied')).toBeTruthy()
   expect(within(attempts).getAllByText('Copy')).toHaveLength(1)
   expect(writeText).toHaveBeenCalledTimes(1)

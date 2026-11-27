@@ -14,9 +14,6 @@ const (
 	sigKill = syscall.SIGKILL
 )
 
-// NewGroup makes cmd's process the leader of a process group of its own, so the program and
-// what it starts are signalled at once, and (Linux) killed if the thread that started it
-// exits.
 func NewGroup(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}

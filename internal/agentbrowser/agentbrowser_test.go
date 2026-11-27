@@ -28,8 +28,6 @@ import (
 	"taskto.ai/taskto/internal/drain"
 )
 
-// fakeBrowsers stands in for the CLI worker's browsers, and records whose browser each call
-// reached.
 type fakeBrowsers struct {
 	mu      sync.Mutex
 	running map[int64]map[browser.Kind]bool
@@ -103,10 +101,8 @@ func (f *fakeBrowsers) Do(_ context.Context, user int64, a browser.Action) (brow
 	return browser.Result{Tab: &browser.Tab{ID: "T1", URL: a.URL, Agent: true}}, nil
 }
 
-// Forget is not used by the routes: the account's purge calls it.
 func (f *fakeBrowsers) Forget(context.Context, int64) error { return nil }
 
-// OpenLive serves a display that says whose it is, then echoes.
 func (f *fakeBrowsers) OpenLive(_ context.Context, user int64) (io.ReadWriteCloser, error) {
 	f.mu.Lock()
 	running := f.running[user][browser.Personal]
@@ -131,7 +127,7 @@ var setupToken = auth.NewSetupToken()
 const password = "fake-password-for-tests"
 
 type env struct {
-	ws  int64 // the workspace setup made
+	ws  int64
 	db  *sql.DB
 	t   *testing.T
 	b   *fakeBrowsers
@@ -217,7 +213,6 @@ type me struct {
 	} `json:"workspaces"`
 }
 
-// setup makes the owner, and a member of the owner's workspace.
 func (e *env) setup() (owner, member *client) {
 	e.t.Helper()
 	owner = &client{e: e}
@@ -256,7 +251,6 @@ func TestOff(t *testing.T) {
 	}
 }
 
-// The CLI workers' rule (local mode with a second user) holds for the browser too.
 func TestUnusable(t *testing.T) {
 	e := newEnv(t, newFake(), func(context.Context) error { return errors.New("no OS boundary between users") })
 	owner, _ := e.setup()
@@ -269,7 +263,6 @@ func TestUnusable(t *testing.T) {
 	if code := decode[map[string]string](t, rec)["code"]; code != string(apierr.CodeBrowserUnusable) {
 		t.Fatalf("code = %q", code)
 	}
-	// The CLI workers' own reasons have their own codes.
 	for why, code := range map[error]apierr.Code{
 		cliaccounts.ErrOff:        apierr.CodeBrowserCLIWorkersOff,
 		cliaccounts.ErrNoBoundary: apierr.CodeBrowserSingleUser,
@@ -288,7 +281,6 @@ func TestUnusable(t *testing.T) {
 	}
 }
 
-// Every route acts on the signed-in user's own browser; the paths name no one.
 func TestRoutesAreTheCallersOwn(t *testing.T) {
 	e := newEnv(t, newFake(), nil)
 	owner, member := e.setup()
@@ -298,7 +290,6 @@ func TestRoutesAreTheCallersOwn(t *testing.T) {
 	if !st.Enabled || !st.Browsers[browser.Personal].Running || st.Browsers[browser.Personal].Tabs[0].ID != fmt.Sprintf("T%d", owner.id) {
 		t.Fatalf("the owner's status = %+v", st)
 	}
-	// The member sees only their own, and neither starts nor stops the owner's.
 	if st := decode[Status](t, member.do(http.MethodGet, base, nil)); st.Browsers[browser.Personal].Running {
 		t.Fatalf("the member sees the owner's browser: %+v", st)
 	}
@@ -313,7 +304,6 @@ func TestRoutesAreTheCallersOwn(t *testing.T) {
 
 	expect(t, owner.do(http.MethodPost, base+"/start", map[string]string{"browser": "other"}), http.StatusBadRequest)
 	expect(t, owner.do(http.MethodPost, base+"/start", map[string]any{"browser": "personal", "user": member.id}), http.StatusBadRequest)
-	// State changes are never GETs, and need JSON (the CSRF guard).
 	expect(t, owner.do(http.MethodGet, base+"/start", nil), http.StatusMethodNotAllowed)
 	r := httptest.NewRequest(http.MethodPost, base+"/stop", strings.NewReader(`{"browser":"personal"}`))
 	r.Header.Set("Content-Type", "text/plain")
@@ -323,7 +313,6 @@ func TestRoutesAreTheCallersOwn(t *testing.T) {
 	expect(t, rec, http.StatusUnsupportedMediaType)
 }
 
-// liveView opens the live view's WebSocket on srv as c, from origin.
 func liveView(t *testing.T, srv *httptest.Server, c *client, origin string, header http.Header) (*websocket.Conn, error) {
 	t.Helper()
 	cfg, err := websocket.NewConfig(strings.Replace(srv.URL, "http", "ws", 1)+base+"/live", origin)
@@ -362,7 +351,6 @@ func TestLiveView(t *testing.T) {
 	srv := httptest.NewServer(e.h)
 	defer srv.Close()
 
-	// Nothing to watch until the browser runs.
 	if _, err := liveView(t, srv, owner, srv.URL, nil); err == nil {
 		t.Fatal("a live view of no browser")
 	}
@@ -389,19 +377,15 @@ func TestLiveView(t *testing.T) {
 	}
 	ws.Close()
 
-	// Another site's page can't open it with the owner's cookie (cross-site WebSocket
-	// hijacking), whether the browser says so in Origin or in Sec-Fetch-Site.
 	if _, err := liveView(t, srv, owner, "https://evil.example", nil); err == nil {
 		t.Error("a cross-origin live view was opened")
 	}
 	if _, err := liveView(t, srv, owner, srv.URL, http.Header{"Sec-Fetch-Site": {"cross-site"}}); err == nil {
 		t.Error("a cross-site live view was opened")
 	}
-	// No session, no live view.
 	if _, err := liveView(t, srv, nil, srv.URL, nil); err == nil {
 		t.Error("a live view without a session")
 	}
-	// The member has no browser running, and never gets the owner's.
 	if _, err := liveView(t, srv, member, srv.URL, nil); err == nil {
 		t.Error("the member watched a browser that isn't theirs")
 	}
@@ -425,8 +409,6 @@ func TestLiveView(t *testing.T) {
 	}
 }
 
-// liveEnds says whether ws is closed from the server's side within a few seconds: a read
-// returns an error that isn't the test's own deadline.
 func liveEnds(ws *websocket.Conn) bool {
 	_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 64)
@@ -438,7 +420,6 @@ func liveEnds(ws *websocket.Conn) bool {
 	}
 }
 
-// openLive opens a live view of c's browser, past its banner lines.
 func openLive(t *testing.T, srv *httptest.Server, c *client) *websocket.Conn {
 	t.Helper()
 	expect(t, c.do(http.MethodPost, base+"/start", map[string]string{}), http.StatusOK)
@@ -451,9 +432,6 @@ func openLive(t *testing.T, srv *httptest.Server, c *client) *websocket.Conn {
 	return ws
 }
 
-// An open live view ends with its login, not only when it opens: when the login is signed out
-// (with the look at the session so slow it can't be the cause), and when the session goes some
-// other way, at the next look.
 func TestLiveViewEndsWithTheLogin(t *testing.T) {
 	old := liveRecheck
 	t.Cleanup(func() { liveRecheck = old })
@@ -470,7 +448,6 @@ func TestLiveViewEndsWithTheLogin(t *testing.T) {
 		if !liveEnds(ws) {
 			t.Fatal("the live view outlived its login")
 		}
-		// Another user's view is untouched.
 		if _, err := other.Write([]byte("ping\n")); err != nil {
 			t.Fatal(err)
 		}
@@ -494,8 +471,6 @@ func TestLiveViewEndsWithTheLogin(t *testing.T) {
 	})
 }
 
-// A disabled member's open live view ends at once, with the look at the session so slow it can't
-// be the cause, and they can't open another; other people's views are untouched.
 func TestLiveViewEndsWhenTheMemberIsDisabled(t *testing.T) {
 	old := liveRecheck
 	liveRecheck = time.Hour
@@ -538,7 +513,6 @@ func TestSameOrigin(t *testing.T) {
 		{"tasks.example.com", "", "https://tasks.example.com.evil.example", false},
 		{"tasks.example.com", "", "null", false},
 		{"tasks.example.com", "", "", false},
-		// A default port written on one side only is the same origin; another port isn't.
 		{"tasks.example.com:443", "", "https://tasks.example.com", true},
 		{"tasks.example.com", "", "https://tasks.example.com:443", true},
 		{"localhost:80", "", "http://localhost", true},
@@ -599,8 +573,6 @@ func TestTools(t *testing.T) {
 		t.Fatalf("help brought %+v to the front", a)
 	}
 
-	// A password field in the personal browser: the model is pointed at browser_help. The
-	// testing browser has no hand-over, and a page without one gets no note.
 	if out, err := call("browser_snapshot", `{"tab":"login"}`); err != nil || !strings.Contains(fmt.Sprint(out["note"]), "call browser_help") {
 		t.Errorf("a sign-in page = %v, %v", out, err)
 	}
@@ -618,7 +590,6 @@ func TestTools(t *testing.T) {
 		{"browser_help", `{"tab":"T1","reason":"bored","message":"x"}`, "reason must be"},
 		{"browser_help", `{"tab":"T1","reason":"login","message":"  "}`, "message must"},
 		{"browser_help", `{"tab":"T1","reason":"login","message":"x","browser":"testing"}`, `doesn't take "browser"`},
-		// What the worker would refuse is refused here first.
 		{"browser_open", `{"url":"file:///etc/passwd"}`, "http or https"},
 		{"browser_open", `{"url":"javascript:alert(1)"}`, "http or https"},
 		{"browser_navigate", `{"tab":"T1","url":"chrome://settings"}`, "http or https"},
@@ -632,7 +603,6 @@ func TestTools(t *testing.T) {
 		}
 	}
 	before := len(f.actions)
-	// A message of 500 characters is fine, however many bytes they take.
 	if _, err := call("browser_help", `{"tab":"T1","reason":"other","message":"`+strings.Repeat("é", 500)+`"}`); err != nil {
 		t.Errorf("500 characters: %v", err)
 	}
@@ -642,14 +612,12 @@ func TestTools(t *testing.T) {
 	if len(f.actions) != before+1 {
 		t.Errorf("refused calls reached the browser: %d actions", len(f.actions)-before)
 	}
-	// The browser's errors reach the model in its own words.
 	if _, err := call("browser_snapshot", `{"tab":"gone"}`); !refusedWith(err, http.StatusNotFound, "no such tab") {
 		t.Errorf("a gone tab: %v", err)
 	}
 	if _, err := call("browser_open", `{"url":"https://unreachable.example"}`); !refusedWith(err, http.StatusBadGateway, "ERR_NAME_NOT_RESOLVED") {
 		t.Errorf("an unreachable page: %v", err)
 	}
-	// Anything else stays in the log: it can name the server's paths and sockets.
 	if _, err := call("browser_open", `{"url":"https://internal.example"}`); !refusedWith(err, http.StatusBadGateway, "the browser failed") ||
 		strings.Contains(err.Error(), "/run/") || strings.Contains(err.Error(), "worker") {
 		t.Errorf("an internal error: %v", err)
@@ -664,13 +632,10 @@ func TestTools(t *testing.T) {
 	}
 }
 
-// A live view that is open when the server shuts down ends with the shutdown: its connection is
-// hijacked, so http.Server can neither wait for it nor close it, and the drain's wait for the
-// handler would fail with ErrBusy if the bridge outlived the request's context.
 func TestLiveViewEndsWithTheShutdown(t *testing.T) {
 	old := liveRecheck
 	t.Cleanup(func() { liveRecheck = old })
-	liveRecheck = time.Hour // the shutdown, not a look at the session, ends it
+	liveRecheck = time.Hour
 
 	e := newEnv(t, newFake(), nil)
 	owner, _ := e.setup()

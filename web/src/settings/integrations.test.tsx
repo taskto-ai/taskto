@@ -32,7 +32,10 @@ const registry = (over: Partial<IntegrationRegistry> = {}): IntegrationRegistry 
     {
       id: 'square',
       kinds: ['payments'],
-      secrets: [{ name: 'api_key', required: true }],
+      secrets: [
+        { name: 'api_key', required: true },
+        { name: 'webhook_secret', required: false },
+      ],
       settings: [
         { name: 'environment', options: ['sandbox', 'production'], required: true },
         { name: 'location_id', options: [], required: true },
@@ -40,7 +43,6 @@ const registry = (over: Partial<IntegrationRegistry> = {}): IntegrationRegistry 
     },
   ],
   currencies: ['COP', 'EUR', 'JPY', 'USD'],
-  // The server's own decimals, which the page uses: the browser's table says 0 for the peso.
   exponents: { COP: 2, EUR: 2, JPY: 0, USD: 2 },
   max_amount_minor: 1_000_000_000_000,
   webhooks_available: false,
@@ -59,6 +61,7 @@ const shop: Integration = {
   currencies: ['EUR', 'JPY'],
   secrets: { api_key: 'set', webhook_secret: 'not set' },
   webhook_url: null,
+  webhook_url_changed: false,
   disabled: false,
   disabled_at: null,
   spaces: [12],
@@ -86,11 +89,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-// An integration's row: the list item its name is the title of.
 const findRow = async (name: string) =>
   (await screen.findByText(name, { selector: '.ui-row-title' })).closest('li') as HTMLElement
 
-// The dialog a form is in, whose footer has the form's buttons.
 const dialogOf = (form: HTMLElement) => form.closest('dialog') as HTMLElement
 
 const sent = (calls: Call[], method: string, path: string) =>
@@ -109,7 +110,6 @@ test('an integration is listed by what it is, with its secrets only said to be s
   const row = await findRow('Shop')
   expect(within(row).getByText(/Stripe · Payments · Test mode/)).toBeTruthy()
   expect(within(row).getByText(/Secret key set · Webhook signing secret not set/)).toBeTruthy()
-  // The same number of smallest units is not the same sum in euros and in yen.
   expect(within(row).getByText(/€5,000\.00 and ¥500,000 per payment/)).toBeTruthy()
   expect(within(row).getByText('Allowed in: Shop floor')).toBeTruthy()
   expect(within(row).getByText(/No public URL: webhooks are unavailable/)).toBeTruthy()
@@ -120,7 +120,6 @@ test('an amount is written with the server’s decimals, not the browser’s', a
   fakeFetch(routes([{ ...shop, currencies: ['COP'], max_amount_minor: 500000 }]))
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
   const row = await findRow('Shop')
-  // The server counts pesos in hundredths; Intl alone would say 500,000 whole pesos.
   expect(within(row).getByText(/COP\s?5,000\.00 per payment/)).toBeTruthy()
 })
 
@@ -150,6 +149,41 @@ test('with a public URL the row shows the address to register', async () => {
   expect(screen.queryByText(/Webhooks unavailable: set the server/)).toBeNull()
 })
 
+test('a Square account says Square’s own names for its secrets, and that it signs the address', async () => {
+  const square: Integration = {
+    ...shop,
+    id: 8,
+    provider: 'square',
+    name: 'counter',
+    display_name: 'Counter',
+    settings: { environment: 'sandbox', location_id: 'L123' },
+    webhook_url: 'https://tasks.example.com/hooks/0123456789abcdef0123456789abcdef',
+  }
+  fakeFetch(routes([square], registry({ webhooks_available: true })))
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  const row = await findRow('Counter')
+  expect(within(row).getByText(/Access token set · Webhook signature key not set/)).toBeTruthy()
+  expect(within(row).getByText(/Square signs each event over this exact address/)).toBeTruthy()
+  expect(within(row).queryByText('Address changed')).toBeNull()
+})
+
+test('when the public URL changed since the signing secret was saved, the admin is told what to do', async () => {
+  const moved: Integration = {
+    ...shop,
+    webhook_url: 'https://new.example.com/hooks/0123456789abcdef0123456789abcdef',
+    webhook_url_changed: true,
+  }
+  fakeFetch(routes([moved], registry({ webhooks_available: true })))
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  const row = await findRow('Shop')
+  expect(within(row).getByText('Address changed')).toBeTruthy()
+  expect(
+    within(row).getByText(
+      'The server’s public URL changed after “Webhook signing secret” was saved, so the provider still sends events to the old address. Register the address above at the provider, then save “Webhook signing secret” again.',
+    ),
+  ).toBeTruthy()
+})
+
 test('an admin connects a Stripe account: the key is sent once and the form is cleared', async () => {
   const calls = fakeFetch({ ...routes([]), 'POST /api/workspaces/1/integrations': { status: 201, body: shop } })
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
@@ -158,7 +192,6 @@ test('an admin connects a Stripe account: the key is sent once and the form is c
   fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'shop' } })
   fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'fake-key-for-the-form' } })
   fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '500000' } })
-  // A currency is needed before the form can be sent.
   const add = within(dialogOf(form)).getByRole('button', { name: 'Add' }) as HTMLButtonElement
   expect(add.disabled).toBe(true)
   fireEvent.click(within(form).getByRole('checkbox', { name: 'EUR' }))
@@ -188,7 +221,7 @@ test("Square's form asks for its environment and location, as the registry says"
   fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'square-shop' } })
   fireEvent.change(within(form).getByLabelText('Environment'), { target: { value: 'sandbox' } })
   fireEvent.change(within(form).getByLabelText('Location ID'), { target: { value: 'L123' } })
-  fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'fake-square-token-for-the-form' } })
+  fireEvent.change(within(form).getByLabelText('Access token'), { target: { value: 'fake-square-token-for-the-form' } })
   fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '1000' } })
   fireEvent.click(within(form).getByRole('checkbox', { name: 'USD' }))
   fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Add' }))
@@ -236,7 +269,6 @@ test('an admin chooses the spaces, and only the ones that can be allowed are off
   await findRow('Shop')
   chooseFromMenu('More actions for Shop', 'Spaces')
   const form = screen.getByRole('form', { name: 'Spaces of Shop' })
-  // An archived space the integration isn't allowed in can't be chosen.
   expect(within(form).queryByRole('checkbox', { name: /Old/ })).toBeNull()
   expect((within(form).getByRole('checkbox', { name: 'Shop floor' }) as HTMLInputElement).checked).toBe(true)
   fireEvent.click(within(form).getByRole('checkbox', { name: 'Private (private)' }))
@@ -268,7 +300,6 @@ test('a provider change drops what was typed for the last one, and a check says 
   render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
   fireEvent.click(await screen.findByRole('button', { name: 'Connect an account' }))
   const form = screen.getByRole('form', { name: 'New integration' })
-  // A webhook secret typed for Stripe is not sent to Square, which has no such field.
   fireEvent.change(within(form).getByLabelText('Webhook signing secret'), {
     target: { value: 'fake-hook-for-the-form' },
   })
@@ -276,7 +307,7 @@ test('a provider change drops what was typed for the last one, and a check says 
   fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'square-shop' } })
   fireEvent.change(within(form).getByLabelText('Environment'), { target: { value: 'sandbox' } })
   fireEvent.change(within(form).getByLabelText('Location ID'), { target: { value: 'L123' } })
-  fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'fake-square-token-for-the-form' } })
+  fireEvent.change(within(form).getByLabelText('Access token'), { target: { value: 'fake-square-token-for-the-form' } })
   fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '1000' } })
   fireEvent.click(within(form).getByRole('checkbox', { name: 'USD' }))
   fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Add' }))
@@ -409,9 +440,7 @@ test('a save the server refuses keeps the dialog and what was typed, and the err
   fireEvent.click(within(form).getByRole('checkbox', { name: 'EUR' }))
   fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Add' }))
   const alert = await within(form).findByRole('alert')
-  // The secret by its label, not its code.
   expect(alert.textContent).toContain("The Secret key doesn't look like this provider's")
-  // Focused, so it is scrolled into view and read, wherever the long form was scrolled to.
   await waitFor(() => expect(alert.closest('.settings-form-error')).toBe(document.activeElement))
   expect(screen.getByRole('form', { name: 'New integration' })).toBe(form)
   const key = within(form).getByLabelText('Secret key') as HTMLInputElement
@@ -481,7 +510,6 @@ test('after a removal, and after the first account is in, the keyboard goes to t
   const heading = screen.getByRole('heading', { level: 2, name: 'Connected accounts' })
   await waitFor(() => expect(document.activeElement).toBe(heading))
 
-  // The empty state's button opens the form; once the account is in, that button is gone.
   fireEvent.click(await screen.findByRole('button', { name: 'Connect an account' }))
   const form = screen.getByRole('form', { name: 'New integration' })
   fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'shop' } })

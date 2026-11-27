@@ -14,19 +14,14 @@ import (
 	"taskto.ai/taskto/internal/lockfile"
 )
 
-// Schedule is when backups run: every night at At, in UTC, and after a failed one again
-// every RetryEvery, up to Retries more times that night.
 type Schedule struct {
-	// At is the time after midnight, UTC.
-	At         time.Duration
-	Retries    int
-	RetryEvery time.Duration
-	// Timeout bounds one backup, and CheckTimeout the repository's check before it.
+	At           time.Duration
+	Retries      int
+	RetryEvery   time.Duration
 	Timeout      time.Duration
 	CheckTimeout time.Duration
 }
 
-// ParseAt reads a time of day, "HH:MM", as the time after midnight.
 func ParseAt(s string) (time.Duration, error) {
 	t, err := time.Parse("15:04", s)
 	if err != nil {
@@ -35,10 +30,8 @@ func ParseAt(s string) (time.Duration, error) {
 	return time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute, nil
 }
 
-// maxRetryWindow bounds a night's retries, so they end well before the next night.
 const maxRetryWindow = 20 * time.Hour
 
-// Validate reports a schedule that can't work.
 func (s Schedule) Validate() error {
 	switch {
 	case s.At < 0 || s.At >= 24*time.Hour:
@@ -55,7 +48,6 @@ func (s Schedule) Validate() error {
 	return nil
 }
 
-// night is the scheduled time at or before t.
 func (s Schedule) night(t time.Time) time.Time {
 	t = t.UTC()
 	n := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC).Add(s.At)
@@ -65,16 +57,10 @@ func (s Schedule) night(t time.Time) time.Time {
 	return n
 }
 
-// grace is how long after its scheduled time a night's backup may still succeed, its
-// retries done, before the night counts as missed: the retries, and an hour for the last.
 func (s Schedule) grace() time.Duration {
 	return time.Duration(s.Retries)*s.RetryEvery + time.Hour
 }
 
-// next is when the backup after now starts, given st. A night whose backup hasn't
-// succeeded is tried at once (the schedule starting late, after a restart or a reboot,
-// catches up), then again every RetryEvery after a failure, until it has had Retries
-// retries; a night that succeeded, or ran out of retries, waits for the next.
 func (s Schedule) next(st Status, now time.Time) time.Time {
 	night := s.night(now)
 	if !st.LastSuccess.Before(night) {
@@ -92,13 +78,11 @@ func (s Schedule) next(st Status, now time.Time) time.Time {
 	}
 	last := st.LastErrorAt
 	if last.IsZero() {
-		last = st.LastAttempt // a status written by hand, or damaged: never retry back to back
+		last = st.LastAttempt
 	}
 	return later(now, last.Add(s.RetryEvery))
 }
 
-// dueBy is when the next success is due, given st: the night after the last success, plus
-// its grace. Before any success, the first start's time plus the grace.
 func (s Schedule) dueBy(st Status, now time.Time) time.Time {
 	switch {
 	case !st.LastSuccess.IsZero():
@@ -116,32 +100,21 @@ func later(a, b time.Time) time.Time {
 	return a
 }
 
-// Runner runs a backup's two steps.
 type Runner interface {
-	// Check makes sure the repository answers, before anything is written for the backup.
 	Check(ctx context.Context) error
-	// Backup backs up the data directory and returns the new snapshot's ID.
 	Backup(ctx context.Context) (string, error)
 }
 
-// ErrBusy is Attempt's error when another backup of the data directory is running.
 var ErrBusy = errors.New("another scheduled backup of this data directory is running")
 
-// recheck is the longest the schedule sleeps without looking at the status again: a
-// backup run by hand, a changed clock or a status file put back are seen by then.
 const recheck = 10 * time.Minute
 
-// Scheduler runs a data directory's backups on a Schedule, and keeps their status
-// (StatusPath) for the server and for monitoring. The status is the marker of the last
-// success that retries go by, so a restart neither forgets a failed night nor retries it
-// more often.
 type Scheduler struct {
 	DataDir  string
 	Schedule Schedule
 	Runner   Runner
 	Log      *slog.Logger
 
-	// The clock; tests replace it.
 	now   func() time.Time
 	sleep func(context.Context, time.Duration) error
 }
@@ -174,8 +147,6 @@ func (s *Scheduler) log() *slog.Logger {
 	return slog.Default()
 }
 
-// Run backs up on the schedule until ctx is done. Its waits end early then, and the loop
-// with them.
 func (s *Scheduler) Run(ctx context.Context) error {
 	if err := s.Schedule.Validate(); err != nil {
 		return err
@@ -201,7 +172,6 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		case errors.Is(err, ErrBusy):
 			pause = time.Minute
 		case errors.Is(err, errStatus):
-			// The failure couldn't be counted: don't try again at once, and forever.
 			pause = max(s.Schedule.RetryEvery, time.Minute)
 		}
 		if pause > 0 {
@@ -211,10 +181,6 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	return nil
 }
 
-// read is the status, or a fresh one if it is missing or unreadable: a damaged file
-// mustn't stop the backups. A backup that started and never recorded its end (the
-// schedule was stopped or killed while it ran) counts as failed, so a backup that keeps
-// killing the schedule is retried like any other failure, not at every restart.
 func (s *Scheduler) read() Status {
 	st, _, err := ReadStatus(s.DataDir)
 	if err != nil {
@@ -232,15 +198,12 @@ func (s *Scheduler) read() Status {
 	return st
 }
 
-// settings writes the schedule's own settings into st.
 func (s *Scheduler) settings(st *Status) {
 	st.At = fmt.Sprintf("%02d:%02d", int(s.Schedule.At.Hours()), int(s.Schedule.At.Minutes())%60)
 	st.Retries = s.Schedule.Retries
 	st.RetryEverySeconds = int64(s.Schedule.RetryEvery / time.Second)
 }
 
-// publish records the next backup's time and the schedule's settings, if no backup is
-// running (which records them itself when it ends).
 func (s *Scheduler) publish(next, now time.Time) {
 	lock, err := s.lock()
 	if err != nil {
@@ -268,13 +231,8 @@ func (s *Scheduler) lock() (*os.File, error) {
 	return f, err
 }
 
-// errStatus wraps a failure to write the status.
 var errStatus = errors.New("write the backup status")
 
-// Attempt runs one backup now, whatever the schedule says, and records how it went. It
-// returns the status it recorded, and the backup's error, if any. A backup that fails
-// leaves nothing in the data directory: the repository is checked before anything is
-// written, and what a failed backup left (in a killed `taskto backup`) is removed.
 func (s *Scheduler) Attempt(ctx context.Context) (Status, error) {
 	if err := s.Schedule.Validate(); err != nil {
 		return Status{}, err
@@ -322,7 +280,6 @@ func (s *Scheduler) Attempt(ctx context.Context) (Status, error) {
 	return st, err
 }
 
-// run checks the repository, and only then backs up.
 func (s *Scheduler) run(ctx context.Context) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, s.Schedule.CheckTimeout)
 	err := s.Runner.Check(cctx)
@@ -349,14 +306,10 @@ func (s *Scheduler) run(ctx context.Context) (string, error) {
 	return "", err
 }
 
-// userinfo is a URL's user and password.
 var userinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@]*@`)
 
-// maxError bounds an error kept in the status.
 const maxError = 1000
 
-// Redact makes an error fit to keep and show: without a URL's user and password (a
-// repository's address can carry them), and not too long.
 func Redact(msg string) string {
 	msg = userinfo.ReplaceAllString(msg, "${1}***@")
 	if len(msg) > maxError {

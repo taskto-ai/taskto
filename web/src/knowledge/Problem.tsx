@@ -4,9 +4,6 @@ import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { isConflict, isNamedConflict } from './docs'
 
-// A change refused: say why. One refused because the document changed meanwhile says so, and
-// offers the reload.
-// reloadable: this error is one for which the reload is offered too (what was asked for is gone).
 export function Problem({
   error,
   onReload,

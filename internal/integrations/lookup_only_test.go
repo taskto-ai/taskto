@@ -10,9 +10,6 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// The first call never ran (its connection dropped) and the invoice went back to a draft: the entry
-// keeps looking for what the key may have made, and never sends a call while the record doesn't meet
-// the action's condition, under the same key or a new one.
 func TestARecordThatStoppedQualifyingIsOnlyLookedUpNeverSentFor(t *testing.T) {
 	p := newPayWith(t, publicURL, invoiceAppWhen)
 	record := p.invoice(10, "EUR")

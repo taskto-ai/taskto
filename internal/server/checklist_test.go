@@ -12,7 +12,6 @@ func checklistPath(ws int64, tail string) string {
 	return fmt.Sprintf("/api/workspaces/%d/checklist%s", ws, tail)
 }
 
-// steps maps each step of a checklist answer to its state.
 func steps(t *testing.T, body map[string]any) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -29,7 +28,6 @@ func steps(t *testing.T, body map[string]any) map[string]string {
 
 func TestChecklistIsWorkedOutFromWhatExists(t *testing.T) {
 	s := newStackWith(t, func(o *Options) { o.Mail = mail.NewService(&recorder{}, testInfo) })
-	// Workspace one has a team, two shared spaces and an email server; no provider, no app.
 	code, body := s.browser(s.alice.cookie, http.MethodGet, checklistPath(s.one, ""), nil)
 	if code != http.StatusOK || body["dismissed"] != false || body["complete"] != false {
 		t.Fatalf("one: %d %v", code, body)
@@ -41,7 +39,6 @@ func TestChecklistIsWorkedOutFromWhatExists(t *testing.T) {
 			t.Fatalf("one: %s = %s, want %s (%v)", k, got[k], v, got)
 		}
 	}
-	// Workspace two is alice alone: nothing from workspace one counts there.
 	code, body = s.browser(s.alice.cookie, http.MethodGet, checklistPath(s.two, ""), nil)
 	if code != http.StatusOK {
 		t.Fatalf("two: %d %v", code, body)
@@ -53,7 +50,6 @@ func TestChecklistIsWorkedOutFromWhatExists(t *testing.T) {
 		}
 	}
 
-	// Doing a step by any other route marks it done, with no tick of its own.
 	s.exec(`INSERT INTO provider_accounts (workspace_id, name, display_name, kind, base_url, models)
 		VALUES (?, 'p', 'P', 'openai-compatible', 'https://models.example.com/v1', '[]')`, s.two)
 	_, body = s.browser(s.alice.cookie, http.MethodGet, checklistPath(s.two, ""), nil)
@@ -83,22 +79,18 @@ func TestChecklistDismissAndSkipAreAdminOnly(t *testing.T) {
 		{http.MethodPut, "/skipped/provider"},
 		{http.MethodDelete, "/skipped/provider"},
 	} {
-		// A member of the workspace who isn't an admin.
 		code, body := s.browser(s.bob.cookie, c.method, checklistPath(s.one, c.tail), nil)
 		if code != http.StatusForbidden || body["code"] != "admin_only" || body["items"] != nil {
 			t.Fatalf("member %s %s: %d %v", c.method, c.tail, code, body)
 		}
-		// Someone who isn't in the workspace at all (bob is not in two).
 		code, body = s.browser(s.bob.cookie, c.method, checklistPath(s.two, c.tail), nil)
 		if code != http.StatusNotFound || body["code"] != "workspace_not_found" || body["items"] != nil {
 			t.Fatalf("outsider %s %s: %d %v", c.method, c.tail, code, body)
 		}
-		// Nobody signed in.
 		if code, _ := s.browser("", c.method, checklistPath(s.one, c.tail), nil); code != http.StatusUnauthorized {
 			t.Fatalf("signed out %s %s: %d", c.method, c.tail, code)
 		}
 	}
-	// None of those changed anything.
 	if n := s.scalar(`SELECT (SELECT COUNT(*) FROM setup_checklist_dismissed) + (SELECT COUNT(*) FROM setup_checklist_skipped)`); n != 0 {
 		t.Fatalf("%d marks were made by people who may not", n)
 	}
@@ -116,12 +108,10 @@ func TestChecklistChoicesBelongToTheirWorkspace(t *testing.T) {
 	if body["dismissed"] != true || steps(t, body)["provider"] != "skipped" {
 		t.Fatalf("one: %v", body)
 	}
-	// Alice's other workspace has neither mark.
 	_, body = s.browser(s.alice.cookie, http.MethodGet, checklistPath(s.two, ""), nil)
 	if body["dismissed"] != false || steps(t, body)["provider"] != "todo" {
 		t.Fatalf("two: %v", body)
 	}
-	// And it comes back.
 	if code, _ := s.browser(s.alice.cookie, http.MethodDelete, checklistPath(s.one, "/dismissed"), nil); code != http.StatusNoContent {
 		t.Fatalf("restore: %d", code)
 	}
@@ -132,7 +122,6 @@ func TestChecklistChoicesBelongToTheirWorkspace(t *testing.T) {
 	if body["dismissed"] != false || steps(t, body)["provider"] != "todo" {
 		t.Fatalf("one again: %v", body)
 	}
-	// A step that isn't one is not found, not stored.
 	code, body := s.browser(s.alice.cookie, http.MethodPut, checklistPath(s.one, "/skipped/nothing"), nil)
 	if code != http.StatusNotFound || body["code"] != "not_found" {
 		t.Fatalf("unknown step: %d %v", code, body)
@@ -141,13 +130,11 @@ func TestChecklistChoicesBelongToTheirWorkspace(t *testing.T) {
 
 func TestChecklistIgnoresAMembersPrivateApps(t *testing.T) {
 	s := newStack(t)
-	// Bob's app in his own private space says nothing to alice's checklist.
 	s.app(s.bob.cookie, s.bob.private, "Notes")
 	_, body := s.browser(s.alice.cookie, http.MethodGet, checklistPath(s.one, ""), nil)
 	if got := steps(t, body); got["app"] != "todo" {
 		t.Fatalf("%v", got)
 	}
-	// An app in a shared space does.
 	s.app(s.bob.cookie, s.team, "Shared notes")
 	_, body = s.browser(s.alice.cookie, http.MethodGet, checklistPath(s.one, ""), nil)
 	if got := steps(t, body); got["app"] != "done" {
@@ -155,8 +142,6 @@ func TestChecklistIgnoresAMembersPrivateApps(t *testing.T) {
 	}
 }
 
-// The checklist is for people at the browser: an admin's access token, which is for their own
-// agent's tools, is refused on every one of its routes.
 func TestChecklistIsRefusedToAccessTokens(t *testing.T) {
 	s := newStack(t)
 	token, _ := s.newToken(s.alice.cookie, s.one, "ci")
@@ -173,9 +158,6 @@ func TestChecklistIsRefusedToAccessTokens(t *testing.T) {
 	}
 }
 
-// Whether the server can send email and whether its backups run are the server's, not the
-// workspace's: the checklist of an admin who made their own workspace doesn't list them, and an
-// operator's does.
 func TestChecklistListsServerStepsOnlyForOperators(t *testing.T) {
 	s := newStackWith(t, func(o *Options) {
 		o.Auth.WorkspaceCreation = "anyone"

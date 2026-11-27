@@ -70,13 +70,10 @@ describe('Button', () => {
         </Button>
       </form>,
     )
-    // The same element, still focused (a disabled button would drop the focus).
     expect(document.activeElement).toBe(b)
     expect(b.getAttribute('aria-busy')).toBe('true')
     expect(b.getAttribute('aria-disabled')).toBe('true')
     expect(b.hasAttribute('disabled')).toBe(false)
-    // Its name is the label, then "Loading" (a browser puts a space between them: the hidden text is
-    // positioned, so a block of its own; the test's name computation doesn't know the stylesheet).
     expect(screen.getByRole('button', { name: /^Save\s*Loading$/ })).toBe(b)
     fireEvent.click(b)
     expect(click).not.toHaveBeenCalled()
@@ -102,7 +99,6 @@ describe('Button', () => {
     const b = screen.getByRole('button', { name: 'Go' })
     b.focus()
     expect(document.activeElement).toBe(b)
-    // A native <button>: Enter and Space press it in the browser; the element is what makes that so.
     expect(b.tagName).toBe('BUTTON')
   })
 })
@@ -130,7 +126,6 @@ describe('ButtonLink', () => {
     const a = screen.getByRole('link', { name: 'Export' })
     expect(a.hasAttribute('download')).toBe(true)
     const e = fireEvent.click(a)
-    // Not taken over by the router: the browser follows it.
     expect(e).toBe(true)
   })
 
@@ -142,7 +137,6 @@ describe('ButtonLink', () => {
     )
     const a = screen.getByRole('link', { name: 'Boards' })
     expect(a.getAttribute('target')).toBe('_blank')
-    // No hold on this page for the new tab, unless the caller gives a rel of its own.
     expect(a.getAttribute('rel')).toBe('noopener noreferrer')
     expect(fireEvent.click(a)).toBe(true)
     expect(window.location.pathname).toBe('/')

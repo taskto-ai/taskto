@@ -1,21 +1,9 @@
-// The agent's knowledge-base, board and app tools. Each one is a call back into the Go server, on
-// the tools socket it serves for this sidecar alone (TASKTO_AGENT_TOOLS_SOCKET), and the server
-// does the work for the conversation's owner, with exactly their access (internal/agenttools).
-//
-// A call names its conversation with the capability the server issued for it, which reaches
-// the sidecar with every message (POST /conversations/:id/submit) and is kept in a
-// conversation document of its own: not in the conversation's view, so it never reaches a
-// browser, and empty in a fork, which is a conversation the server hasn't issued one for.
-// The sidecar never says whom a call is for; the server works that out from the capability,
-// and checks access again on every call.
-
 import { request } from 'node:http'
 import { defineDoc, defineExtension, defineTool, type ToolExecutionApi } from '@earendil-works/pi-durable'
 import type { Schema } from '@earendil-works/pi-schema'
 import definitions from './taskto-tools.json' with { type: 'json' }
 import { testHooks } from './test-hooks.js'
 
-/** The conversation's capability for the tools socket; '' until the server sends one. */
 export const ToolAccess = defineDoc({
   kind: 'taskto.tool-access',
   version: 1,
@@ -26,16 +14,12 @@ export const ToolAccess = defineDoc({
   checkpointWhen: () => true,
 })
 
-/** A capability as the server makes them: printable ASCII, bounded. */
 export function validCapability(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 256 && /^[\x21-\x7e]+$/.test(value)
 }
 
-// The server bounds every result to 64 KiB of JSON (agenttools.MaxResult); this is a little more,
-// so a result is never cut here, and the reply read is bounded too.
 const MAX_OUTPUT = 65 << 10
 const MAX_REPLY = 128 << 10
-// How long a call waits for the server, and for its socket to appear while the server starts.
 const CALL_TIMEOUT_MS = 60_000
 const CONNECT_RETRY_MS = 5_000
 
@@ -84,7 +68,6 @@ function post(
   })
 }
 
-/** Calls tool name on the server, retrying briefly while its socket isn't there yet. */
 async function callServer(socketPath: string, name: string, capability: string, args: unknown, signal?: AbortSignal) {
   const deadline = Date.now() + CONNECT_RETRY_MS
   for (;;) {
@@ -102,26 +85,19 @@ function text(value: string, isError = false) {
   return { output: [{ type: 'text' as const, text: value }], ...(isError ? { isError: true } : {}) }
 }
 
-/** The error message of a refusal: the server's `{ error }`, never anything else it sent. */
 function refusal(reply: Reply): string {
   try {
     const parsed = JSON.parse(reply.body) as { error?: unknown }
     if (typeof parsed.error === 'string') return parsed.error
-  } catch {
-    // not JSON: fall through
-  }
+  } catch {}
   return `the server answered ${reply.status}`
 }
 
-/** A tool as the server defines it (internal/agenttools/tools.json, copied here by go generate). */
 export type ToolSpec = {
   name: string
   description: string
-  /** Reads are safe to run again after a crash; writes are not, so a crash never repeats one. */
   read_only: boolean
-  /** The conversation agent's alone, not listed over MCP: the agent browser's tools. */
   conversation_only?: boolean
-  /** Offered here, in conversations, but not at the access tokens' MCP endpoint (the server's alone). */
   no_token?: boolean
   input_schema: Schema<object>
 }
@@ -155,17 +131,11 @@ function serverTool(socketPath: string, spec: ToolSpec) {
   })
 }
 
-// The tools' names, descriptions and argument schemas are the server's, the same ones its MCP
-// server lists (internal/agenttools).
 const specs = definitions as ToolSpec[]
 
-/** The tools, calling the server on socketPath. The conversation-only ones (`conversation_only` in
- * tools.json: the agent browser's) are offered only when the server has the browser on
- * (TASKTO_AGENT_BROWSER=true), so the model isn't shown tools that would only answer "off". */
 export function tasktoTools(socketPath: string, options: { browser?: boolean } = {}) {
   return defineExtension({
     name: 'taskto-tools',
-    // The integration tests' fixture tools (test-hooks.ts) come after the server's; none otherwise.
     tools: [...specs, ...testHooks.extraToolSpecs]
       .filter((spec) => options.browser || !spec.conversation_only)
       .map((spec) => serverTool(socketPath, spec)),

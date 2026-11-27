@@ -15,7 +15,6 @@ import (
 	"taskto.ai/taskto/internal/mail"
 )
 
-// recorder is a mail.Sender that keeps what it is given, or fails.
 type recorder struct {
 	mu   sync.Mutex
 	sent []mail.Message
@@ -45,7 +44,6 @@ func mailStack(t *testing.T, rec *recorder) *stack {
 	return newStackWith(t, func(o *Options) { o.Mail = mail.NewService(rec, testInfo); o.MailTestCooldown = -1 })
 }
 
-// limitedStack is a stack with the test route's real limits (the default cooldown).
 func limitedStack(t *testing.T, rec *recorder) *stack {
 	t.Helper()
 	return newStackWith(t, func(o *Options) { o.Mail = mail.NewService(rec, testInfo) })
@@ -69,11 +67,9 @@ func TestMailStatusIsForAdminsAndNeverHoldsASecret(t *testing.T) {
 			t.Fatalf("the status has an unexpected field %q: %v", k, body)
 		}
 	}
-	// The server's SMTP server is the whole server's: an admin of another workspace sees it too.
 	if code, body := s.browser(s.alice.cookie, http.MethodGet, mailPath(s.two, ""), nil); code != http.StatusOK || body["host"] != "smtp.example.com" {
 		t.Fatalf("admin of another workspace: %d %v", code, body)
 	}
-	// bob is a member of one, not an admin; he isn't in two at all.
 	if code, body := s.browser(s.bob.cookie, http.MethodGet, mailPath(s.one, ""), nil); code != http.StatusForbidden || body["host"] != nil {
 		t.Fatalf("member: %d %v", code, body)
 	}
@@ -117,7 +113,6 @@ func TestMailTestGoesToTheCallerOnly(t *testing.T) {
 		t.Fatalf("message = %+v", got[0])
 	}
 
-	// A recipient in the request is ignored: there is no way to name one.
 	if code, body := s.browser(s.alice.cookie, http.MethodPost, mailPath(s.one, "/test"), map[string]any{"to": "victim@example.com"}); code != http.StatusOK && code != http.StatusBadRequest {
 		t.Fatalf("with a recipient: %d %v", code, body)
 	}
@@ -127,7 +122,6 @@ func TestMailTestGoesToTheCallerOnly(t *testing.T) {
 		}
 	}
 
-	// In the caller's language: the one they picked, else the workspace's default.
 	n := len(rec.messages())
 	if code, body := s.browser(s.alice.cookie, http.MethodPatch, "/api/me", map[string]any{"locale": "pt-BR"}); code != http.StatusOK {
 		t.Fatalf("locale: %d %v", code, body)
@@ -160,17 +154,14 @@ func TestMailTestIsForAdminsOfTheWorkspace(t *testing.T) {
 			t.Errorf("%s: %d %v, want %d", name, code, body, tt.want)
 		}
 	}
-	// Only the admin's own test went out, and to the admin.
 	got := rec.messages()
 	if len(got) != 1 || got[0].To[0] != "alice@example.com" {
 		t.Fatalf("sent %+v", got)
 	}
-	// An access token never sends mail.
 	token, _ := s.newToken(s.alice.cookie, s.one, "mail")
 	if code, _ := s.api(token, http.MethodPost, mailPath(s.one, "/test"), map[string]any{}); code == http.StatusOK {
 		t.Fatalf("an access token sent a message")
 	}
-	// The CSRF guard applies: a request from another site, or a body that isn't JSON, sends nothing.
 	cross := s.request(http.MethodPost, mailPath(s.one, "/test"), map[string]any{}, func(r *http.Request) {
 		r.Header.Set("Sec-Fetch-Site", "cross-site")
 		r.Header.Set("Cookie", "taskto_session="+s.alice.cookie)
@@ -217,8 +208,6 @@ func TestMailTestFailuresAreCodesNotServerText(t *testing.T) {
 	}
 }
 
-// A person sends one test email per cooldown, in whichever workspace; the answer is a 429 with
-// a code the web app translates and how long to wait, and nothing more is sent.
 func TestMailTestHasACooldownPerPersonAcrossWorkspaces(t *testing.T) {
 	rec := &recorder{}
 	s := limitedStack(t, rec)
@@ -242,7 +231,6 @@ func TestMailTestHasACooldownPerPersonAcrossWorkspaces(t *testing.T) {
 func TestMailTestCooldownIsForThePersonNotTheServer(t *testing.T) {
 	rec := &recorder{}
 	s := limitedStack(t, rec)
-	// carol is made an admin; she and alice each send their own.
 	s.exec(`UPDATE memberships SET role = 'admin' WHERE user_id = ? AND workspace_id = ?`, s.carol.id, s.one)
 	if code, body := s.browser(s.alice.cookie, http.MethodPost, mailPath(s.one, "/test"), map[string]any{}); code != http.StatusOK {
 		t.Fatalf("alice: %d %v", code, body)
@@ -255,7 +243,6 @@ func TestMailTestCooldownIsForThePersonNotTheServer(t *testing.T) {
 	}
 }
 
-// A failed send counts too: it is the relay that is being asked.
 func TestMailTestCooldownCountsFailuresToo(t *testing.T) {
 	rec := &recorder{err: &mail.SendError{Stage: mail.StageConnect, Err: errors.New("down")}}
 	s := limitedStack(t, rec)
@@ -276,7 +263,7 @@ func TestMailTestGate(t *testing.T) {
 		t.Fatal("the first send was refused")
 	}
 	leave()
-	leave() // ending twice frees one slot, not two
+	leave()
 	if _, ok, wait := g.enter(1); ok || wait != 30*time.Second {
 		t.Fatalf("the same person at once: ok %v, wait %v", ok, wait)
 	}
@@ -291,8 +278,6 @@ func TestMailTestGate(t *testing.T) {
 		leave()
 	}
 
-	// At most mailTestConcurrency at once, for different people; a refusal for being busy
-	// doesn't use the person's cooldown, and a finished send frees a place.
 	g = newMailTestGate(time.Second, func() time.Time { return now })
 	var leaves []func()
 	for u := int64(1); u <= mailTestConcurrency; u++ {
@@ -312,7 +297,6 @@ func TestMailTestGate(t *testing.T) {
 	}
 	l()
 
-	// A negative cooldown is none.
 	g = newMailTestGate(-1, func() time.Time { return now })
 	for range 5 {
 		l, ok, _ := g.enter(1)
@@ -323,7 +307,6 @@ func TestMailTestGate(t *testing.T) {
 	}
 }
 
-// The ones that ended their cooldown don't pile up in memory.
 func TestMailTestGateForgetsEndedCooldowns(t *testing.T) {
 	now := time.Unix(0, 0)
 	g := newMailTestGate(time.Second, func() time.Time { return now })

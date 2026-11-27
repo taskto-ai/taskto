@@ -28,10 +28,8 @@ func TestRankBetween(t *testing.T) {
 	}
 }
 
-// TestRanksKeepOrder inserts at random places, in the worst spots too, and checks the
-// ranks stay strictly ordered, never end in the zero digit, and stay short.
 func TestRanksKeepOrder(t *testing.T) {
-	rng := rand.New(rand.NewPCG(1, 2)) // #nosec G404 -- repeatable test data, not a secret
+	rng := rand.New(rand.NewPCG(1, 2))
 	for _, where := range []string{"random", "front", "back", "second"} {
 		var ranks []string
 		for range 2000 {

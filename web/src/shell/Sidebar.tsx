@@ -1,9 +1,3 @@
-// The sidebar, from top to bottom: the logo; the workspace switcher; the sections (Home,
-// Conversations, Knowledge base, Boards, Apps) with the current one marked; the inbox with its
-// unread count; the pinned apps, in a group of their own; then, at the foot, Settings and the
-// account. On a tablet it is a rail of icons, each named by its tooltip; on a phone it is the
-// drawer behind the phone bar's menu button (Shell.css).
-
 import type { Ref } from 'react'
 import type { Me, Workspace } from '../api'
 import { BrandLogo } from '../BrandLogo'
@@ -47,8 +41,6 @@ export function Sidebar({ me, workspace, route, path, onLogout, onMe, sidebarRef
           />
         ))}
         <InboxLink workspace={workspace.id} current={route.section === 'notifications'} t={t} />
-        {/* Pinned apps are listed after the platform's pages, in a group of their own: they can't
-            replace, reorder or hide those, and a failure here leaves the navigation as it is. */}
         <ErrorBoundary fallback={null} resetKey={workspace.id}>
           <PinnedNav workspace={workspace.id} path={path} />
         </ErrorBoundary>
@@ -66,8 +58,6 @@ export function Sidebar({ me, workspace, route, path, onLogout, onMe, sidebarRef
   )
 }
 
-// The inbox, with how many notifications are unread. The count is a convenience: a failed ask
-// leaves it as it was.
 function InboxLink({ workspace, current, t }: { workspace: number; current: boolean; t: T }) {
   const unread = useUnread(workspace)
   const f = useFormat()

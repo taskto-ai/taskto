@@ -1,10 +1,5 @@
 // @vitest-environment jsdom
 
-// Every question Settings asks before an action that removes access or can't be undone: the answer
-// decides. For each, Cancel (and the time for a request to go) sends nothing, and the action named
-// on the button sends exactly its one request. The request comes after the dialog's answer, which is
-// awaited, so each check waits for the page to settle before it counts.
-
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { CliAccount, Me, ProviderAccount, Space, SpaceMember, Workspace } from '../api'
@@ -121,17 +116,14 @@ const session = (id: string, current: boolean, browser: string, os: string) => (
 
 interface Case {
   name: string
-  // Who looks: an admin who doesn't run the server, unless the case says.
   me?: Me
   workspace: Workspace
   tab: string
   routes: Parameters<typeof fakeFetch>[0]
-  // Brings up the question.
   ask: () => Promise<void>
   confirm: string
   method: string
   path: string
-  // What the confirmed request sends: undefined for a request with no body.
   body: unknown
 }
 
@@ -394,7 +386,6 @@ CASES.push({
 
 const matching = (calls: Call[], c: Case) => calls.filter((x) => x.method === c.method && x.path === c.path)
 
-// Long enough for a request that an answer would have started to be made and recorded.
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 30)))
 
 beforeEach(() => {

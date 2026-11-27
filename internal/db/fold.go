@@ -7,10 +7,6 @@ import (
 	"modernc.org/sqlite"
 )
 
-// FoldFunc is the SQL function taskto_fold(text): the text in lower case, by Unicode rules
-// (SQLite's own lower() folds ASCII only, so a search for "ação" would miss "AÇÃO"). Anything
-// that isn't text is NULL. Searching inside an app's records (internal/apps) compares folded
-// text on both sides.
 const FoldFunc = "taskto_fold"
 
 func init() {

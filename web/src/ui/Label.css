@@ -1,6 +1,3 @@
-/* A label, and the six hues that anything named may take (a label, an avatar): each sets the pair
-   of a hue's text and its soft ground, which contrast.ts holds to 4.5:1. */
-
 @layer components {
   .ui-label {
     box-sizing: border-box;

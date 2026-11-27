@@ -1,7 +1,3 @@
-// A signed-in person who is a member of no workspace: what that means, a new workspace if the
-// server lets them make one (a dialog, which fits a phone), and Log out. In the frame's own form,
-// its title in the display face like every screen there, not a box of its own inside the card.
-
 import { useState } from 'react'
 import type { Me } from '../api'
 import { AuthLayout } from '../auth/AuthLayout'

@@ -38,7 +38,6 @@ const space = (access: 'write' | 'read', id = 3, name = 'Team') => ({
 })
 const plan = { path: 'notes/plan.md', version: V1, size: 7, versioned: true }
 
-// The routes a space with one document needs; `extra` adds or overrides.
 function kb(access: 'write' | 'read', extra: Parameters<typeof fakeFetch>[0] = {}) {
   return fakeFetch({
     'GET /api/workspaces/1/spaces': { body: { spaces: [space(access)] } },
@@ -48,14 +47,12 @@ function kb(access: 'write' | 'read', extra: Parameters<typeof fakeFetch>[0] = {
   })
 }
 
-// The tree's folder "notes" is closed until it is opened, then its document.
 async function openPlan() {
   fireEvent.click(await screen.findByRole('button', { name: /^notes/ }))
   fireEvent.click(screen.getByRole('button', { name: /^plan\.md/ }))
   return screen.findByRole('article', { name: 'notes/plan.md' })
 }
 
-// One of the document's actions in its "More actions" menu.
 function fromMenu(doc: HTMLElement, name: string) {
   fireEvent.click(within(doc).getByRole('button', { name: 'More actions' }))
   fireEvent.click(within(doc).getByRole('menuitem', { name }))
@@ -88,7 +85,6 @@ test('a viewer reads documents and their history, but gets no way to change them
   })
   render(<KnowledgePage workspace={1} />)
   const doc = await openPlan()
-  // The preview is Markdown, made into elements.
   expect((await within(doc).findByRole('heading', { name: 'Plan' })).tagName).toBe('H1')
   expect(within(doc).getByText('first').tagName).toBe('STRONG')
   for (const name of ['New', 'Upload', 'Edit', 'Move', 'Delete']) {
@@ -156,7 +152,6 @@ test('a stale save is a conflict to settle: the edit is kept, and overwriting is
       return { body: { commit: 'c9', doc: current } }
     },
   })
-  // The page opened the document before someone else saved it.
   current = { ...plan, version: V1, content: '# Plan\n' }
   render(<KnowledgePage workspace={1} />)
   const doc = await openPlan()
@@ -170,7 +165,6 @@ test('a stale save is a conflict to settle: the edit is kept, and overwriting is
   expect(text.value).toBe('Mine.')
   expect((within(doc).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
 
-  // Loading theirs replaces the text, and saving then is based on their version.
   fireEvent.click(within(doc).getByRole('button', { name: 'Load their version' }))
   expect(text.value).toBe('# Plan\n\nTheirs.\n')
   fireEvent.change(text, { target: { value: 'Mine again.' } })
@@ -178,7 +172,6 @@ test('a stale save is a conflict to settle: the edit is kept, and overwriting is
   fireEvent.click(within(doc).getByRole('button', { name: 'Save' }))
   await within(doc).findByRole('button', { name: 'Overwrite with mine' })
 
-  // Overwriting is deliberate: it names the version it replaces.
   fireEvent.click(within(doc).getByRole('button', { name: 'Overwrite with mine' }))
   await waitFor(() => expect(current.content).toBe('Mine again.'))
   const puts = calls.filter((c) => c.method === 'PUT').map((c) => (c.body as { base_version: string }).base_version)
@@ -220,12 +213,10 @@ test('creates a Markdown document and opens it to edit', async () => {
   const doc = await screen.findByRole('article', { name: 'ideas/launch.md' })
   const text = (await within(doc).findByLabelText('Text')) as HTMLTextAreaElement
   expect(text.value).toBe('# launch\n')
-  // Opened to write: the keyboard is in the text, and Save is the page's one primary button.
   expect(document.activeElement).toBe(text)
   expect(screen.queryByRole('dialog')).toBeNull()
   await waitFor(() => expect(document.querySelectorAll('.ui-button-primary')).toHaveLength(1))
   expect(within(doc).getByRole('button', { name: 'Save' }).classList).toContain('ui-button-primary')
-  // Creating never names a version: an existing document is a 409, not replaced.
   expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({ content: '# launch\n' })
 })
 
@@ -243,7 +234,6 @@ test('moves a document, naming its version', async () => {
   fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
   const moved = await screen.findByRole('article', { name: 'archive/plan.md' })
   expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ to: 'archive/plan.md', base_version: V1 })
-  // The keyboard goes to the moved document, not to the top of the page.
   await waitFor(() => expect(document.activeElement).toBe(within(moved).getByRole('heading', { level: 2 })))
 })
 
@@ -283,7 +273,6 @@ test('deletes a document, then restores it from its history', async () => {
   await screen.findByText(/Deleted notes\/plan\.md/)
   expect(screen.queryByRole('article')).toBeNull()
   expect(calls.find((c) => c.method === 'DELETE')?.body).toEqual({ base_version: V1 })
-  // The keyboard is on the way back.
   const restore = screen.getByRole('button', { name: 'Restore' })
   expect(document.activeElement).toBe(restore)
 
@@ -291,7 +280,6 @@ test('deletes a document, then restores it from its history', async () => {
   const back = await screen.findByRole('article', { name: 'notes/plan.md' })
   await waitFor(() => expect(document.activeElement).toBe(within(back).getByRole('heading', { level: 2 })))
   expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ commit: 'c2' })
-  // It's back: the notice, and its Restore button, are gone.
   expect(screen.queryByText(/Deleted notes\/plan\.md/)).toBeNull()
 })
 
@@ -333,7 +321,6 @@ test('restores an earlier version, and a stale restore says so with a reload', a
   fireEvent.click(within(doc).getAllByRole('button', { name: 'View' })[1])
   expect((await within(doc).findByText('old')).tagName).toBe('EM')
 
-  // Restoring asks first; cancelling sends nothing.
   fireEvent.click(within(doc).getByRole('button', { name: 'Restore this version' }))
   fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }))
   expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
@@ -350,7 +337,6 @@ test('restores an earlier version, and a stale restore says so with a reload', a
   fireEvent.click(within(alert).getByRole('button', { name: 'Reload' }))
   await confirmRestore()
   await waitFor(() => expect(within(doc).queryByRole('region', { name: 'History' })).toBeNull())
-  // Restored: the keyboard goes to the document.
   expect(document.activeElement).toBe(within(doc).getByRole('heading', { level: 2 }))
   expect(calls.filter((c) => c.method === 'POST').map((c) => c.body)).toEqual([
     { commit: 'c1', base_version: V1 },
@@ -395,12 +381,10 @@ test('uploads a file as bytes, and replaces one only when asked', async () => {
   expect(lastPut()?.path).toBe(`${S}/docs/logo.png`)
   expect(lastPut()?.body).toBeInstanceOf(Blob)
 
-  // A Markdown file goes as its text.
   await upload(new File([new TextEncoder().encode('héllo')], 'readme.md'))
   await screen.findByRole('article', { name: 'readme.md' })
   expect(calls.filter((c) => c.method === 'PUT').at(-1)?.body).toEqual({ content: 'héllo' })
 
-  // A name that is taken is refused, until the user chooses to replace it.
   exists = true
   const form = await upload(new File([new Uint8Array([1, 2, 3])], 'logo.png'))
   expect(await within(form).findByText('logo.png already exists.')).toBeTruthy()
@@ -409,7 +393,6 @@ test('uploads a file as bytes, and replaces one only when asked', async () => {
   expect(lastPut()?.path).toBe(`${S}/docs/logo.png?base_version=${V2}`)
   expect(lastPut()?.body).toBeInstanceOf(Blob)
 
-  // Deleted between "already exists" and "Replace it": replacing it is creating it.
   const again = await upload(new File([new Uint8Array([1, 2, 3])], 'logo.png'))
   expect(await within(again).findByText('logo.png already exists.')).toBeTruthy()
   exists = false
@@ -492,7 +475,6 @@ test('an unversioned file plays, says it is not versioned, and its history and d
   expect(video.getAttribute('src')).toBe(`${S}/docs/talks/intro.mp4?raw=true`)
   expect(within(doc).getByText('Not versioned: only its current version is kept.')).toBeTruthy()
 
-  // History lists who changed it, without viewing or restoring older versions.
   fireEvent.click(within(doc).getByRole('button', { name: 'History' }))
   const history = await within(doc).findByRole('region', { name: 'History' })
   await within(history).findByText(/Older versions can't be viewed or restored/)
@@ -500,7 +482,6 @@ test('an unversioned file plays, says it is not versioned, and its history and d
   expect(within(history).queryByRole('button', { name: 'View' })).toBeNull()
   expect(within(history).queryByRole('button', { name: 'Restore this version' })).toBeNull()
 
-  // Deleting it says it can't come back, and offers no restore.
   fromMenu(doc, 'Delete')
   const ask = within(doc).getByRole('alertdialog', { name: 'Delete the document' })
   expect(within(ask).getByText("Delete talks/intro.mp4? It isn't versioned: it can't be restored.")).toBeTruthy()
@@ -538,7 +519,6 @@ test("an admin removes a document's old versions from history, after a warning a
   render(<KnowledgePage workspace={1} admin />)
   const doc = await openPlan()
   fireEvent.click(await within(doc).findByRole('button', { name: 'History' }))
-  // A version already removed says so, and can't be viewed.
   expect(await within(doc).findByText(/Removed from history/)).toBeTruthy()
   expect(within(doc).getAllByRole('button', { name: 'View' })).toHaveLength(2)
 
@@ -551,7 +531,6 @@ test("an admin removes a document's old versions from history, after a warning a
   expect(calls.filter((c) => c.method === 'DELETE')).toEqual([
     { method: 'DELETE', path: `${S}/history/notes/plan.md`, body: { base_version: V1 } },
   ])
-  // The history is loaded again: its commits have new IDs, and nothing is left to remove.
   await waitFor(() => expect(within(doc).getAllByText(/Removed from history/)).toHaveLength(2))
   expect(within(doc).queryByRole('button', { name: 'Remove old versions from history…' })).toBeNull()
 })
@@ -580,8 +559,6 @@ test('only an admin who can write the space is offered to remove old versions', 
     cleanup()
   }
 })
-
-// --- A restore or an upload whose session ends in the middle -------------------------------
 
 test('a restore whose session ends while it reads the history restores nothing', async () => {
   let history: () => void = () => {}

@@ -11,9 +11,6 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// A lookup found the key's session completed (paid) before the payment's event arrived, and the entry
-// stopped for a person. The invoice is put back to a draft and the entry retried: it still says the
-// link was paid, never that nothing was created.
 func TestARetryAfterASettledLookupNeverSaysNothingWasMade(t *testing.T) {
 	p := newPayWith(t, publicURL, invoiceAppWhen)
 	record := p.invoice(10, "EUR")

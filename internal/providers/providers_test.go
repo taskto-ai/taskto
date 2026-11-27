@@ -21,10 +21,8 @@ import (
 	"taskto.ai/taskto/internal/serverkey"
 )
 
-// setupToken is the first-run setup token the tests' server is given.
 var setupToken = auth.NewSetupToken()
 
-// Obviously fake keys and passwords.
 const (
 	testKey   = "fake-provider-key-for-tests-not-real"
 	otherKey  = "fake-rotated-key-for-tests-not-real"
@@ -33,7 +31,6 @@ const (
 	localURL  = "http://127.0.0.1:11434/v1"
 )
 
-// logs captures everything the package (and the auth middleware) logs.
 type logs struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -62,9 +59,9 @@ type env struct {
 
 	mu      sync.Mutex
 	reloads int
-	reload  error // what the fake agent runtime answers to a reload
+	reload  error
 
-	bodies bytes.Buffer // every response body
+	bodies bytes.Buffer
 }
 
 func newEnv(t *testing.T) *env {
@@ -115,7 +112,6 @@ func (e *env) reloadCount() int {
 	return e.reloads
 }
 
-// client is a browser with a session.
 type client struct {
 	e      *env
 	cookie *http.Cookie
@@ -177,7 +173,6 @@ type me struct {
 	} `json:"workspaces"`
 }
 
-// setup creates the owner, admin of the first workspace, and returns them and its ID.
 func (e *env) setup() (*client, int64) {
 	e.t.Helper()
 	c := &client{e: e}
@@ -190,7 +185,6 @@ func (e *env) setup() (*client, int64) {
 	return c, m.Workspaces[0].ID
 }
 
-// invite adds a new person to the workspace with role, and returns them logged in.
 func (e *env) invite(admin *client, ws int64, email, role string) *client {
 	e.t.Helper()
 	rec := admin.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", ws), map[string]string{"email": email, "role": role})
@@ -236,7 +230,6 @@ func TestWorkspaceProvidersAdminsWriteMembersRead(t *testing.T) {
 		t.Fatalf("created = %+v", created)
 	}
 
-	// A member reads, but can't create, change or delete.
 	rec = member.do(http.MethodGet, wsPath(ws, "providers"), nil)
 	expect(t, rec, http.StatusOK)
 	if list := decode[struct{ Providers []Account }](t, rec).Providers; len(list) != 1 || list[0].ID != created.ID {
@@ -248,7 +241,6 @@ func TestWorkspaceProvidersAdminsWriteMembersRead(t *testing.T) {
 	expect(t, member.do(http.MethodPatch, one, map[string]any{"base_url": "https://attacker.example.com/v1"}), http.StatusForbidden)
 	expect(t, member.do(http.MethodDelete, one, nil), http.StatusForbidden)
 
-	// Someone outside the workspace can't even tell it exists.
 	for _, call := range []struct{ method, path string }{
 		{http.MethodGet, wsPath(ws, "providers")},
 		{http.MethodPost, wsPath(ws, "providers")},
@@ -260,14 +252,12 @@ func TestWorkspaceProvidersAdminsWriteMembersRead(t *testing.T) {
 	}
 	expect(t, (&client{e: e}).do(http.MethodGet, wsPath(ws, "providers"), nil), http.StatusUnauthorized)
 
-	// Nothing changed.
 	rec = owner.do(http.MethodGet, wsPath(ws, "providers"), nil)
 	if list := decode[struct{ Providers []Account }](t, rec).Providers; len(list) != 1 || list[0].DisplayName != "gateway" ||
 		list[0].BaseURL != remoteURL {
 		t.Fatalf("after the refused writes: %+v", list)
 	}
 
-	// The admin changes and deletes.
 	rec = owner.do(http.MethodPatch, one, map[string]any{"display_name": "Gateway", "models": []map[string]any{{"id": "only"}}})
 	expect(t, rec, http.StatusOK)
 	if got := decode[Account](t, rec); got.DisplayName != "Gateway" || len(got.Models) != 1 || got.APIKey != "set" || got.BaseURL != remoteURL {
@@ -277,11 +267,9 @@ func TestWorkspaceProvidersAdminsWriteMembersRead(t *testing.T) {
 	expect(t, owner.do(http.MethodDelete, one, nil), http.StatusNotFound)
 }
 
-// A workspace's account IDs don't reach another workspace's routes.
 func TestAccountsStayInTheirWorkspace(t *testing.T) {
 	e := newEnv(t)
 	owner, ws := e.setup()
-	// A second workspace, owned by the same admin: created directly, as there's no API yet.
 	res, err := e.db.Exec(`INSERT INTO workspaces (name) VALUES ('Other')`)
 	if err != nil {
 		t.Fatal(err)
@@ -299,7 +287,6 @@ func TestAccountsStayInTheirWorkspace(t *testing.T) {
 	if list := decode[struct{ Providers []Account }](t, rec).Providers; len(list) != 0 {
 		t.Fatalf("the other workspace lists %+v", list)
 	}
-	// The same name is free in another workspace, and taken twice in one.
 	expect(t, owner.do(http.MethodPost, wsPath(other, "providers"), account("one", localURL, nil)), http.StatusCreated)
 	expect(t, owner.do(http.MethodPost, wsPath(ws, "providers"), account("one", localURL, nil)), http.StatusConflict)
 }
@@ -317,10 +304,8 @@ func TestPersonalProvidersAreInvisibleToOthers(t *testing.T) {
 	if mine.Provider != fmt.Sprintf("u%d-mine", alice.id) || mine.Scope != ScopeUser {
 		t.Fatalf("alice's account = %+v", mine)
 	}
-	// Bob may use the same name for his own.
 	expect(t, bob.do(http.MethodPost, "/api/me/providers", account("mine", localURL, nil)), http.StatusCreated)
 
-	// Bob (and the admin) see only their own personal accounts, and can't touch Alice's.
 	for _, other := range []*client{bob, owner} {
 		rec = other.do(http.MethodGet, "/api/me/providers", nil)
 		for _, a := range decode[struct{ Providers []Account }](t, rec).Providers {
@@ -331,7 +316,6 @@ func TestPersonalProvidersAreInvisibleToOthers(t *testing.T) {
 		one := fmt.Sprintf("/api/me/providers/%d", mine.ID)
 		expect(t, other.do(http.MethodPatch, one, map[string]any{"base_url": "https://attacker.example.com/v1"}), http.StatusNotFound)
 		expect(t, other.do(http.MethodDelete, one, nil), http.StatusNotFound)
-		// Nor reach it as a workspace account.
 		expect(t, owner.do(http.MethodDelete, wsPath(ws, fmt.Sprintf("providers/%d", mine.ID)), nil), http.StatusNotFound)
 
 		rec = other.do(http.MethodGet, wsPath(ws, "models"), nil)
@@ -343,7 +327,6 @@ func TestPersonalProvidersAreInvisibleToOthers(t *testing.T) {
 		}
 	}
 
-	// Alice's list in the workspace: the instance's, the workspace's, then her own.
 	rec = alice.do(http.MethodGet, wsPath(ws, "models"), nil)
 	expect(t, rec, http.StatusOK)
 	var got []string
@@ -406,8 +389,6 @@ func TestValidation(t *testing.T) {
 		})
 	}
 
-	// Accepted: a key over plain http to this machine, every kind of compat setting, a trailing
-	// slash (dropped).
 	ok := with(func(b map[string]any) {
 		b["base_url"] = "http://localhost:8000/v1/"
 		b["api_key"] = "  " + testKey + "\n"
@@ -420,10 +401,8 @@ func TestValidation(t *testing.T) {
 		t.Fatalf("accepted account = %+v (compat %s)", got, got.Compat)
 	}
 	one := fmt.Sprintf("/api/me/providers/%d", got.ID)
-	// The name and kind can't change, and an update is validated whole: no key over remote http.
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"name": "renamed"}), http.StatusBadRequest)
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"base_url": "http://models.example.com/v1"}), http.StatusBadRequest)
-	// Without the key, the remote http endpoint is fine.
 	rec = owner.do(http.MethodPatch, one, map[string]any{"api_key": nil, "base_url": "http://models.example.com/v1", "compat": nil})
 	expect(t, rec, http.StatusOK)
 	if got := decode[Account](t, rec); got.APIKey != "not set" || got.Compat != nil {
@@ -431,8 +410,6 @@ func TestValidation(t *testing.T) {
 	}
 }
 
-// The key goes in, and never comes out: not in a response, not in a log line, not in the
-// providers file. Only its own key file holds it.
 func TestKeysNeverLeave(t *testing.T) {
 	e := newEnv(t)
 	owner, ws := e.setup()
@@ -445,13 +422,10 @@ func TestKeysNeverLeave(t *testing.T) {
 	owner.do(http.MethodGet, wsPath(ws, "providers"), nil)
 	member.do(http.MethodGet, wsPath(ws, "providers"), nil)
 	member.do(http.MethodGet, wsPath(ws, "models"), nil)
-	// Refused writes that carry a key, by a member and as invalid input.
 	member.do(http.MethodPatch, one, map[string]any{"api_key": otherKey})
 	owner.do(http.MethodPost, wsPath(ws, "providers"), account("bad", "http://models.example.com/v1", ptr(otherKey)))
 	owner.do(http.MethodPost, "/api/me/providers", map[string]any{"name": "x", "apiKey": otherKey})
-	// Rotation.
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"api_key": otherKey}), http.StatusOK)
-	// The agent runtime refuses the file, then doesn't answer.
 	e.mu.Lock()
 	e.reload = fmt.Errorf("%w: invalid providers config", ErrRefused)
 	e.mu.Unlock()
@@ -533,7 +507,6 @@ func TestFeedFiles(t *testing.T) {
 		t.Fatalf("key directory has %d files, want 1 (no key, no file)", len(entries))
 	}
 
-	// Removing the key removes its file; so does deleting the account.
 	one := wsPath(ws, fmt.Sprintf("providers/%d", gateway.ID))
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"api_key": nil}), http.StatusOK)
 	if _, err := os.Stat(keyPath); !errors.Is(err, os.ErrNotExist) {
@@ -551,8 +524,6 @@ func TestFeedFiles(t *testing.T) {
 	]}`, owner.id, localURL))
 }
 
-// A sealed key copied to another account doesn't open there: that account is left out of the
-// agent runtime, with a log line that doesn't quote anything.
 func TestMovedKeyDoesNotOpen(t *testing.T) {
 	e := newEnv(t)
 	owner, ws := e.setup()
@@ -579,7 +550,6 @@ func TestMovedKeyDoesNotOpen(t *testing.T) {
 	}
 }
 
-// The operator's providers come first, as written; account IDs are theirs alone.
 func TestOperatorProviders(t *testing.T) {
 	e := newEnv(t)
 	dir := t.TempDir()
@@ -631,7 +601,7 @@ func TestUsable(t *testing.T) {
 		"ws33-x":      false,
 		"script":      true,
 		"local":       true,
-		"wsx-1":       true, // not an account's ID: an operator's
+		"wsx-1":       true,
 	}
 	for provider, want := range cases {
 		if got := Usable(provider, user, workspace); got != want {
@@ -660,8 +630,6 @@ func assertJSON(t *testing.T, path, want string) {
 	}
 }
 
-// CLI workers come after the operator's providers, in the file and in the model list, so the
-// default model stays the operator's.
 func TestCLIProviders(t *testing.T) {
 	e := newEnv(t)
 	dir := t.TempDir()
@@ -687,16 +655,11 @@ func TestCLIProviders(t *testing.T) {
 	}
 }
 
-// A removed account's key file that can't be deleted is an error of Sync, not a log line: the
-// purge of a deleted account keeps its step recorded and tries again, instead of reporting a key
-// still on disk as gone. A stale key that can be deleted is gone and Sync answers nil.
 func TestSyncAnswersAStaleKeyThatCouldNotBeRemoved(t *testing.T) {
 	e := newEnv(t)
 	if err := e.feed.Sync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// A file that can be removed, and a directory that can't (it isn't empty): neither is a key of
-	// an account in the database.
 	if err := os.WriteFile(filepath.Join(e.feed.keyDir(), "removable.key"), []byte("fake-stale-key"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -713,7 +676,6 @@ func TestSyncAnswersAStaleKeyThatCouldNotBeRemoved(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(e.feed.keyDir(), "removable.key")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the key that could be removed stays: %v", err)
 	}
-	// Once it can be removed, Sync is done.
 	if err := os.RemoveAll(filepath.Join(e.feed.keyDir(), "stuck.key")); err != nil {
 		t.Fatal(err)
 	}

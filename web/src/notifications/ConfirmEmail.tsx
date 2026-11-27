@@ -1,9 +1,3 @@
-// The page a confirmation email's link opens (docs/pwa.md#email): the token follows the `#`, so no
-// server log has it. It confirms the signed-in person's own address, once, and takes the token out
-// of the address bar whatever comes of it. The token is the one the page opened with: a later draw
-// (the shell drawn again, the address without it now) never changes it. Opened with none (Back to
-// the page after the token left the address), it asks nothing and says there is nothing to confirm.
-
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, api, errorText } from '../api'
 import { useT } from '../i18n'
@@ -26,7 +20,6 @@ export function ConfirmEmail({ token, workspace }: { token: string; workspace: n
   const t = useT()
   const [opened] = useState(token)
   const [outcome, setOutcome] = useState<Outcome>(opened ? { state: 'working' } : { state: 'nothing' })
-  // One request however often the effect runs: the token works once.
   const request = useRef<Promise<unknown> | null>(null)
   useEffect(() => {
     let live = true
@@ -35,8 +28,6 @@ export function ConfirmEmail({ token, workspace }: { token: string; workspace: n
     request.current ??= api(EMAIL_CONFIRM_API, { method: 'POST', body: { token: opened } })
     request.current.then(
       () => live && setOutcome({ state: 'done' }),
-      // An answer of the server's says what it refused; no answer is said in the app's words when
-      // drawn, never the browser's ("Failed to fetch").
       (e) => live && setOutcome({ state: 'failed', message: e instanceof ApiError ? errorText(e) : null }),
     )
     return () => {

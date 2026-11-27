@@ -1,6 +1,3 @@
-/* A checkbox: an 18px box with the control's edge; checked or mixed, filled with ink and marked in
-   the page's colour (the website's, ink rather than mint, since a mark this small must be seen). */
-
 @layer components {
   .ui-check {
     display: inline-flex;
@@ -31,8 +28,6 @@
       border-color var(--duration-fast) var(--ease-out);
   }
 
-  /* The hover weighs only what the box's own rules weigh (:where), so an invalid box keeps its
-     danger edge under the pointer. */
   :where(.ui-check:hover) .ui-check-box:not(:disabled) {
     border-color: var(--color-text);
   }
@@ -48,8 +43,6 @@
     background: var(--color-text);
   }
 
-  /* The mark is drawn only when there is one. A mark drawn always with a transparent edge would
-     show in forced colours, where the browser paints every edge in the system's colour. */
   .ui-check-box:checked::after {
     content: "";
     box-sizing: border-box;
@@ -78,7 +71,6 @@
     border-color: var(--color-danger);
   }
 
-  /* Disabled: the neutral ground, a muted mark and label. */
   .ui-check:has(.ui-check-box:disabled) {
     color: var(--color-text-muted);
     cursor: not-allowed;

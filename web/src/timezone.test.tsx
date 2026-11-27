@@ -14,7 +14,6 @@ const me = (time_zone?: string): Me => ({
   is_operator: false,
 })
 
-// The browser says it is in this zone.
 function browserIn(zone: string) {
   vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
     timeZone: zone,
@@ -48,7 +47,7 @@ test('an account that has a time zone, or a server that has none to give, is lef
   const calls = fakeFetch({})
   const set = me('Europe/Lisbon')
   expect(await reportTimeZone(set)).toBe(set)
-  const old = me() // an older server doesn't send the field
+  const old = me()
   expect(await reportTimeZone(old)).toBe(old)
   expect(calls).toEqual([])
 })
@@ -79,7 +78,6 @@ test('the time zone is chosen in settings and saved to the account', async () =>
   render(<TimeZonePanel initial="Asia/Tokyo" />)
   const select = screen.getByLabelText('Your time zone') as HTMLSelectElement
   expect(select.value).toBe('Asia/Tokyo')
-  // The empty choice is UTC, said so.
   expect(screen.getByRole('option', { name: 'Not set (UTC)' })).toBeTruthy()
 
   fireEvent.change(select, { target: { value: 'America/Sao_Paulo' } })
@@ -87,11 +85,9 @@ test('the time zone is chosen in settings and saved to the account', async () =>
   expect(zone).toBe('America/Sao_Paulo')
   expect(select.value).toBe('America/Sao_Paulo')
 
-  // The browser's is one click away, while it differs.
   fireEvent.click(screen.getByRole('button', { name: "Use this browser's (Europe/Lisbon)" }))
   await waitFor(() => expect(select.value).toBe('Europe/Lisbon'))
   expect(screen.queryByRole('button', { name: /Use this browser's/ })).toBeNull()
-  // And none can be picked again.
   fireEvent.change(select, { target: { value: '' } })
   await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(3))
   expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([
@@ -121,7 +117,6 @@ test('a time zone the server refuses is said so, in the language, and the choice
 test("coming back to the page shows the account's zone, not the one the app had at sign-in", async () => {
   browserIn('Europe/Lisbon')
   fakeFetch({ 'GET /api/me': { body: me('Asia/Tokyo') } })
-  // The app was given 'UTC' when the person signed in, and has not heard of the zone saved since.
   render(<TimeZonePanel initial="UTC" />)
   const select = screen.getByLabelText('Your time zone') as HTMLSelectElement
   await waitFor(() => expect(select.value).toBe('Asia/Tokyo'))
@@ -157,7 +152,6 @@ test('a save that fails leaves the last zone the account confirmed, and a late f
   const select = screen.getByLabelText('Your time zone') as HTMLSelectElement
   fireEvent.change(select, { target: { value: 'Europe/Lisbon' } })
   await waitFor(() => expect(select.value).toBe('Europe/Lisbon'))
-  // The account's first answer comes late, from before the save.
   answer()
   await new Promise((r) => setTimeout(r, 20))
   expect(select.value).toBe('Europe/Lisbon')

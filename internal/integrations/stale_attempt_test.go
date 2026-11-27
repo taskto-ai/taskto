@@ -10,10 +10,6 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// A try that read its key's object open, and is slow to save it, finds the ref moved on meanwhile:
-// another try saw that object expired, gave the key its outcome and took the next key. The slow try
-// never installs the old object as the ref's link (it expired, and the new key's call makes the one a
-// payer can use); it reads the ref again, and the entry tries again.
 func TestAnOldKeyNeverInstallsItsObjectAfterTheRefMovedOn(t *testing.T) {
 	ctx := context.Background()
 	p := newPay(t, publicURL)
@@ -32,7 +28,6 @@ func TestAnOldKeyNeverInstallsItsObjectAfterTheRefMovedOn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The slow try read the object open. Meanwhile another saw it expired and moved the ref on.
 	if err := p.svc.markAttempt(ctx, a, attemptExpired); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +44,6 @@ func TestAnOldKeyNeverInstallsItsObjectAfterTheRefMovedOn(t *testing.T) {
 		t.Fatalf("refs = %+v: the old key's object was installed", refs)
 	}
 
-	// The same key, still current, whose ref was marked failed meanwhile (a late answer): it is saved.
 	q := newPay(t, publicURL)
 	req = q.direct(q.invoice(10, "EUR"), "op-stale-0002")
 	q.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/checkout/sessions"))

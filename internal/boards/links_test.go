@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// A card links conversations by the conversation API's ID. Conversations are private, so
-// only their owner adds a link to one; whoever may edit the card may keep or remove it.
 func TestConversationLinks(t *testing.T) {
 	w := newWorld(t)
 	alices := w.conversation(w.alice, w.ws)
@@ -28,7 +26,6 @@ func TestConversationLinks(t *testing.T) {
 	if r := create(w.alice, alices); r.Code != http.StatusCreated {
 		t.Fatalf("alice linking her own conversation: %d %s", r.Code, r.Body.String())
 	}
-	// Someone else's, one of another workspace, and one that doesn't exist: the same answer.
 	var refusals []string
 	for _, conv := range []string{owners, alicesElsewhere, missing} {
 		r := create(w.alice, alices, conv)
@@ -40,16 +37,12 @@ func TestConversationLinks(t *testing.T) {
 	if refusals[0] != refusals[1] || refusals[1] != refusals[2] {
 		t.Fatalf("refusals differ: %q", refusals)
 	}
-	// One spelling per conversation.
 	for _, bad := range []string{"0" + alices, "+" + alices, "-1", "0", "1e3", " " + alices, "conv-1", ""} {
 		if r := create(w.alice, bad); r.Code != http.StatusBadRequest {
 			t.Fatalf("linking %q: %d %s", bad, r.Code, r.Body.String())
 		}
 	}
 
-	// The owner, an editor of the card's space, edits a card that links alice's
-	// conversation: keeping her link is fine, adding their own too, adding hers again
-	// elsewhere isn't.
 	c := w.createCard(w.alice, w.shared, w.team, map[string]any{"title": "Linked", "conversations": []string{alices}})
 	rec := w.owner.do(http.MethodPatch, cardPath(w.shared, w.team.ID, c.ID, ""), map[string]any{
 		"version": c.Version, "title": "Linked twice", "conversations": []string{alices, owners},
@@ -62,19 +55,16 @@ func TestConversationLinks(t *testing.T) {
 	if r := create(w.owner, alices); r.Code != http.StatusBadRequest {
 		t.Fatalf("the owner linking alice's conversation: %d %s", r.Code, r.Body.String())
 	}
-	// Removing someone else's link is an edit like any other.
 	rec = w.owner.do(http.MethodPatch, cardPath(w.shared, w.team.ID, c.ID, ""), map[string]any{
 		"version": c.Version, "conversations": []string{owners},
 	})
 	expect(t, rec, http.StatusOK)
 	c = decode[Card](t, rec)
-	// ... and once removed, only alice can add it back.
 	rec = w.owner.do(http.MethodPatch, cardPath(w.shared, w.team.ID, c.ID, ""), map[string]any{
 		"version": c.Version, "conversations": []string{owners, alices},
 	})
 	expect(t, rec, http.StatusBadRequest)
 
-	// The agent's tools follow the same rule, for the user they work for.
 	ctx := context.Background()
 	if _, err := w.e.s.CreateCard(ctx, Actor{UserID: w.alice.id, Agent: true}, w.shared.ID, w.team.ID,
 		NewCard{Title: "By the agent", Conversations: []string{alices}}); err != nil {

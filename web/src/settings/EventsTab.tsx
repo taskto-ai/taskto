@@ -1,11 +1,3 @@
-// What happened to the events an integration's provider sent, for the workspace's admins: each
-// event's kind, time, amount and state (applied, ignored or failed, with the reason), a retry for a
-// failed one, and the payment links whose outcome at the provider is unknown, which an admin settles
-// after looking at the provider's account. The server holds no record, app or space in an event and
-// lists only the spaces the admin manages for a payment link, so this screen asks for nothing more:
-// one integration of this workspace at a time, its events and its unresolved links. The server checks
-// the role and the scope on every route; this only asks.
-
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
@@ -43,14 +35,11 @@ import './Events.css'
 type Filter = 'all' | 'failed' | 'ignored' | 'applied' | 'pending'
 const FILTERS: Filter[] = ['all', 'failed', 'ignored', 'applied', 'pending']
 
-// The codes whose event is worth more than its state's word: the payment was real and was not applied,
-// so an admin reconciles it at the provider.
 const SPECIAL: Record<string, { label: Key; tone: BadgeTone }> = {
   integration_event_second_payment: { label: 'settings.events.state.duplicate', tone: 'warning' },
   integration_amount_mismatch: { label: 'settings.events.state.mismatch', tone: 'warning' },
 }
 
-// What a retry that came too late says: the event is not failed any more, or is not there.
 const STALE = ['integration_event_not_retriable', 'integration_event_not_found']
 
 export function IntegrationEventsTab({ workspace }: { workspace: number }) {
@@ -60,8 +49,6 @@ export function IntegrationEventsTab({ workspace }: { workspace: number }) {
     () => api<{ integrations: Integration[] }>(`${ws(workspace)}/integrations`).then((r) => r.integrations),
     [workspace],
   )
-  // The spaces the admin manages: the names of what the payment links list by number. Another
-  // member's private space is not among them, and neither is it in what the server lists.
   const spaces = useLoad(
     () => api<{ spaces: Space[] }>(`${ws(workspace)}/spaces?all=true`).then((r) => r.spaces),
     [workspace],
@@ -96,7 +83,6 @@ export function IntegrationEventsTab({ workspace }: { workspace: number }) {
         </Field>
       )}
       {integration && registry.data && (
-        // One integration's page: switching to another starts it afresh.
         <IntegrationEvents
           key={integration.id}
           workspace={workspace}
@@ -128,8 +114,6 @@ function IntegrationEvents({
     </>
   )
 }
-
-// --- The payment links that wait for an admin -------------------------------------------------
 
 function UnresolvedLinks({ base, spaces }: { base: string; spaces: Space[] }) {
   const t = useT()
@@ -165,7 +149,6 @@ function UnresolvedLinks({ base, spaces }: { base: string; spaces: Space[] }) {
     setError(null)
     setNotice(null)
     try {
-      // What the admin checked: the server refuses the confirmation if the link was tried again since.
       await api(`${base}/payment-links/${link.effect_id}/confirm-no-link`, {
         method: 'POST',
         body: { attempt_seq: link.attempt_seq, attempt_sends: link.attempt_sends },
@@ -175,7 +158,6 @@ function UnresolvedLinks({ base, spaces }: { base: string; spaces: Space[] }) {
       setError(errorText(e))
     } finally {
       setBusy(null)
-      // Whatever the answer, what stays is what the server holds now.
       links.reload()
     }
   }
@@ -272,9 +254,6 @@ function UnresolvedLinks({ base, spaces }: { base: string; spaces: Space[] }) {
   )
 }
 
-// Each attempt at a payment: the reference to look for at the provider, in the field that kind of object
-// carries it in, with any object seen and where it was made. The references are TaskTo's own random
-// tokens, never a key of the provider's account.
 const REFERENCE_FIELD: Record<PaymentLinkAttempt['kind'], string> = {
   checkout_session: 'client_reference_id',
   payment_link: 'metadata[taskto_ref]',
@@ -340,8 +319,6 @@ function Attempts({ attempts }: { attempts: PaymentLinkAttempt[] }) {
   )
 }
 
-// --- The events -------------------------------------------------------------------------------
-
 type Page = { items: IntegrationEvent[]; next: number }
 
 function Events({ base, exponents }: { base: string; exponents: Record<string, number> }) {
@@ -352,28 +329,22 @@ function Events({ base, exponents }: { base: string; exponents: Record<string, n
   const [error, setError] = useState<string | null>(null)
   const [more, setMore] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
-  const [nonce, setNonce] = useState(0)
-  // The refusals of retries, by event: said under the event they are about.
   const [refused, setRefused] = useState<Record<number, string>>({})
   const [retrying, setRetrying] = useState<number | null>(null)
-  // The refusal of a retry that came too late, said in the section: the list is read again and the
-  // event may leave it (a failed filter no longer holds an event that isn't failed), so a row is no
-  // place to keep it.
   const [late, setLate] = useState<string | null>(null)
-  // The newest request for a list is the one that is shown: a slow answer for a filter left behind
-  // is dropped.
   const latest = useRef(0)
   const query = filter === 'all' ? '' : `?state=${filter}`
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the list is read again for another filter, or when asked
-  useEffect(() => {
+  const load = useCallback(() => {
     const mine = ++latest.current
     setPage(null)
     setError(null)
     api<IntegrationEventList>(`${base}/events${query}`)
       .then((r) => latest.current === mine && setPage({ items: r.events, next: r.next_before }))
       .catch((e: unknown) => latest.current === mine && setError(errorText(e)))
-  }, [base, filter, nonce])
+  }, [base, query])
+
+  useEffect(load, [load])
 
   const older = useCallback(async () => {
     if (!page?.next) return
@@ -398,11 +369,9 @@ function Events({ base, exponents }: { base: string; exponents: Record<string, n
     try {
       await api<IntegrationEvent>(`${base}/events/${event.id}/retry`, { method: 'POST', body: {} })
       setNotice(t('settings.events.retried', { kind: kindText(t, event.kind) }))
-      setNonce((n) => n + 1)
+      load()
     } catch (e) {
       if (e instanceof ApiError && STALE.includes(e.code ?? '')) {
-        // The event is not what the list said: what stays is what the server holds now, and the
-        // refusal with it, since the row it is about may be gone.
         setLate(
           t('settings.events.retryRefused', {
             kind: kindText(t, event.kind),
@@ -410,7 +379,7 @@ function Events({ base, exponents }: { base: string; exponents: Record<string, n
             reason: errorText(e),
           }),
         )
-        setNonce((n) => n + 1)
+        load()
       } else {
         setRefused((r) => ({ ...r, [event.id]: errorText(e) }))
       }
@@ -473,7 +442,6 @@ function Events({ base, exponents }: { base: string; exponents: Record<string, n
 
 type Translate = ReturnType<typeof useT>
 
-// A kind as people say it: the closed list of the server's kinds, or the kind itself for a new one.
 function kindText(t: Translate, kind: string): string {
   const key = `settings.events.kind.${kind.replace('.', '_')}`
   return has(key) ? t(key as Key) : kind

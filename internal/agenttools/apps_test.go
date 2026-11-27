@@ -10,7 +10,6 @@ import (
 	"taskto.ai/taskto/internal/apps"
 )
 
-// expenses is the bundled example, as the agent would send it.
 func expenses(t *testing.T) map[string]any {
 	t.Helper()
 	ex, err := apps.Examples()
@@ -50,7 +49,6 @@ func TestAppToolsBuildAppsForTheirUser(t *testing.T) {
 		t.Fatalf("show_app = %v", shown)
 	}
 
-	// Updating: a rename and a new definition, checked against the catalog like any other.
 	def := expenses(t)
 	def["components"] = append(def["components"].([]any), map[string]any{"id": "x", "component": "Script"})
 	out := w.status(http.StatusBadRequest, w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 1, "definition": def})
@@ -62,19 +60,16 @@ func TestAppToolsBuildAppsForTheirUser(t *testing.T) {
 		t.Fatalf("update_app = %v", updated)
 	}
 	w.status(http.StatusConflict, w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 1, "name": "Stale"})
-	// Its data: the rows as the app shows them, without fields it no longer declares.
 	w.exec(`INSERT INTO app_rows (app_id, data) VALUES (?, '{"description": "Coffee", "amount": 4.5, "dropped": "old"}')`, app)
 	rows := w.ok(w.aliceConv, "list_app_rows", map[string]any{"space_id": w.alicePrivate, "app_id": app})["rows"].([]any)
 	if len(rows) != 1 || rows[0].(map[string]any)["description"] != "Coffee" || rows[0].(map[string]any)["dropped"] != nil {
 		t.Fatalf("list_app_rows = %v", rows)
 	}
 
-	// More rows than one reply carries: they are read a page at a time, all of them, once each.
 	for i := range 300 {
 		w.exec(`INSERT INTO app_rows (app_id, data) VALUES (?, ?)`, app,
 			fmt.Sprintf(`{"description": "row %d %s", "amount": 1}`, i, strings.Repeat("x", 400)))
 	}
-	// Rows added and removed between pages shift nothing: pages go by row id.
 	seen := map[int64]bool{}
 	pages := 0
 	for after := int64(0); ; pages++ {
@@ -92,7 +87,6 @@ func TestAppToolsBuildAppsForTheirUser(t *testing.T) {
 		}
 		after = id(next)
 		if pages == 0 {
-			// Meanwhile, an early row goes, which an offset would have skipped a row over.
 			w.exec(`DELETE FROM app_rows WHERE id = (SELECT min(id) FROM app_rows WHERE app_id = ? AND data LIKE '%"row %')`, app)
 		}
 	}
@@ -102,7 +96,6 @@ func TestAppToolsBuildAppsForTheirUser(t *testing.T) {
 	w.exec(`DELETE FROM app_rows WHERE app_id = ? AND data LIKE '%"row %'`, app)
 	w.status(http.StatusBadRequest, w.aliceConv, "list_app_rows", map[string]any{"space_id": w.alicePrivate, "app_id": app, "after": -1})
 
-	// More apps than one reply lists: read a page at a time, each once.
 	var definition string
 	if err := w.db.QueryRow(`SELECT definition FROM apps WHERE id = ?`, app).Scan(&definition); err != nil {
 		t.Fatal(err)
@@ -133,7 +126,6 @@ func TestAppToolsBuildAppsForTheirUser(t *testing.T) {
 	}
 	w.exec(`DELETE FROM apps WHERE space_id = ? AND id != ?`, w.alicePrivate, app)
 
-	// Offline, and back; its rows are kept, and still read.
 	w.ok(w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 2, "archived": true})
 	if rows := w.ok(w.aliceConv, "list_app_rows", map[string]any{"space_id": w.alicePrivate, "app_id": app})["rows"].([]any); len(rows) != 1 {
 		t.Fatalf("an offline app's rows = %v", rows)
@@ -145,7 +137,6 @@ func TestAppToolsBuildAppsForTheirUser(t *testing.T) {
 		t.Fatalf("with archived: %v", list)
 	}
 
-	// Unknown arguments are refused, not ignored.
 	w.status(http.StatusBadRequest, w.aliceConv, "create_app", map[string]any{"space_id": w.alicePrivate, "name": "x", "definition": expenses(t), "owner": w.bob})
 }
 
@@ -155,8 +146,6 @@ func TestAppToolsRespectAccess(t *testing.T) {
 	elsewhere := w.ok(w.aliceConv2, "create_app", map[string]any{"space_id": w.alicePrivate2, "name": "Elsewhere", "definition": expenses(t)})
 	team := w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.shared, "name": "Team", "definition": expenses(t)})
 
-	// Alice's conversation in workspace one reaches neither bob's private space nor her own
-	// space of workspace two, nor a space that doesn't exist: all "not found" alike.
 	missing := w.alicePrivate2 + 1000
 	for _, target := range []struct {
 		space, app int64
@@ -174,13 +163,10 @@ func TestAppToolsRespectAccess(t *testing.T) {
 			}
 		}
 	}
-	// An app is found only through its own space: bob's app through alice's private space
-	// is not found either.
 	w.status(http.StatusNotFound, w.aliceConv, "show_app", map[string]any{"space_id": w.alicePrivate, "app_id": id(bobs["id"])})
 	w.status(http.StatusNotFound, w.aliceConv, "list_app_rows", map[string]any{"space_id": w.alicePrivate, "app_id": id(bobs["id"])})
 	w.status(http.StatusNotFound, w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": id(bobs["id"]), "version": 1, "name": "x"})
 
-	// Bob views the team space: his agent reads its app and changes nothing.
 	if shown := w.ok(w.bobConv, "show_app", map[string]any{"space_id": w.shared, "app_id": id(team["id"])}); shown["name"] != "Team" {
 		t.Fatalf("show_app = %v", shown)
 	}
@@ -188,7 +174,6 @@ func TestAppToolsRespectAccess(t *testing.T) {
 	w.status(http.StatusForbidden, w.bobConv, "update_app", map[string]any{"space_id": w.shared, "app_id": id(team["id"]), "version": 1, "archived": true})
 	w.status(http.StatusForbidden, w.bobConv, "create_app", map[string]any{"space_id": w.shared, "name": "Bob's team app", "definition": expenses(t)})
 
-	// Nothing changed.
 	for _, check := range []struct {
 		conv, space int64
 		app         map[string]any
@@ -199,7 +184,6 @@ func TestAppToolsRespectAccess(t *testing.T) {
 		}
 	}
 
-	// Access is checked on every call: bob leaves the team space, and his agent loses it.
 	w.exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, w.shared, w.bob)
 	w.status(http.StatusNotFound, w.bobConv, "show_app", map[string]any{"space_id": w.shared, "app_id": id(team["id"])})
 	w.status(http.StatusNotFound, w.bobConv, "list_app_rows", map[string]any{"space_id": w.shared, "app_id": id(team["id"])})
@@ -217,18 +201,14 @@ func TestAppCatalogFits(t *testing.T) {
 	}
 }
 
-// The agent has its user's roles in an app: it can't change an app its user may only use,
-// reads only the records its user reads, and nothing it writes grants roles.
 func TestAppToolsKeepToTheirUsersRoles(t *testing.T) {
 	w := newWorld(t)
 	created := w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.shared, "name": "Team expenses", "definition": expenses(t)})
 	app := id(created["id"])
-	// A record of Alice's own and one of Bob's, a viewer of the space who had added it before.
 	w.exec(`INSERT INTO app_rows (app_id, data, created_by) VALUES (?, '{"description": "alice-row", "amount": 1}', ?)`, app, w.alice)
 	w.exec(`INSERT INTO app_rows (app_id, data, created_by) VALUES (?, '{"description": "bob-row", "amount": 2}', ?)`, app, w.bob)
 	ref := map[string]any{"space_id": w.shared, "app_id": app}
 
-	// Unrestricted: an editor's agent reads both and shows what its user may do.
 	if rows := w.ok(w.aliceConv, "list_app_rows", ref)["rows"].([]any); len(rows) != 2 {
 		t.Fatalf("list_app_rows = %v", rows)
 	}
@@ -237,7 +217,6 @@ func TestAppToolsKeepToTheirUsersRoles(t *testing.T) {
 		t.Fatalf("show_app access = %v", acc)
 	}
 
-	// Alice becomes a plain user of the app (roles are set by people, in the web app).
 	w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'user')`, app, w.alice)
 	rows := w.ok(w.aliceConv, "list_app_rows", ref)["rows"].([]any)
 	if len(rows) != 1 || rows[0].(map[string]any)["description"] != "alice-row" {
@@ -247,7 +226,6 @@ func TestAppToolsKeepToTheirUsersRoles(t *testing.T) {
 	if n := list[0].(map[string]any)["rows"]; n != float64(1) {
 		t.Fatalf("list_apps counts %v rows", n)
 	}
-	// And its changes to the app are refused, however it asks.
 	out := w.status(http.StatusForbidden, w.aliceConv, "update_app", map[string]any{"space_id": w.shared, "app_id": app, "version": 1, "name": "Mine"})
 	if !strings.Contains(out["error"].(string), "role") {
 		t.Fatalf("refusal = %v", out)
@@ -255,14 +233,11 @@ func TestAppToolsKeepToTheirUsersRoles(t *testing.T) {
 	w.status(http.StatusForbidden, w.aliceConv, "update_app", map[string]any{"space_id": w.shared, "app_id": app, "version": 1, "archived": true})
 	w.status(http.StatusForbidden, w.aliceConv, "update_app", map[string]any{"space_id": w.shared, "app_id": app, "version": 1, "definition": expenses(t)})
 
-	// A definition has no roles in it to grant: the tool refuses a field it doesn't know.
 	def := expenses(t)
 	def["roles"] = []string{"builder"}
 	w.status(http.StatusBadRequest, w.aliceConv, "create_app", map[string]any{"space_id": w.shared, "name": "Sneaky", "definition": def})
-	// Bob, named nowhere, sees nothing of the restricted app until a default names everyone else.
 	w.status(http.StatusNotFound, w.bobConv, "list_app_rows", ref)
 	w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, NULL, 'reader')`, app)
-	// Bob's agent, a viewer, reads the space's records and changes nothing.
 	if rows := w.ok(w.bobConv, "list_app_rows", ref)["rows"].([]any); len(rows) != 2 {
 		t.Fatalf("a viewer's agent reads %v", rows)
 	}
@@ -273,12 +248,9 @@ func TestAppToolsKeepToTheirUsersRoles(t *testing.T) {
 	}
 }
 
-// The agent edits an app's draft and nothing more: what people use stays the release that was
-// published, and it has no tool to publish or roll back, which is for a person who may publish.
 func TestAgentEditsOnlyTheDraft(t *testing.T) {
 	w := newWorld(t)
 	for _, d := range Definitions() {
-		// Reading the releases is for diagnosis; nothing that publishes or rolls back is.
 		if strings.Contains(d.Name, "publish") || strings.Contains(d.Name, "rollback") || (strings.Contains(d.Name, "release") && !d.ReadOnly) {
 			t.Fatalf("the agent has a tool to %s", d.Name)
 		}
@@ -286,7 +258,6 @@ func TestAgentEditsOnlyTheDraft(t *testing.T) {
 	created := w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.alicePrivate, "name": "Expenses", "definition": expenses(t)})
 	app := id(created["id"])
 	ref := map[string]any{"space_id": w.alicePrivate, "app_id": app}
-	// A person publishes it (the release is made as the server does).
 	w.exec(`INSERT INTO app_releases (app_id, number, definition, definition_version, requires)
 		SELECT id, 1, definition, 1, json_extract(definition, '$.requires') FROM apps WHERE id = ?`, app)
 	w.exec(`UPDATE apps SET live_release = 1, live_at = updated_at, draft_differs = 0 WHERE id = ?`, app)
@@ -320,12 +291,10 @@ func TestAgentEditsOnlyTheDraft(t *testing.T) {
 	}
 }
 
-// query_app_rows pages, filters and totals over all the rows its user reads, and no others.
 func TestQueryAppRowsPagesFiltersAndTotals(t *testing.T) {
 	w := newWorld(t)
 	created := w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.shared, "name": "Team expenses", "definition": expenses(t)})
 	app := id(created["id"])
-	// A person publishes it (the release is made as the server does).
 	w.exec(`INSERT INTO app_releases (app_id, number, definition, definition_version, requires)
 		SELECT id, 1, definition, json_extract(definition, '$.definition_version'), json_extract(definition, '$.requires') FROM apps WHERE id = ?`, app)
 	w.exec(`UPDATE apps SET live_release = 1, live_at = updated_at, draft_differs = 0 WHERE id = ?`, app)
@@ -346,7 +315,6 @@ func TestQueryAppRowsPagesFiltersAndTotals(t *testing.T) {
 	}
 	sums := []any{map[string]any{"kind": "sum", "field": "amount"}, map[string]any{"kind": "max", "field": "amount"}}
 
-	// Pages of two, in the order asked for, each with the totals of every row that matches.
 	var got []float64
 	cursor := ""
 	for pages := 0; ; pages++ {
@@ -374,17 +342,14 @@ func TestQueryAppRowsPagesFiltersAndTotals(t *testing.T) {
 	if fmt.Sprint(got) != "[90 80 70 60 50 40 30 20 10]" {
 		t.Fatalf("rows = %v", got)
 	}
-	// A cursor of another query is refused, as is a field the app doesn't have.
 	w.status(http.StatusBadRequest, w.aliceConv, "query_app_rows", ref(map[string]any{"limit": 2, "sort": "description", "cursor": cursor}))
 	w.status(http.StatusBadRequest, w.aliceConv, "query_app_rows", ref(map[string]any{"filters": []any{map[string]any{"field": "nope", "op": "eq", "value": 1}}}))
 	w.status(http.StatusBadRequest, w.aliceConv, "query_app_rows", ref(map[string]any{"unknown": true}))
 
-	// Alice becomes a plain user of the app: her agent's totals are of her own rows alone.
 	w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'user')`, app, w.alice)
 	own := w.ok(w.aliceConv, "query_app_rows", ref(map[string]any{"aggregates": sums, "limit": 200}))
 	if own["total"] != float64(6) || own["aggregates"].([]any)[0].(map[string]any)["value"] != float64(270) || len(own["rows"].([]any)) != 6 {
 		t.Fatalf("a user's agent gets %v", own)
 	}
-	// Someone the app names no role for finds no app.
 	w.status(http.StatusNotFound, w.bobConv, "query_app_rows", ref(nil))
 }

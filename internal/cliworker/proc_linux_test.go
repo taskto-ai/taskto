@@ -8,8 +8,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 )
 
-// The state and process group are read from /proc/<pid>/stat past a command name that holds
-// spaces and parentheses, so a zombie isn't taken for a live process.
 func TestParseStat(t *testing.T) {
 	for _, tc := range []struct {
 		stat  string

@@ -18,8 +18,6 @@ import (
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
 
-// runningTurn prepares user's account of cli in slot (signed in, with scenario s) and starts a
-// turn on it that is running its tool when this returns.
 func (h *harness) runningTurn(t *testing.T, id string, user int64, cli cliworker.CLI, slot cliworker.Slot, s clitest.Scenario) *cliworker.Turn {
 	t.Helper()
 	dirs, err := h.layout.EnsureSlot(user, cli, slot)
@@ -39,13 +37,9 @@ func (h *harness) runningTurn(t *testing.T, id string, user int64, cli cliworker
 	return turn
 }
 
-// Disconnecting an account removes the files its turns use. A turn on it is stopped and waited for
-// first, so it can't write its session back into the directory that went; the user's other
-// accounts, and other users, are not touched.
 func TestLogoutStopsTheTurnsOnTheAccountBeforeTheFilesGo(t *testing.T) {
 	h := newHarness(t, nil)
-	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
-	// The CLI takes a moment to stop and saves a file as it goes, as a real one saves its session.
+	h.w.SetGroupWaitForTest(-1)
 	mine := h.runningTurn(t, "mine", 1, cliworker.Claude, "", clitest.Scenario{SleepMS: 60_000, TermWriteMS: 300})
 	second := h.runningTurn(t, "second", 1, cliworker.Claude, "2", clitest.Scenario{SleepMS: 60_000})
 	other := h.runningTurn(t, "other", 2, cliworker.Claude, "", clitest.Scenario{SleepMS: 60_000})
@@ -74,11 +68,9 @@ func TestLogoutStopsTheTurnsOnTheAccountBeforeTheFilesGo(t *testing.T) {
 	}
 }
 
-// While an account's files go, nothing starts on it (a turn, a sign-in, a check), and the user's
-// other accounts go on. Nothing marks the user: once it is over the account works again.
 func TestLogoutClosesTheAccountWhileItsFilesGo(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
-	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
+	h.w.SetGroupWaitForTest(-1)
 	mine := h.runningTurn(t, "mine", 1, cliworker.Claude, "", clitest.Scenario{SleepMS: 60_000, TermWriteMS: 1500})
 	h.user(t, 1, cliworker.Codex, clitest.Scenario{}, true)
 
@@ -86,7 +78,6 @@ func TestLogoutClosesTheAccountWhileItsFilesGo(t *testing.T) {
 	defer cancel()
 	loggedOut := make(chan error, 1)
 	go func() { loggedOut <- h.w.Logout(ctx, 1, cliworker.Claude, "") }()
-	// A check is harmless to ask, and is refused from the moment the account is closed.
 	eventually(t, "the account was never closed to new work", func() bool {
 		_, err := h.w.Status(ctx, 1, cliworker.Claude, "")
 		return errors.Is(err, cliworker.ErrRemoving)
@@ -106,7 +97,6 @@ func TestLogoutClosesTheAccountWhileItsFilesGo(t *testing.T) {
 	if err := <-loggedOut; err != nil {
 		t.Fatal(err)
 	}
-	// Over: it is a signed-out account again, which starts.
 	if _, err := h.w.Status(ctx, 1, cliworker.Claude, ""); err != nil {
 		t.Errorf("a check after the removal: %v", err)
 	}
@@ -116,11 +106,9 @@ func TestLogoutClosesTheAccountWhileItsFilesGo(t *testing.T) {
 	}
 }
 
-// A helper request on the account that is running when it is removed (a slow check) is cancelled,
-// not waited out, and its answer is an error: what it was reading is going.
 func TestLogoutCancelsAHelperRequestOnTheAccount(t *testing.T) {
 	h := newHarness(t, nil)
-	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
+	h.w.SetGroupWaitForTest(-1)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{StatusSleepMS: 20_000}, true)
 	errs := make(chan error, 1)
 	go func() {
@@ -138,8 +126,6 @@ func TestLogoutCancelsAHelperRequestOnTheAccount(t *testing.T) {
 	if took := time.Since(start); took > 10*time.Second {
 		t.Errorf("Logout waited %v for the check instead of cancelling it", took)
 	}
-	// Logout returns only when the check's helper is over; its caller may need a moment to
-	// publish what it got.
 	select {
 	case err := <-errs:
 		if err == nil {
@@ -153,9 +139,6 @@ func TestLogoutCancelsAHelperRequestOnTheAccount(t *testing.T) {
 	}
 }
 
-// A process a turn left behind is not always dead when the turn ends: a removal waits until no
-// process of the account's groups can run, and keeps the files, with ErrBusy, if one still does.
-// A zombie (killed, not reaped) holds nothing, so it doesn't count. The same for Forget.
 func TestRemovalWaitsForLeftoverProcessesOfTheAccount(t *testing.T) {
 	for name, remove := range map[string]func(*cliworker.Worker, context.Context) error{
 		"logout": func(w *cliworker.Worker, ctx context.Context) error { return w.Logout(ctx, 1, cliworker.Claude, "") },
@@ -165,7 +148,6 @@ func TestRemovalWaitsForLeftoverProcessesOfTheAccount(t *testing.T) {
 			h := newHarness(t, nil)
 			h.w.SetGroupWaitForTest(300 * time.Millisecond)
 			dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
-			// A process in a group of its own, listed as one the worker started for the account.
 			leftover := exec.Command("sleep", "60")
 			leftover.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			if err := leftover.Start(); err != nil {
@@ -181,7 +163,6 @@ func TestRemovalWaitsForLeftoverProcessesOfTheAccount(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(dirs.Config(cliworker.Claude), ".credentials.json")); err != nil {
 				t.Errorf("the account's files went while a process of it ran: %v", err)
 			}
-			// Killed and not yet reaped: a zombie, which doesn't hold the removal.
 			if err := leftover.Process.Kill(); err != nil {
 				t.Fatal(err)
 			}
@@ -197,8 +178,6 @@ func TestRemovalWaitsForLeftoverProcessesOfTheAccount(t *testing.T) {
 	}
 }
 
-// Two disconnects of one account run one after the other, and another account's is not held by
-// them.
 func TestLogoutsOfOneAccountDoNotOverlap(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
 	h.runningTurn(t, "mine", 1, cliworker.Claude, "", clitest.Scenario{SleepMS: 60_000, TermWriteMS: 800})
@@ -214,9 +193,6 @@ func TestLogoutsOfOneAccountDoNotOverlap(t *testing.T) {
 	}
 }
 
-// A deleted account's removal and a disconnect of one of its accounts run one after the other:
-// the disconnect's sign-out is a helper request that ends by writing into the account's directory,
-// and must not do it after the directory went.
 func TestForgetWaitsForADisconnectInProgress(t *testing.T) {
 	h := newHarness(t, nil)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{LogoutSleepMS: 1500}, true)
@@ -242,18 +218,15 @@ func TestForgetWaitsForADisconnectInProgress(t *testing.T) {
 	gone(t, dirs.Root)
 }
 
-// A sign-in that was cancelled and replaced is still a process: disconnecting the account waits for
-// it too, however quickly the sign-in was started again.
 func TestLogoutWaitsForACancelledSignInThatANewOneReplaced(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
-	h.w.SetGroupWaitForTest(-1) // the wait for the groups would answer what this test is about
+	h.w.SetGroupWaitForTest(-1)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{TermWriteMS: 1500}, false)
 	old, err := h.w.StartLogin(1, cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.w.CancelLogin(1, cliworker.Claude, "")
-	// The replacement stops at once; only the cancelled one takes its time.
 	clitest.WriteScenario(t, dirs.Config(cliworker.Claude), clitest.Scenario{})
 	replacement, err := h.w.StartLogin(1, cliworker.Claude, "")
 	if err != nil {
@@ -282,8 +255,6 @@ func TestLogoutWaitsForACancelledSignInThatANewOneReplaced(t *testing.T) {
 	}
 }
 
-// A removal whose caller has already given up starts nothing destructive: the files stay, and
-// the removal can be made again.
 func TestAnAlreadyCancelledRemovalRemovesNothing(t *testing.T) {
 	h := newHarness(t, nil)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
@@ -307,22 +278,17 @@ func TestAnAlreadyCancelledRemovalRemovesNothing(t *testing.T) {
 	if n := h.w.HelperLaunchesForTest(); n != launched {
 		t.Errorf("%d helpers were started for callers that had given up", n-launched)
 	}
-	// Made again by a caller that waits, it finishes.
 	if err := h.w.Forget(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
 	gone(t, dirs.Root)
 }
 
-// A process group ID can be given again by the system: a record seen to hold no live process is let
-// go only while it is still the registration that was looked at, or a removal could take the
-// replacement for the dead group and remove files a live process writes.
 func TestAGroupRecordSeenDeadIsNotTakenForItsReplacement(t *testing.T) {
 	h := newHarness(t, nil)
 	const pgid = 4242
 	h.w.TrackGroupForTest(pgid, 1, cliworker.Claude, "")
 	seen := h.w.GroupSeqForTest(pgid)
-	// The group ID is given again to a group of the same account, which is registered anew.
 	h.w.TrackGroupForTest(pgid, 1, cliworker.Claude, "")
 	if now := h.w.GroupSeqForTest(pgid); now == seen {
 		t.Fatal("fixture: the new registration has the old one's number")

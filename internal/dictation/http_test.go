@@ -27,7 +27,6 @@ import (
 
 var ctx = context.Background()
 
-// Test passwords and keys: obviously fake.
 const (
 	fakePassword = "fake-test-password"
 	fakeKey      = "fake-speech-api-key"
@@ -35,7 +34,6 @@ const (
 
 var setupToken = auth.NewSetupToken()
 
-// fakeLocal is a local engine that answers what it is told, and records what it was asked.
 type fakeLocal struct {
 	mu    sync.Mutex
 	state LocalState
@@ -69,16 +67,14 @@ func (f *fakeLocal) Transcribe(_ context.Context, a Audio, o Options) (string, e
 	return f.text, f.err
 }
 
-// fakeAPI is an OpenAI-compatible transcription endpoint.
 type fakeAPI struct {
 	*httptest.Server
-	mu   sync.Mutex
-	last *http.Request
-	form map[string]string
-	wav  []byte
-	text string
-	code int
-	// redirect, if set, answers 307 to it.
+	mu       sync.Mutex
+	last     *http.Request
+	form     map[string]string
+	wav      []byte
+	text     string
+	code     int
 	redirect string
 }
 
@@ -96,7 +92,7 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 			http.NotFound(w, r)
 			return
 		}
-		if err := r.ParseMultipartForm(32 << 20); err != nil { //nolint:gosec // a test server, of the test's own requests
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -128,8 +124,6 @@ type env struct {
 	api   *fakeAPI
 }
 
-// newEnv serves the account, space, knowledge-base and dictation routes, as the server does.
-// local is the local engine, or nil for none.
 func newEnv(t *testing.T, local *fakeLocal, policy egress.Policy, more ...func(*Config)) *env {
 	t.Helper()
 	dir := t.TempDir()
@@ -156,7 +150,6 @@ func newEnv(t *testing.T, local *fakeLocal, policy egress.Policy, more ...func(*
 		f(&cfg)
 	}
 	svc := New(cfg)
-	// Tests' names resolve to loopback, which the "public" policy refuses.
 	svc.resolve = func(context.Context, string, string) ([]netip.Addr, error) {
 		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
 	}
@@ -222,7 +215,6 @@ type meReply struct {
 	Workspaces []auth.Membership
 }
 
-// setup makes the owner (an admin) and their workspace.
 func (e *env) setup() (*client, int64) {
 	owner := &client{e: e}
 	rec := owner.do(http.MethodPost, "/api/setup", map[string]string{
@@ -234,7 +226,6 @@ func (e *env) setup() (*client, int64) {
 	return owner, me.Workspaces[0].WorkspaceID
 }
 
-// join invites name to ws as a member.
 func (e *env) join(owner *client, ws int64, name string) *client {
 	rec := owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", ws),
 		map[string]string{"email": name + "@example.com", "role": "member"})
@@ -247,8 +238,6 @@ func (e *env) join(owner *client, ws int64, name string) *client {
 	return c
 }
 
-// otherWorkspace makes a second workspace with its own admin, created directly, as there's
-// no API for it.
 func (e *env) otherWorkspace(owner *client, ws int64) (*client, int64) {
 	stranger := e.join(owner, ws, "stranger")
 	res, err := e.db.Exec(`INSERT INTO workspaces (name) VALUES ('Other')`)
@@ -287,7 +276,6 @@ func route(ws int64, rest string) string {
 	return strings.TrimSuffix(fmt.Sprintf("/api/workspaces/%d/dictation/%s", ws, rest), "/")
 }
 
-// speech is a second of WAV, base64-encoded, as the web app sends it.
 func speech() map[string]any {
 	return map[string]any{"audio_base64": base64.StdEncoding.EncodeToString(tone(SampleRate, nil).WAV())}
 }
@@ -298,8 +286,6 @@ func TestDefaultsWithoutAnEngine(t *testing.T) {
 	rec := owner.do(http.MethodGet, route(ws, ""), nil)
 	expect(t, rec, http.StatusOK)
 	st := decode[statusReply](t, rec)
-	// Local is the default even where the operator turned it off: dictation is then off,
-	// and the reason says so, until an admin picks another engine.
 	if st.Engine != "" || !strings.Contains(st.Reason, "local speech model is off") || st.ReasonCode != apierr.CodeDictationLocalOff ||
 		st.Local != nil || st.MaxSeconds != 600 ||
 		st.Settings.Engine != EngineLocal || st.Settings.API.APIKey != "not set" || st.Settings.API.BaseURL != defaultBaseURL {
@@ -307,9 +293,7 @@ func TestDefaultsWithoutAnEngine(t *testing.T) {
 	}
 	rec = owner.do(http.MethodPost, route(ws, "transcriptions"), speech())
 	expect(t, rec, http.StatusServiceUnavailable)
-	// The settings form sends the engine back unchanged: saving it with another field works.
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"engine": "local", "language": "pt"}), http.StatusOK)
-	// But local can't be chosen anew when the operator turned it off, and auto is gone.
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"engine": "api"}), http.StatusOK)
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"engine": "local"}), http.StatusBadRequest)
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"engine": "auto"}), http.StatusBadRequest)
@@ -323,7 +307,6 @@ func TestAPIEngine(t *testing.T) {
 	owner.putDoc(owner.privateSpace(ws), GlossaryFile, "- taskto\n")
 	alice.putDoc(alice.privateSpace(ws), GlossaryFile, "- Zanzibar: a place\n")
 
-	// Plain http to another host can't carry a key; this machine can.
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"api": map[string]any{
 		"base_url": "http://speech.example.com/v1", "api_key": fakeKey,
 	}}), http.StatusBadRequest)
@@ -334,7 +317,6 @@ func TestAPIEngine(t *testing.T) {
 	if strings.Contains(rec.Body.String(), fakeKey) {
 		t.Fatal("the reply holds the key")
 	}
-	// A key alone doesn't send audio out: the engine stays local until an admin picks the API.
 	st := decode[statusReply](t, rec)
 	if st.Engine != EngineLocal || st.Settings.Engine != EngineLocal || st.Settings.API.APIKey != "set" ||
 		st.Settings.API.BaseURL != e.api.URL+"/v1" || st.Settings.Language != "pt" {
@@ -359,7 +341,6 @@ func TestAPIEngine(t *testing.T) {
 		t.Fatal("the key is stored in clear")
 	}
 
-	// Alice, a member, dictates: her glossary applies, the owner's private one doesn't.
 	rec = alice.do(http.MethodPost, route(ws, "transcriptions"), speech())
 	expect(t, rec, http.StatusOK)
 	if got := decode[transcribeReply](t, rec); got.Text != "I use task to in Zanzibar" || got.Engine != EngineAPI {
@@ -374,7 +355,6 @@ func TestAPIEngine(t *testing.T) {
 	if a, err := ParseWAV(e.api.wav); err != nil || len(a.Samples) != SampleRate {
 		t.Fatalf("the API got %d samples, %v", len(a.Samples), err)
 	}
-	// The request's language wins over the workspace's.
 	body := speech()
 	body["language"] = "en"
 	expect(t, alice.do(http.MethodPost, route(ws, "transcriptions"), body), http.StatusOK)
@@ -382,8 +362,6 @@ func TestAPIEngine(t *testing.T) {
 		t.Fatalf("language = %q", e.api.form["language"])
 	}
 
-	// With no language set for the workspace, the user's own: their pick, else their
-	// browser's; "" in the request still leaves it to the engine.
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"language": ""}), http.StatusOK)
 	language := func(body map[string]any) string {
 		t.Helper()
@@ -411,7 +389,6 @@ func TestAPIEngine(t *testing.T) {
 	expect(t, alice.do(http.MethodPost, route(ws, "transcriptions"), body), http.StatusBadRequest)
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"language": "pt"}), http.StatusOK)
 
-	// A refusal names the status, never the key the endpoint echoed.
 	e.api.code = http.StatusUnauthorized
 	rec = alice.do(http.MethodPost, route(ws, "transcriptions"), speech())
 	expect(t, rec, http.StatusBadGateway)
@@ -420,11 +397,9 @@ func TestAPIEngine(t *testing.T) {
 	}
 	e.api.code = http.StatusOK
 
-	// The stored key doesn't follow the endpoint to another host unless it is sent again.
 	expect(t, owner.do(http.MethodPatch, route(ws, ""), map[string]any{"api": map[string]any{
 		"base_url": "https://speech.example.com/v1",
 	}}), http.StatusBadRequest)
-	// Nor to another port, or the same host in other letters with a trailing dot plus another port.
 	for _, other := range []string{"http://127.0.0.1:9/v1", "https://LOCALHOST./v1"} {
 		rec = owner.do(http.MethodPatch, route(ws, ""), map[string]any{"api": map[string]any{"base_url": other}})
 		expect(t, rec, http.StatusBadRequest)
@@ -435,10 +410,8 @@ func TestAPIEngine(t *testing.T) {
 	if hostOf("HTTPS://Speech.Example.com./v1") != hostOf("https://speech.example.com:443/v2") {
 		t.Fatal("the same host and port compare different")
 	}
-	// The same host, another path, keeps it.
 	rec = owner.do(http.MethodPatch, route(ws, ""), map[string]any{"api": map[string]any{"base_url": e.api.URL + "/v1"}})
 	expect(t, rec, http.StatusOK)
-	// A redirect is the answer, not followed: the key never goes to where it points.
 	elsewhere := newFakeAPI(t)
 	e.api.redirect = elsewhere.URL + "/v1/audio/transcriptions"
 	rec = alice.do(http.MethodPost, route(ws, "transcriptions"), speech())
@@ -448,8 +421,6 @@ func TestAPIEngine(t *testing.T) {
 	}
 	e.api.redirect = ""
 
-	// Removing the key keeps the admin's choice: the api engine works without a key, for a
-	// server on this machine.
 	rec = owner.do(http.MethodPatch, route(ws, ""), map[string]any{"api": map[string]any{"api_key": nil}})
 	expect(t, rec, http.StatusOK)
 	if st := decode[statusReply](t, rec); st.Engine != EngineAPI || st.Settings.API.APIKey != "not set" {
@@ -476,7 +447,6 @@ func TestLocalEngineGetsTheGlossary(t *testing.T) {
 		st.ReasonCode != apierr.CodeDictationLocalNotDownloaded {
 		t.Fatalf("status = %+v", st)
 	}
-	// Not ready yet: 503 with the reason. Warm starts the download.
 	rec = bob.do(http.MethodPost, route(ws, "transcriptions"), speech())
 	expect(t, rec, http.StatusServiceUnavailable)
 	expect(t, bob.do(http.MethodPost, route(ws, "warm"), nil), http.StatusOK)
@@ -485,7 +455,6 @@ func TestLocalEngineGetsTheGlossary(t *testing.T) {
 	}
 
 	local.state = LocalState{State: LocalReady}
-	// Bob can't read Alice's private space: her glossary isn't his.
 	rec = bob.do(http.MethodPost, route(ws, "transcriptions"), speech())
 	expect(t, rec, http.StatusOK)
 	if got := decode[transcribeReply](t, rec).Text; got != "a trip to zansibar with task to" {
@@ -502,7 +471,6 @@ func TestLocalEngineGetsTheGlossary(t *testing.T) {
 	if terms := local.calls[len(local.calls)-1].Terms; strings.Join(terms, ",") != "Zanzibar,taskto" {
 		t.Fatalf("alice's terms = %q", terms)
 	}
-	// A failing engine is a 502 without details.
 	local.err = fmt.Errorf("runtime crashed reading /secret/path")
 	rec = alice.do(http.MethodPost, route(ws, "transcriptions"), speech())
 	expect(t, rec, http.StatusBadGateway)
@@ -511,8 +479,6 @@ func TestLocalEngineGetsTheGlossary(t *testing.T) {
 	}
 }
 
-// Every route is the workspace's: another workspace's admin gets 404, a member can't change
-// the settings, and someone logged out gets 401.
 func TestDictationStaysInItsWorkspace(t *testing.T) {
 	e := newEnv(t, &fakeLocal{state: LocalState{State: LocalReady}, text: "secret words"}, egress.Policy{})
 	owner, ws := e.setup()
@@ -540,13 +506,11 @@ func TestDictationStaysInItsWorkspace(t *testing.T) {
 	expect(t, member.do(http.MethodPatch, route(ws, ""), map[string]any{"engine": "local"}), http.StatusForbidden)
 	expect(t, member.do(http.MethodPatch, route(ws, ""), map[string]any{"api": map[string]any{"api_key": nil}}), http.StatusForbidden)
 
-	// The other workspace has its own settings: no key of ws's.
 	rec := stranger.do(http.MethodGet, route(other, ""), nil)
 	expect(t, rec, http.StatusOK)
 	if st := decode[statusReply](t, rec); st.Settings.API.APIKey != "not set" || st.Engine != EngineLocal {
 		t.Fatalf("the other workspace = %+v", st)
 	}
-	// A sealed key copied to the other workspace's row, with the API as its engine, doesn't open there.
 	if _, err := e.db.Exec(`INSERT INTO dictation_settings (workspace_id, engine, api_key, api_base_url)
 		SELECT ?, 'api', api_key, api_base_url FROM dictation_settings WHERE workspace_id = ?`, other, ws); err != nil {
 		t.Fatal(err)
@@ -602,7 +566,6 @@ func TestTranscriptionValidation(t *testing.T) {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body.String())
 		}
 	}
-	// Too many at once: 429, until a slot frees.
 	for range maxInFlight {
 		e.svc.busy <- struct{}{}
 	}
@@ -612,7 +575,6 @@ func TestTranscriptionValidation(t *testing.T) {
 	for range maxInFlight - 1 {
 		<-e.svc.busy
 	}
-	// One at a time per person: another member still gets through.
 	if !e.svc.claim(owner.id) {
 		t.Fatal("no slot")
 	}
@@ -626,17 +588,14 @@ func TestTranscriptionValidation(t *testing.T) {
 	e.svc.release(owner.id)
 	expect(t, owner.do(http.MethodPost, route(ws, "transcriptions"), speech()), http.StatusOK)
 
-	// An engine that runs out of time is a 504.
 	e.local.err = context.DeadlineExceeded
 	expect(t, owner.do(http.MethodPost, route(ws, "transcriptions"), speech()), http.StatusGatewayTimeout)
 	e.local.err = nil
 
-	// Over the request limit: 413.
 	big := strings.Repeat("A", maxAudioRequest)
 	expect(t, owner.do(http.MethodPost, route(ws, "transcriptions"), map[string]any{"audio_base64": big}), http.StatusRequestEntityTooLarge)
 }
 
-// Two admins changing different fields at once both keep their change.
 func TestConcurrentSettingsChanges(t *testing.T) {
 	e := newEnv(t, nil, egress.Policy{})
 	owner, ws := e.setup()
@@ -649,7 +608,6 @@ func TestConcurrentSettingsChanges(t *testing.T) {
 			if i%2 == 1 {
 				body = map[string]any{"api": map[string]any{"model": "whisper-large-v3"}}
 			}
-			// A copy of the client per request: the recorder isn't shared.
 			c := &client{e: e, id: owner.id, cookie: owner.cookie}
 			if rec := c.do(http.MethodPatch, route(ws, ""), body); rec.Code != http.StatusOK {
 				t.Errorf("status %d", rec.Code)

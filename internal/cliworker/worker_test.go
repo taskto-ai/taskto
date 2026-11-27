@@ -37,11 +37,10 @@ func newHarness(t *testing.T, tune func(*cliworker.Config)) *harness {
 	root := t.TempDir()
 	fakes := clitest.Install(t, t.TempDir())
 	cfg := cliworker.Config{
-		Layout:    cliworker.Layout{Root: filepath.Join(root, "cli")},
-		Bins:      map[cliworker.CLI]string{},
-		Path:      "/usr/bin:/bin",
-		StopGrace: 2 * time.Second,
-		// The helper refuses to run a CLI as root; a test job that runs as root allows it.
+		Layout:           cliworker.Layout{Root: filepath.Join(root, "cli")},
+		Bins:             map[cliworker.CLI]string{},
+		Path:             "/usr/bin:/bin",
+		StopGrace:        2 * time.Second,
 		UnsafePrivileged: os.Geteuid() == 0,
 	}
 	for name, path := range fakes {
@@ -58,7 +57,6 @@ func newHarness(t *testing.T, tune func(*cliworker.Config)) *harness {
 	return &harness{w: w, layout: cfg.Layout, cfg: cfg}
 }
 
-// user prepares user's directories with cli signed in and the scenario s.
 func (h *harness) user(t *testing.T, user int64, cli cliworker.CLI, s clitest.Scenario, signedIn bool) cliworker.Dirs {
 	t.Helper()
 	dirs, err := h.layout.Ensure(user)
@@ -80,7 +78,6 @@ func spec(id string, user int64, cli cliworker.CLI, prompt string) cliworker.Tur
 	return s
 }
 
-// run starts a turn and waits for it to end, returning all its events.
 func run(t *testing.T, w *cliworker.Worker, s cliworker.TurnSpec) []cliworker.Event {
 	t.Helper()
 	turn, attached, err := w.Start(s)
@@ -134,7 +131,6 @@ func TestTurnOnEachCLI(t *testing.T) {
 			if done.Type != cliworker.EventDone || done.Status != cliworker.StatusOK || answer != "echo: "+prompt {
 				t.Fatalf("done = %+v; events %+v", done, events)
 			}
-			// On Linux the CLI runs with no_new_privs: no setuid program (sudo) raises it.
 			if nnp := probeResult(done.Text, "nnp"); runtime.GOOS == "linux" && nnp != "ok 1" {
 				t.Errorf("no_new_privs = %s", nnp)
 			}
@@ -182,8 +178,6 @@ func TestTurnOnEachCLI(t *testing.T) {
 			if env[configVar] != dirs.Config(cli) {
 				t.Errorf("%s = %q", configVar, env[configVar])
 			}
-			// A clean environment: only what the worker sets (the OS may add a few of its own,
-			// such as __CF_USER_TEXT_ENCODING on macOS).
 			allowed := []string{"PATH", "HOME", "LANG", "TMPDIR", configVar, "DISABLE_AUTOUPDATER", "DISABLE_TELEMETRY",
 				"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "GROK_DISABLE_AUTOUPDATER", "__CF_USER_TEXT_ENCODING", "PWD"}
 			for k := range env {
@@ -216,8 +210,6 @@ func TestResumeKeepsTheSession(t *testing.T) {
 	}
 }
 
-// An expired login is reported at once, and the CLI stopped, instead of waiting out its retries
-// (Claude Code's take minutes).
 func TestExpiredLogin(t *testing.T) {
 	h := newHarness(t, nil)
 	for _, cli := range cliworker.CLIs {
@@ -260,14 +252,11 @@ func TestUsageLimits(t *testing.T) {
 	}
 }
 
-// alive reports whether process pid is running. A zombie (killed, not yet reaped) is not: where
-// the tests' parent doesn't reap orphans (a CI job's container whose PID 1 is not an init), a
-// killed grandchild stays a zombie, and kill(pid, 0) still succeeds on it.
 func alive(pid int) bool { return syscall.Kill(pid, 0) == nil && !zombie(pid) }
 
 func zombie(pid int) bool {
 	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil { // not Linux: ask ps
+	if err != nil {
 		out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
 		return err == nil && strings.HasPrefix(strings.TrimSpace(string(out)), "Z")
 	}
@@ -283,8 +272,6 @@ func backgroundPID(t *testing.T, configDir string) int {
 		t.Fatal(err)
 	}
 	pid, err := strconv.Atoi(string(b))
-	// Not a process of the turn: kill(0, 0) and kill(1, 0) succeed, so `alive` would
-	// report one forever.
 	if err != nil || pid <= 1 {
 		t.Fatalf("background.pid = %q, want the background process's ID", b)
 	}
@@ -302,7 +289,6 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// What a CLI starts and leaves behind (a background shell) ends with its turn.
 func TestBackgroundWorkEndsWithTheTurn(t *testing.T) {
 	h := newHarness(t, nil)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{Background: true}, true)
@@ -321,7 +307,6 @@ func TestStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Wait for the tool to start its processes, then stop.
 	eventually(t, "the CLI didn't start its tool", func() bool {
 		_, err := os.Stat(filepath.Join(dirs.Config(cliworker.Codex), "background.pid"))
 		return err == nil
@@ -339,8 +324,6 @@ func TestStop(t *testing.T) {
 	eventually(t, "the turn's processes outlived the stop", func() bool { return !alive(pid) })
 }
 
-// A caller that lost the stream starts the turn again with the same ID and reads it from
-// the start: the CLI runs once.
 func TestReattach(t *testing.T) {
 	h := newHarness(t, nil)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 500}, true)
@@ -360,13 +343,11 @@ func TestReattach(t *testing.T) {
 	if n := len(clitest.Calls(t, dirs.Config(cliworker.Claude))); n != 1 {
 		t.Errorf("the CLI ran %d times", n)
 	}
-	// Finished, it can still be re-attached.
 	if late, attached, err := h.w.Start(s); err != nil || !attached || late != first {
 		t.Errorf("late re-attach: %v %v", err, attached)
 	}
 }
 
-// One user can never attach to another's turn, even knowing its ID.
 func TestTurnIDOfAnotherUser(t *testing.T) {
 	h := newHarness(t, nil)
 	h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 300}, true)
@@ -384,7 +365,6 @@ func TestTurnIDOfAnotherUser(t *testing.T) {
 	}
 }
 
-// Each user's CLIs work in that user's own directories, owner-only.
 func TestUsersHaveTheirOwnDirectories(t *testing.T) {
 	h := newHarness(t, nil)
 	a := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
@@ -422,9 +402,6 @@ func TestFailedTurn(t *testing.T) {
 	}
 }
 
-// A session to resume that doesn't exist (its CLI's files were reset, or its first request
-// failed before it saved anything) is replaced by a new one, in the same turn, with the
-// fresh prompt.
 func TestResumeOfAMissingSessionStartsANewOne(t *testing.T) {
 	h := newHarness(t, nil)
 	for _, cli := range cliworker.CLIs {
@@ -448,7 +425,6 @@ func TestResumeOfAMissingSessionStartsANewOne(t *testing.T) {
 	}
 }
 
-// A resume that fails for another reason isn't retried.
 func TestResumeFailureIsNotRetried(t *testing.T) {
 	h := newHarness(t, nil)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
@@ -465,7 +441,6 @@ func TestResumeFailureIsNotRetried(t *testing.T) {
 	}
 }
 
-// Over the per-user limit, a turn waits for a free place instead of failing.
 func TestTurnsWaitForAFreePlace(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.MaxTurnsPerUser = 1 })
 	h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 700}, true)
@@ -475,7 +450,7 @@ func TestTurnsWaitForAFreePlace(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, _, err := first.Wait(ctx, 0); err != nil { // the first is running
+	if _, _, err := first.Wait(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
 	second, _, err := h.w.Start(spec("two-", 1, cliworker.Claude, "b"))
@@ -501,8 +476,6 @@ func TestUnavailableCLI(t *testing.T) {
 	}
 }
 
-// A worker that starts after a crash stops the CLIs the previous one left running, so a
-// resumed session never has two writers.
 func TestNewWorkerStopsOrphans(t *testing.T) {
 	h := newHarness(t, nil)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 60_000, Background: true}, true)
@@ -517,7 +490,6 @@ func TestNewWorkerStopsOrphans(t *testing.T) {
 	cliPID := clitest.Calls(t, dirs.Config(cliworker.Claude))[0].PID
 	bg := backgroundPID(t, dirs.Config(cliworker.Claude))
 
-	// As if the first worker had crashed: a second one starts on the same directories.
 	second, err := cliworker.New(h.cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -532,8 +504,6 @@ func TestNewWorkerStopsOrphans(t *testing.T) {
 	}
 }
 
-// A stop that reaches a turn as its CLI finishes doesn't lose the answer: a CLI that exited 0
-// with its result is reported done, whichever came first.
 func TestStopRacingTheEnd(t *testing.T) {
 	h := newHarness(t, nil)
 	h.user(t, 1, cliworker.Codex, clitest.Scenario{}, true)
@@ -555,8 +525,6 @@ func TestStopRacingTheEnd(t *testing.T) {
 	}
 }
 
-// A background process that keeps the CLI's stdout open doesn't hold the turn up: it is
-// killed with the rest of the group once the CLI has exited.
 func TestBackgroundHoldingStdout(t *testing.T) {
 	h := newHarness(t, nil)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{Background: true, HoldStdout: true}, true)
@@ -572,7 +540,6 @@ func TestBackgroundHoldingStdout(t *testing.T) {
 	eventually(t, "the background process outlived its turn", func() bool { return !alive(pid) })
 }
 
-// probeResult returns what a fake's answer reports for probe.
 func probeResult(answer, probe string) string {
 	for _, line := range strings.Split(answer, "\n") {
 		if rest, ok := strings.CutPrefix(line, "probe "+probe+": "); ok {

@@ -17,17 +17,12 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// stubLinks stands in for the integrations' side of a payment link (package integrations tests the
-// real one against a fake Stripe): it makes a link once per entry, as that side does, and counts
-// what it was asked.
 type stubLinks struct {
-	mu    sync.Mutex
-	calls []paylink.Request
-	made  map[int64]paylink.Link
-	fail  error
-	// onOpen, if set, runs while the integration's side is asked (the entry is mid-call).
-	onOpen func(req paylink.Request)
-	// otherMode says the integration's key is of another mode now than the links' (LinkCurrent).
+	mu        sync.Mutex
+	calls     []paylink.Request
+	made      map[int64]paylink.Link
+	fail      error
+	onOpen    func(req paylink.Request)
 	otherMode bool
 }
 
@@ -81,8 +76,6 @@ func (s *stubLinks) count() int {
 	return len(s.calls)
 }
 
-// payFX is the invoicing app live, its slot approved and bound to an integration allowed in the
-// space, with an invoice of 120.10 ready to be sent.
 type payFX struct {
 	*inv
 	links   *stubLinks
@@ -152,7 +145,6 @@ func TestSendingAnInvoiceQueuesAPaymentLinkEntryAsTheUser(t *testing.T) {
 	if kind != EffectCreatePaymentLink || user != p.alice.id {
 		t.Fatalf("entry = %s as %d", kind, user)
 	}
-	// Filled in from the record: the exact amount as text, the currency, the text and where it goes.
 	for _, want := range []string{`"slot":"payments"`, `"amount":"120.1"`, `"currency":"EUR"`, `"description":"Invoice A-1 for Acme"`, `"url_field":"pay_url"`, `"id_field":"payment_id"`} {
 		if !strings.Contains(payload, want) {
 			t.Errorf("payload %s lacks %s", payload, want)
@@ -197,16 +189,12 @@ func TestThePaymentLinkIsWrittenBackBySystemOnce(t *testing.T) {
 	if l.Effects[0].Result["amount"] != "120.10" || l.Effects[0].Result["currency"] != "EUR" {
 		t.Fatalf("result = %+v", l.Effects[0].Result)
 	}
-	// Nothing runs the entry again.
 	p.work()
 	if p.links.count() != 1 {
 		t.Fatalf("calls after another round = %d", p.links.count())
 	}
 }
 
-// A server that dies between the link and the note that the entry is done does the entry again:
-// the integration's side finds what it made (here, the stub does as the real one does), and writing
-// the link again is no change: no new revision.
 func TestACrashAfterTheLinkIsMadeMakesNoSecondLinkAndNoSecondRevision(t *testing.T) {
 	p := newPay(t)
 	p.send(p.alice, "op-send-0001")
@@ -223,7 +211,6 @@ func TestACrashAfterTheLinkIsMadeMakesNoSecondLinkAndNoSecondRevision(t *testing
 	if st := p.entries(p.alice).Effects[0].Status; st != StateRunning && st != StatePending {
 		t.Fatalf("the entry after the crash is %s", st)
 	}
-	// The worker's lease runs out, and another does the entry.
 	p.e.s.clock = func() time.Time { return time.Now().Add(leaseTime + time.Second) }
 	p.e.s.hooks.afterWork = nil
 	p.work()
@@ -276,8 +263,6 @@ func (p *payFX) exec(q string, args ...any) {
 func TestAReleaseThatNoLongerAsksForTheLinkRefusesAnEntryOfAnOlderOne(t *testing.T) {
 	p := newPay(t)
 	p.send(p.alice, "op-send-0001")
-	// A new release whose send action asks in another currency, approved: the entry the older one
-	// queued has no authority under it.
 	d, err := changed(t, `"amount_field": "total", "currency": "EUR"`, `"amount_field": "total", "currency": "USD"`)
 	if err != nil {
 		t.Fatal(err)
@@ -323,7 +308,6 @@ func TestFailuresOfTheLinkAreTheEntrysCodes(t *testing.T) {
 			p.work()
 			e := p.entries(p.alice).Effects[0]
 			if tc.transient {
-				// Tried again later, with the code of the last failure kept.
 				if e.Status != StatePending || e.Attempts != 1 || e.Error == nil || e.Error.Code != tc.code {
 					t.Fatalf("entry = %+v", e)
 				}
@@ -335,7 +319,6 @@ func TestFailuresOfTheLinkAreTheEntrysCodes(t *testing.T) {
 			if tc.code == apierr.CodeIntegrationAmountAboveMax && e.Error.Params["currency"] != "EUR" {
 				t.Fatalf("params = %v", e.Error.Params)
 			}
-			// The person who acted retries it once the problem is gone, and it makes the link.
 			p.links.fail = nil
 			expect(t, p.alice.do(http.MethodPost, appPath(p.shared, p.app.ID, fmt.Sprintf("/effects/%d/retry", e.ID)), map[string]any{}), http.StatusOK)
 			p.work()
@@ -356,8 +339,6 @@ func TestAPaymentLinkNeedsAServerThatMakesThem(t *testing.T) {
 	}
 }
 
-// previewSend previews the send action of the draft on one invoice, as the builder's preview does:
-// on the rows it is given, which it keeps in memory.
 func (p *payFX) previewSend(u *user, total any) *httptest.ResponseRecorder {
 	p.e.t.Helper()
 	body := struct {
@@ -370,7 +351,6 @@ func (p *payFX) previewSend(u *user, total any) *httptest.ResponseRecorder {
 	return u.do(http.MethodPost, appPath(p.shared, p.app.ID, "/actions/preview"), body)
 }
 
-// A preview says what the entry would ask, and never calls anyone.
 func TestThePreviewSimulatesThePaymentLinkAndNeverCallsTheProvider(t *testing.T) {
 	p := newPay(t)
 	rec := p.previewSend(p.alice, 120.1)
@@ -394,13 +374,10 @@ func TestThePreviewSimulatesThePaymentLinkAndNeverCallsTheProvider(t *testing.T)
 	if n := p.count(`SELECT count(*) FROM integration_refs`); n != 0 {
 		t.Fatalf("a preview made %d refs", n)
 	}
-	// Those who may not design or publish the app have no preview.
 	expect(t, p.previewSend(p.bob, 120.1), http.StatusForbidden)
 	expect(t, p.previewSend(p.mallory, 120.1), http.StatusNotFound)
 }
 
-// floatNoise is 0.1 + 0.2, which a float holds as 0.30000000000000004 (variables: constants add
-// exactly).
 func floatNoise() float64 {
 	a, b := 0.1, 0.2
 	return a + b
@@ -428,8 +405,6 @@ func TestAPreviewRefusesAnAmountTheCurrencyCannotHold(t *testing.T) {
 	}
 }
 
-// sendAgain sends the invoice again for another customer: another entry for the same record. (Its
-// money can't change while the first entry waits to run: paymentMoneyLocked.)
 func (p *payFX) sendAgain(operation, customer string) {
 	p.e.t.Helper()
 	a := action(p.fresh(p.alice, p.shared, p.app), "send", map[string]any{"id": p.invoice, "status": "sent", "customer": customer})
@@ -454,16 +429,14 @@ func (p *payFX) effectIDs() (ids []int64) {
 	return ids
 }
 
-// An entry that is tried again after a newer one for the same record has written its link must not
-// put its own, an earlier one, over it.
 func TestAnOlderEntryTriedAgainNeverReplacesTheNewerLink(t *testing.T) {
 	p := newPay(t)
 	p.links.fail = &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
 	p.send(p.alice, "op-send-0001")
-	p.work() // the first entry fails for now and waits to be tried again
+	p.work()
 	p.links.fail = nil
 	p.sendAgain("op-send-0002", "Other")
-	p.work() // the newer entry is the only one due: it makes its link
+	p.work()
 	ids := p.effectIDs()
 	if len(ids) != 2 {
 		t.Fatalf("entries = %v", ids)
@@ -474,7 +447,6 @@ func TestAnOlderEntryTriedAgainNeverReplacesTheNewerLink(t *testing.T) {
 	}
 	calls := p.links.count()
 
-	// The older one is due again: it has been replaced, and neither asks nor writes.
 	p.e.s.clock = func() time.Time { return time.Now().Add(time.Hour) }
 	p.work()
 	if p.links.count() != calls {
@@ -493,8 +465,6 @@ func TestAnOlderEntryTriedAgainNeverReplacesTheNewerLink(t *testing.T) {
 	}
 }
 
-// The check is made again where the link is written, under the write lock: a newer entry that is
-// queued while the older one is asking the provider still wins.
 func TestANewerEntryQueuedWhileTheOlderAsksTheProviderWins(t *testing.T) {
 	p := newPay(t)
 	p.send(p.alice, "op-send-0001")
@@ -514,14 +484,11 @@ func TestANewerEntryQueuedWhileTheOlderAsksTheProviderWins(t *testing.T) {
 	if !strings.Contains(data, `"pay_url":"https://pay.example.test/c/2"`) {
 		t.Fatalf("record = %s", data)
 	}
-	// The older entry never wrote, even for a moment: the record's history has the newer link only.
 	if n := p.count(`SELECT count(*) FROM app_row_history WHERE row_id = ? AND action = 'payment_link.created'`, p.invoice); n != 1 {
 		t.Fatalf("%d link writes in the record's history, want 1", n)
 	}
 }
 
-// What an entry's description sends out was approved with the release that queued it: a live
-// contract that no longer names a field (or the id) the entry filled in stops it.
 func TestAnEntryWhoseDescriptionSendsWhatTheLiveContractNoLongerApprovesIsRefused(t *testing.T) {
 	p := newPay(t)
 	p.send(p.alice, "op-send-0001")
@@ -545,7 +512,6 @@ func TestAnEntryWhoseDescriptionSendsWhatTheLiveContractNoLongerApprovesIsRefuse
 	}
 }
 
-// Wording alone is not in the contract: the same fields in other words still run.
 func TestAnEntryWhoseDescriptionOnlyChangedWordingStillRuns(t *testing.T) {
 	p := newPay(t)
 	p.send(p.alice, "op-send-0001")
@@ -555,7 +521,6 @@ func TestAnEntryWhoseDescriptionOnlyChangedWordingStillRuns(t *testing.T) {
 	}
 	app := p.fresh(p.alice, p.shared, p.app)
 	expect(t, p.alice.do(http.MethodPatch, appPath(p.shared, app.ID, ""), map[string]any{"version": app.Version, "definition": d}), http.StatusOK)
-	// The contract holds no wording: the approval still covers the new release.
 	expect(t, p.tryPublish(p.alice, p.shared, p.fresh(p.alice, p.shared, p.app)), http.StatusOK)
 	p.work()
 	if p.links.count() != 1 {
@@ -574,13 +539,8 @@ func (p *payFX) payloadOf() (payload string) {
 	return payload
 }
 
-// ----- the contract is checked whole, as of now -----
-
-// release publishes the definition, edited from the invoices' text by replacing each from with its to
-// (pairs of two), as the next release, approved.
 func (p *payFX) release(pairs ...string) { p.e.t.Helper(); p.releaseAck(nil, pairs...) }
 
-// releaseAck is release with the schema changes the publisher acknowledges.
 func (p *payFX) releaseAck(ack []SchemaChange, pairs ...string) {
 	p.e.t.Helper()
 	text := invoiceJSON
@@ -603,10 +563,8 @@ func (p *payFX) releaseAck(ack []SchemaChange, pairs ...string) {
 	expect(p.e.t, p.tryPublish(p.alice, p.shared, p.fresh(p.alice, p.shared, p.app), ack...), http.StatusOK)
 }
 
-// refused is the one entry's failure with the integration unavailable, and no call to the provider.
 func (p *payFX) refused() { p.e.t.Helper(); p.refusedWith(apierr.CodeIntegrationUnavailable) }
 
-// refusedWith is the one entry's failure with the code, and no call to the provider.
 func (p *payFX) refusedWith(want apierr.Code) {
 	p.e.t.Helper()
 	p.work()
@@ -621,31 +579,23 @@ func (p *payFX) refusedWith(want apierr.Code) {
 	}
 }
 
-// What an admin approved is the whole link: the kind of action that asks, the rule the record must
-// meet, where the currency is read from and what the amount may be. An entry that an older release
-// queued has no authority under a release that approved something else of these.
 func TestAnEntryQueuedUnderAnotherContractOfTheSameLinkIsRefused(t *testing.T) {
 	const effect = `"amount_field": "total", "currency": "EUR",`
 	for name, tc := range map[string]struct{ from, to string }{
-		// The action that asked was an update; the release's is an insert (who may trigger it differs).
-		"another kind of action": {`"send": {"kind": "update"`, `"send": {"kind": "insert"`},
-		// A rule the record must meet was added and the record doesn't meet it.
-		"a rule the record fails": {effect, `"amount_field": "total", "currency": "EUR", "when": {"field": "status", "op": "eq", "value": "overdue"},`},
-		// The currency now comes from the record's choice, which the entry never read.
+		"another kind of action":         {`"send": {"kind": "update"`, `"send": {"kind": "insert"`},
+		"a rule the record fails":        {effect, `"amount_field": "total", "currency": "EUR", "when": {"field": "status", "op": "eq", "value": "overdue"},`},
 		"the currency read from a field": {effect, `"amount_field": "total", "currency_field": "currency",`},
-		// The largest amount the field takes was lowered below the entry's 120.10.
-		"a lowered maximum": {`{"name": "total", "type": "number", "required": true}`, `{"name": "total", "type": "number", "required": true, "max": 100}`},
+		"a lowered maximum":              {`{"name": "total", "type": "number", "required": true}`, `{"name": "total", "type": "number", "required": true, "max": 100}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := newPay(t)
 			p.send(p.alice, "op-send-0001")
 			var ack []SchemaChange
-			if strings.Contains(tc.to, `"max": 100`) { // a lowered maximum narrows the field: the publisher says they know
+			if strings.Contains(tc.to, `"max": 100`) {
 				ack = []SchemaChange{{Change: "field_narrowed", Field: "total"}}
 			}
 			p.releaseAck(ack, tc.from, tc.to)
 			if name == "a rule the record fails" {
-				// The rule is the contract's; the record no longer meets it.
 				p.refusedWith(apierr.CodeIntegrationConditionChanged)
 			} else {
 				p.refused()
@@ -654,7 +604,6 @@ func TestAnEntryQueuedUnderAnotherContractOfTheSameLinkIsRefused(t *testing.T) {
 	}
 }
 
-// The same changes that the record satisfies are no obstacle: the entry runs.
 func TestAnEntryUnderAContractItSatisfiesStillRuns(t *testing.T) {
 	const effect = `"amount_field": "total", "currency": "EUR",`
 	for name, tc := range map[string]struct{ from, to string }{
@@ -673,10 +622,6 @@ func TestAnEntryUnderAContractItSatisfiesStillRuns(t *testing.T) {
 	}
 }
 
-// ----- the write is checked where it is made -----
-
-// The provider takes time, and what authorized the entry may change in it: nothing is written to the
-// record unless everything still holds under the write's own lock.
 func TestWhatChangesWhileTheProviderIsAskedStopsTheWrite(t *testing.T) {
 	for name, tc := range map[string]struct {
 		change func(*payFX)
@@ -727,10 +672,6 @@ func TestWhatChangesWhileTheProviderIsAskedStopsTheWrite(t *testing.T) {
 	}
 }
 
-// ----- what an entry shows once its fields are gone -----
-
-// A payment link's amount and currency came from the record's fields: once the live release no
-// longer holds them as they were, neither the result nor an error's params show them.
 func TestAnEntrysAmountAndCurrencyAreWithheldOnceTheirFieldsAreGone(t *testing.T) {
 	s := &Service{}
 	all := func(int64) bool { return true }
@@ -770,9 +711,6 @@ func TestAnEntrysAmountAndCurrencyAreWithheldOnceTheirFieldsAreGone(t *testing.T
 	}
 }
 
-// ----- a preview refuses what the run would -----
-
-// A currency of whole units (ISK) takes no decimals: the preview says so, as the entry would fail.
 func TestAPreviewRefusesDecimalsInACurrencyOfWholeUnits(t *testing.T) {
 	p := newPay(t)
 	d, err := changed(t, `"amount_field": "total", "currency": "EUR"`, `"amount_field": "total", "currency": "ISK"`)
@@ -803,10 +741,6 @@ func TestAPreviewRefusesDecimalsInACurrencyOfWholeUnits(t *testing.T) {
 	}
 }
 
-// ----- the newest entry wins, whatever has been cleaned up -----
-
-// The newest entry's mark outlives the entries: an older one tried again after the newer entry was
-// cleaned up still finds it was replaced.
 func TestAnOlderEntryIsStillSupersededOnceTheNewerOneIsCleanedUp(t *testing.T) {
 	p := newPay(t)
 	p.links.fail = &paylink.Error{Code: apierr.CodeIntegrationProviderUnreachable, Transient: true}
@@ -820,7 +754,7 @@ func TestAnOlderEntryIsStillSupersededOnceTheNewerOneIsCleanedUp(t *testing.T) {
 	if len(ids) != 2 || !strings.Contains(data, `"pay_url":"https://pay.example.test/c/1"`) {
 		t.Fatalf("entries = %v, record = %s", ids, data)
 	}
-	p.exec(`DELETE FROM app_effects WHERE id = ?`, ids[1]) // the retention sweep removed it
+	p.exec(`DELETE FROM app_effects WHERE id = ?`, ids[1])
 	calls := p.links.count()
 	p.e.s.clock = func() time.Time { return time.Now().Add(time.Hour) }
 	p.work()
@@ -835,8 +769,6 @@ func TestAnOlderEntryIsStillSupersededOnceTheNewerOneIsCleanedUp(t *testing.T) {
 	}
 }
 
-// A newer entry that shares either of the two fields with an older one replaces it: the record's link
-// is the newer one's, however the two entries name their other field.
 func TestANewerEntryOfEitherSharedFieldSupersedesAnOlderOne(t *testing.T) {
 	p := newPay(t)
 	ctx := context.Background()
@@ -870,7 +802,6 @@ func TestANewerEntryOfEitherSharedFieldSupersedesAnOlderOne(t *testing.T) {
 			}
 		})
 	}
-	// The mark only moves forward: a late write of an older entry's number doesn't take it back.
 	tx, err := p.e.db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -888,11 +819,6 @@ func TestANewerEntryOfEitherSharedFieldSupersedesAnOlderOne(t *testing.T) {
 	}
 }
 
-// ----- review: the record's own change, one snapshot, and the app's place -----
-
-// An ordinary edit of the record can make the rule of the action's payment link fail after the entry
-// was queued. That is not an admin's matter: the entry fails with the code that says the record no
-// longer meets the action's condition, and nothing is created.
 func TestAnEditThatBreaksTheLinksConditionSaysSoAndCreatesNothing(t *testing.T) {
 	p := newPay(t)
 	p.release(`"amount_field": "total", "currency": "EUR",`, `"amount_field": "total", "currency": "EUR", "when": {"field": "status", "op": "eq", "value": "sent"},`)
@@ -901,12 +827,6 @@ func TestAnEditThatBreaksTheLinksConditionSaysSoAndCreatesNothing(t *testing.T) 
 	p.refusedWith(apierr.CodeIntegrationConditionChanged)
 }
 
-// Every read of an entry's authorization before the provider is called is of one snapshot. The user
-// may not write the space when the entry is looked at; before its checks go on, the user is made an
-// editor and the approval is revoked (two later states, which never held together with the first).
-// Reading the access through the pool saw the user an editor while the binding, read in the
-// transaction, was still the approved one: no state existed in which both held, and the provider
-// was asked.
 func TestThePreAuthorizationReadsOneSnapshot(t *testing.T) {
 	p := newPay(t)
 	p.send(p.alice, "op-send-0001")
@@ -932,8 +852,6 @@ func TestThePreAuthorizationReadsOneSnapshot(t *testing.T) {
 	}
 }
 
-// A move clears an app's approvals, so an entry queued before it must not run after an admin approves
-// the app again in the new space: it asked for what was approved in the old one.
 func TestAnEntryQueuedBeforeAMoveNeverRunsAfterIt(t *testing.T) {
 	p := newPay(t)
 	p.send(p.alice, "op-send-0001")

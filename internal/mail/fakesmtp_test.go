@@ -19,28 +19,24 @@ import (
 	"time"
 )
 
-// fakeSMTP is an SMTP server in the test's process: it speaks enough of RFC 5321 (EHLO,
-// STARTTLS, AUTH PLAIN and LOGIN, MAIL, RCPT, DATA, QUIT) for the sender to talk to, keeps
-// what it was sent, and can be told to refuse each step.
 type fakeSMTP struct {
 	t        *testing.T
 	ln       net.Listener
 	cert     tls.Certificate
 	roots    *x509.CertPool
-	implicit bool // TLS from the first byte
+	implicit bool
 
-	// What it offers and does; set before the first connection.
 	NoSTARTTLS    bool
-	AuthMechs     string // "PLAIN LOGIN" by default; "-" for none
-	User, Pass    string // the only sign-in it accepts; empty accepts none
-	RejectRcpt    string // a reply for RCPT, such as "550 5.1.1 no such user"
-	RejectData    string // a reply after the message, such as "554 5.7.1 spam"
-	DropAfterData bool   // take the message and close the connection without answering it
-	Hang          bool   // accept the connection and say nothing
-	MalformedAuth bool   // the reply to a refused sign-in isn't a valid reply, and holds the password
-	EchoAuth      bool   // a refused sign-in's reply repeats the user name and the password, as a careless relay can
+	AuthMechs     string
+	User, Pass    string
+	RejectRcpt    string
+	RejectData    string
+	DropAfterData bool
+	Hang          bool
+	MalformedAuth bool
+	EchoAuth      bool
 
-	start    sync.Once // the server starts with its first sender: set the fields before
+	start    sync.Once
 	mu       sync.Mutex
 	received []received
 	cmds     []string
@@ -88,7 +84,6 @@ func newFakeSMTP(t *testing.T, implicitTLS bool) *fakeSMTP {
 func (s *fakeSMTP) host() string { return "127.0.0.1" }
 func (s *fakeSMTP) port() int    { return s.ln.Addr().(*net.TCPAddr).Port }
 
-// sender returns an SMTP sender for the server, trusting its certificate.
 func (s *fakeSMTP) sender(cfg SMTPConfig) *SMTP {
 	s.t.Helper()
 	s.start.Do(func() { go s.serve() })
@@ -248,7 +243,6 @@ func (s *fakeSMTP) handle(conn net.Conn) {
 			}
 			cur.Data = data.String()
 			if s.DropAfterData {
-				// Takes the message and loses the connection before it says so.
 				s.mu.Lock()
 				s.received = append(s.received, cur)
 				s.mu.Unlock()
@@ -274,8 +268,6 @@ func (s *fakeSMTP) handle(conn net.Conn) {
 	}
 }
 
-// pathOf is the address in a MAIL FROM or RCPT TO argument: what is between the angle brackets
-// (a quoted local part may hold spaces and brackets).
 func pathOf(arg string) string {
 	i, j := strings.Index(arg, "<"), strings.LastIndex(arg, ">")
 	if i < 0 || j < i {

@@ -16,7 +16,6 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// rawStripe is a client of a server that answers every request with body.
 func rawStripe(t *testing.T, body string) *Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
@@ -24,10 +23,6 @@ func rawStripe(t *testing.T, body string) *Client {
 	return NewClient(Lookup("stripe"), nil, egress.MustParse("127.0.0.1"), WithTestEndpoint(strings.TrimPrefix(srv.URL, "http://")))
 }
 
-// A Checkout Session is ours only in the mode our calls make (payment): one of the token in another mode
-// is never adopted, and its expiry is never taken for the end of the key's call, whether a lookup lists
-// it or its state is read. An expired one of the token is named, so that the try can tell it is the
-// object the key has on record.
 func TestASessionsExpiryIsTakenOnlyFromOneOfOurMode(t *testing.T) {
 	token := strings.Repeat("a", 32)
 	id := "cs_test_" + strings.Repeat("b", 24)
@@ -61,9 +56,6 @@ func TestASessionsExpiryIsTakenOnlyFromOneOfOurMode(t *testing.T) {
 	})
 }
 
-// A key that has an object on record moves on only if that very object is seen expired: an expired
-// session of the key's token with another id says nothing of the one on record, which may be open. The
-// entry waits, and nothing is made under a new key.
 func TestAKeyMovesOnOnlyWhenItsOwnObjectIsSeenExpired(t *testing.T) {
 	p := newPay(t, publicURL)
 	record := p.invoice(10, "EUR")
@@ -75,7 +67,6 @@ func TestAKeyMovesOnOnlyWhenItsOwnObjectIsSeenExpired(t *testing.T) {
 	if _, err := p.fake.Expire(p.fake.Sessions()[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	// Another object of the key is on record, seen and not checked.
 	p.exec(`UPDATE integration_ref_attempts SET object_id = ?, object_verified = 0 WHERE seq = 0`, "cs_test_"+strings.Repeat("c", 24))
 	_, err := p.svc.OpenPaymentLink(context.Background(), req)
 	var pe *paylink.Error

@@ -11,12 +11,8 @@ import (
 	"taskto.ai/taskto/internal/access"
 )
 
-// The system writer (system.go): the server changes a record with no user, only in the fields
-// its caller declares, and the record's history says so.
-
 var testSystem = SystemActor{Kind: SystemKindIntegration, ID: 7}
 
-// sysWrite is a system write of amount on record id of a in s.
 func sysWrite(s access.Space, a App, id int64, amount any) SystemWrite {
 	return SystemWrite{
 		Actor: testSystem, SpaceID: s.ID, AppID: a.ID, RecordID: id, Action: "payment.succeeded",
@@ -54,15 +50,12 @@ func TestSystemWriteChangesDeclaredFieldsAndIsInTheHistory(t *testing.T) {
 	if first.By == nil || first.By.System != nil || first.By.Name != "Alice" {
 		t.Fatalf("the person's first version = %+v", first.By)
 	}
-	// The record says the same, and its creator is untouched.
 	if h.Record.UpdatedBy == nil || h.Record.UpdatedBy.System == nil || h.Record.UpdatedAction != "payment.succeeded" {
 		t.Fatalf("the record's updated_by = %+v, action %q", h.Record.UpdatedBy, h.Record.UpdatedAction)
 	}
 	if h.Record.CreatedBy == nil || h.Record.CreatedBy.Name != "Alice" {
 		t.Fatalf("the record's created_by = %+v", h.Record.CreatedBy)
 	}
-	// In the tables the user columns are NULL beside the system's own: NULL still says only
-	// "the account was deleted".
 	var actor, updater *int64
 	var actorSystem, updatedSystem *string
 	if err := w.e.db.QueryRow(`SELECT actor, actor_system FROM app_row_history WHERE row_id = ? AND revision = ?`, id, base+1).Scan(&actor, &actorSystem); err != nil {
@@ -74,13 +67,11 @@ func TestSystemWriteChangesDeclaredFieldsAndIsInTheHistory(t *testing.T) {
 	if actor != nil || updater != nil || actorSystem == nil || *actorSystem != "integration:7" || updatedSystem == nil || *updatedSystem != "integration:7" {
 		t.Fatalf("columns: actor %v, actor_system %v, updated_by %v, updated_system %v", actor, actorSystem, updater, updatedSystem)
 	}
-	// The records list and the explorer's query show it too.
 	list := decode[Records](t, w.records(w.alice, s, a))
 	if len(list.Records) != 1 || list.Records[0].UpdatedBy == nil || list.Records[0].UpdatedBy.System == nil {
 		t.Fatalf("records = %+v", list.Records)
 	}
 
-	// Setting what is already there is no change: no revision, no history, so a replayed event is harmless.
 	res, err = w.e.s.SystemWrite(ctx, sysWrite(s, a, id, 25.0))
 	if err != nil || res.Changed || res.Revision != base+1 {
 		t.Fatalf("a write that changes nothing = %+v, %v", res, err)
@@ -89,20 +80,17 @@ func TestSystemWriteChangesDeclaredFieldsAndIsInTheHistory(t *testing.T) {
 		t.Fatalf("history after a replay = %q", got)
 	}
 
-	// A person's change after it is theirs again: the system is no longer the last to have changed it.
 	expect(t, w.act(w.alice, s, a, "edit_expense", map[string]any{"id": id, "amount": "30"}, rev(base+1)), http.StatusOK)
 	h = decode[History](t, w.history(w.alice, s, a, id))
 	if h.Record.UpdatedBy == nil || h.Record.UpdatedBy.System != nil || h.Record.UpdatedBy.Name != "Alice" || h.History[0].By.System != nil {
 		t.Fatalf("after a person's edit: updated_by %+v, latest %+v", h.Record.UpdatedBy, h.History[0].By)
 	}
-	// And so is a restore.
 	expect(t, w.act(w.alice, s, a, "delete_expense", map[string]any{"id": id}, nil), http.StatusOK)
 	if _, err := w.e.s.SystemWrite(ctx, sysWrite(s, a, id, 1.0)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a system write to a deleted record = %v, want ErrNotFound", err)
 	}
 }
 
-// Only what the caller declares, and what the live release still has, can be set.
 func TestSystemWriteRefusesWhatIsNotDeclared(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -123,7 +111,6 @@ func TestSystemWriteRefusesWhatIsNotDeclared(t *testing.T) {
 			t.Fatalf("%s: err = %v, want ErrSystemField", name, err)
 		}
 	}
-	// Nothing was written by any of them, not even the declared field of the mixed one.
 	if revision, amount := w.revisionOf(w.alice, s, a, id); revision != base || amount != 10.0 {
 		t.Fatalf("a refused write changed the record: revision %d, amount %v", revision, amount)
 	}
@@ -131,16 +118,12 @@ func TestSystemWriteRefusesWhatIsNotDeclared(t *testing.T) {
 		t.Fatalf("history after refused writes = %q", got)
 	}
 
-	// A declared field the live release dropped is refused: the declaration is checked against
-	// the app as it is when the write is made.
 	w.dropLiveField(a, "amount")
 	if _, err := w.e.s.SystemWrite(ctx, sysWrite(s, a, id, 99.0)); !errors.Is(err, ErrSystemField) {
 		t.Fatalf("a write to a field the live release dropped = %v, want ErrSystemField", err)
 	}
 }
 
-// A system write is a record's change like any other: it must fit the collection, and the
-// malformed ones are refused before anything is written.
 func TestSystemWriteStillFitsTheCollection(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -173,8 +156,6 @@ func TestSystemWriteStillFitsTheCollection(t *testing.T) {
 	}
 }
 
-// The writer reaches only the space it is told, and the app in it: another space's app, a record
-// of another app, an archived space, an offline app and an unpublished one are all refused.
 func TestSystemWriteStaysInItsSpaceAndApp(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -189,14 +170,10 @@ func TestSystemWriteStaysInItsSpaceAndApp(t *testing.T) {
 		}
 	}
 
-	// Cross-space: the right app and record, another space's id; another workspace's space;
-	// another person's private space.
 	notFound("the app named with another space", sysWrite(w.old, a, id, 99.0))
 	notFound("the app named with another workspace's space", sysWrite(w.otherShared, a, id, 99.0))
 	notFound("the app named with a private space", sysWrite(w.alicePrivate, a, id, 99.0))
-	// Another space's app with this space's id: the record isn't there either.
 	notFound("another space's app", sysWrite(s, w.aliceApp, id, 99.0))
-	// A record of another app, named through an app of the space.
 	bobRow := int64(0)
 	if err := w.e.db.QueryRow(`SELECT id FROM app_rows WHERE app_id = ?`, w.bobApp.ID).Scan(&bobRow); err != nil {
 		t.Fatal(err)
@@ -204,7 +181,6 @@ func TestSystemWriteStaysInItsSpaceAndApp(t *testing.T) {
 	notFound("a record of another app", sysWrite(w.bobPrivate, a, bobRow, 99.0))
 	notFound("a record of another app in the same space", sysWrite(s, a, bobRow, 99.0))
 	notFound("a record that doesn't exist", sysWrite(s, a, 99999, 99.0))
-	// And a record of the writer's own app in its own space still works.
 	if res, err := w.e.s.SystemWrite(ctx, sysWrite(s, a, id, 99.0)); err != nil || res.Revision != base+1 {
 		t.Fatalf("the right space and app: %+v, %v", res, err)
 	}
@@ -213,7 +189,6 @@ func TestSystemWriteStaysInItsSpaceAndApp(t *testing.T) {
 		t.Fatalf("another app's record = %v, %v", untouched, err)
 	}
 
-	// The archived space is read-only for the server as well.
 	oldRow := int64(0)
 	if err := w.e.db.QueryRow(`SELECT id FROM app_rows WHERE app_id = ?`, w.oldApp.ID).Scan(&oldRow); err != nil {
 		t.Fatal(err)
@@ -221,7 +196,6 @@ func TestSystemWriteStaysInItsSpaceAndApp(t *testing.T) {
 	if _, err := w.e.s.SystemWrite(ctx, sysWrite(w.old, w.oldApp, oldRow, 99.0)); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("a write to an archived space = %v, want ErrReadOnly", err)
 	}
-	// An app taken offline, and one with no release.
 	if _, err := w.e.db.Exec(`UPDATE apps SET archived_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, a.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -234,9 +208,6 @@ func TestSystemWriteStaysInItsSpaceAndApp(t *testing.T) {
 	}
 }
 
-// A system write and a person's edit are serialised by the record's revision: a person's stale
-// edit, and a device's offline one, get the usual conflict with the system's value shown, and a
-// system write that was based on an older revision is refused the same way.
 func TestSystemWriteAndRevisionsKeepConflictsWorking(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -248,26 +219,22 @@ func TestSystemWriteAndRevisionsKeepConflictsWorking(t *testing.T) {
 	if _, err := w.e.s.SystemWrite(ctx, sysWrite(s, a, id, 25.0)); err != nil {
 		t.Fatal(err)
 	}
-	// Alice read the record before: her edit conflicts and shows what the system wrote.
 	rec := w.act(w.alice, s, a, "edit_expense", map[string]any{"id": id, "description": "late lunch"}, rev(base))
 	expect(t, rec, http.StatusConflict)
 	if reply := decode[conflictReply](t, rec); reply.Current["amount"] != 25.0 || reply.Current["_revision"] != float64(base+1) {
 		t.Fatalf("the conflict = %s", rec.Body)
 	}
-	// So does a device replaying an offline edit, and nothing is overwritten.
 	rec = w.replay(w.alice, s, a, "device-edit", "edit_expense", map[string]any{"id": id, "amount": "3"}, rev(base))
 	expect(t, rec, http.StatusConflict)
 	if revision, amount := w.revisionOf(w.alice, s, a, id); revision != base+1 || amount != 25.0 {
 		t.Fatalf("a refused edit changed the record: revision %d, amount %v", revision, amount)
 	}
-	// The other way: a system write based on a revision a person moved on from is a conflict.
 	expect(t, w.act(w.alice, s, a, "edit_expense", map[string]any{"id": id, "description": "late lunch"}, rev(base+1)), http.StatusOK)
 	stale := sysWrite(s, a, id, 40.0)
 	stale.Expected = rev(base + 1)
 	if _, err := w.e.s.SystemWrite(ctx, stale); !errors.Is(err, ErrConflict) {
 		t.Fatalf("a system write on a stale revision = %v, want ErrConflict", err)
 	}
-	// Without a revision it applies to the record as it is, on top of the person's change.
 	res, err := w.e.s.SystemWrite(ctx, sysWrite(s, a, id, 40.0))
 	if err != nil || res.Revision != base+3 {
 		t.Fatalf("a system write on the current record = %+v, %v", res, err)
@@ -281,9 +248,6 @@ func TestSystemWriteAndRevisionsKeepConflictsWorking(t *testing.T) {
 	}
 }
 
-// A system write runs no effect: effects act as the user who acted, and there is none. Here the
-// app's own "resolve" action would move the maintenance card to done; the system writer setting the
-// same field moves nothing and queues nothing.
 func TestSystemWriteQueuesNoEffects(t *testing.T) {
 	f := newFX(t)
 	f.mustSubmit(f.alice, "op-fail-0001", "East gate", "fail")
@@ -310,8 +274,6 @@ func TestSystemWriteQueuesNoEffects(t *testing.T) {
 	}
 }
 
-// dropLiveField makes the app's live release one that doesn't declare field, as a publish of a
-// draft without it would.
 func (w *world) dropLiveField(a App, field string) {
 	w.e.t.Helper()
 	var raw string

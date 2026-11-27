@@ -21,26 +21,19 @@ func TestLocalHourIsCountedOnTheCalendar(t *testing.T) {
 		m     time.Month
 		d, h  int
 		want  time.Time
-		wallH int // the hour the wall clock shows at want
+		wallH int
 	}{
 		{"an ordinary day", "Europe/Lisbon", 2030, 1, 10, 8, utc(2030, 1, 10, 8, 0), 8},
 		{"east of UTC", "Asia/Tokyo", 2030, 1, 10, 8, utc(2030, 1, 9, 23, 0), 8},
 		{"summer time", "America/New_York", 2030, 7, 1, 8, utc(2030, 7, 1, 12, 0), 8},
-		// New York's clocks go from 02:00 to 03:00 on 2030-03-10: 02:30 doesn't exist, and 02:00 is
-		// the first moment after the gap's start, that is 03:00.
 		{"an hour that is skipped", "America/New_York", 2030, 3, 10, 2, utc(2030, 3, 10, 7, 0), 3},
-		// And back from 02:00 to 01:00 on 2030-11-03: 01:00 happens twice, and is the first time.
 		{"an hour that happens twice", "America/New_York", 2030, 11, 3, 1, utc(2030, 11, 3, 5, 0), 1},
 		{"the hour after the second one", "America/New_York", 2030, 11, 3, 2, utc(2030, 11, 3, 7, 0), 2},
-		// The day after a date is the date plus one, whatever length the day between is.
 		{"the 31st of March plus one day, Lisbon", "Europe/Lisbon", 2030, 3, 31 + 1, 8, utc(2030, 4, 1, 7, 0), 8},
 		{"past the end of a month", "UTC", 2030, 1, 32, 8, utc(2030, 2, 1, 8, 0), 8},
 		{"past the end of a year", "UTC", 2030, 12, 32, 8, utc(2031, 1, 1, 8, 0), 8},
-		// A gap that doesn't end on the hour: Casey's clocks went from 00:01 to 03:01 on 2020-10-04,
-		// and Lord Howe's from 02:00 to 02:30 on 2030-10-06.
 		{"a gap that ends at 03:01", "Antarctica/Casey", 2020, 10, 4, 1, utc(2020, 10, 3, 16, 1), 3},
 		{"a gap of half an hour", "Australia/Lord_Howe", 2030, 10, 6, 2, utc(2030, 10, 5, 15, 30), 2},
-		// Samoa skipped 2011-12-30 whole.
 		{"a day that is skipped", "Pacific/Apia", 2011, 12, 30, 8, utc(2011, 12, 30, 10, 0), 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -2,10 +2,6 @@
 
 package main
 
-// The server binary with the real sidecar (agent/dist). Like internal/agentrt's integration
-// tests it needs Node and a built agent package, so it only runs with TASKTO_AGENT_IT=1
-// (make agent-it).
-
 import (
 	"bytes"
 	"context"
@@ -47,7 +43,6 @@ func (b *lockedBuffer) String() string {
 
 var listeningAddr = regexp.MustCompile(`taskto listening"? addr=(\S+)`)
 
-// startServer starts the server binary and waits until its agent runtime is ready.
 func startServer(t *testing.T, bin string, args ...string) (*serverProcess, string) {
 	t.Helper()
 	if privilegedTestMachine(t) {
@@ -80,8 +75,6 @@ func startServer(t *testing.T, bin string, args ...string) (*serverProcess, stri
 	return s, addr
 }
 
-// A server killed with SIGKILL runs no shutdown code, yet its sidecar exits too (its stdin
-// closes), and the next server starts on the same data directory without a hitch.
 func TestKilledServerTakesTheSidecarWithIt(t *testing.T) {
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
@@ -145,7 +138,6 @@ func TestKilledServerTakesTheSidecarWithIt(t *testing.T) {
 		t.Fatalf("wait = %+v, %v; want done", settled, err)
 	}
 
-	// A clean stop stops the sidecar too.
 	if err := second.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}

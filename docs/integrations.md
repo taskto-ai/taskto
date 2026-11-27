@@ -307,8 +307,9 @@ refunds it at Stripe.
   **approval** by an admin of that contract's hash, which a publish and a rollback need
   ([Apps and approval](#apps-and-approval)).
 
-- **Payment links**: the `create_payment_link` effect makes a hosted payment page at Stripe and
-  writes its address to the record ([Payment links](#payment-links)).
+- **Payment links**: the `create_payment_link` effect makes a hosted payment page at Stripe or
+  Square and writes its address to the record ([Payment links](#payment-links); Square's adapter
+  is described in [Square](#square)).
 
 - **Applying events**: a verified payment event marks the record of its payment link paid (or
   refunded) as the integration, and only as the app's approved contract allows
@@ -352,8 +353,11 @@ The registry is the list in `internal/integrations/registry.go`. Each provider s
   environment, not a proof that the stored token belongs to it (nothing asks Square until its
   first call), so replace the token when the environment changes;
 - its **API hosts**, constants of the adapter (`api.stripe.com`; Square's production host or
-  its sandbox host, by `environment`), and the **API version** it is written against, which
-  Stripe's adapter pins (`Stripe-Version`) and Square's adapter pins when it makes its first call.
+  its sandbox host, by `environment`), and the **API version** it is written against and sends
+  with every call (`Stripe-Version`, `Square-Version`);
+- how long it **keeps an idempotency key** (`KeyKept`): Stripe documents at least 24 hours, which
+  the server relies on for 23; Square publishes no period, so its keys are never relied on: a
+  call whose outcome is unknown is never sent again under its key ([Square](#square)).
 
 A new provider is a change of code and tests, never a migration: the `provider` column is
 validated in Go.
@@ -781,10 +785,13 @@ write.
   - *Then the same key is asked again*, with the same parameters, while Stripe still keeps it (23 hours
     from the key's first call; Stripe keeps keys at least 24): Stripe answers with what the first call
     made (an object, or the failure it kept), or runs the call if it never ran. Past that window the
-    key is never called again, since Stripe may have forgotten it and would run it a second time. So
-    after an unknown outcome a call is never sent under a **new** key without an admin's
-    confirmation; the **same** key is sent again only within its window, where Stripe gives back
-    whatever the first call made and can't make a second object.
+    key is never called again, since Stripe may have forgotten it and would run it a second time; the
+    window is checked again just before the call leaves, after it is written ahead, and bounds the
+    call: one that hasn't left when the window closes never does. A clock that reads earlier than the
+    key's first call relies on no window. A provider that documents no window (Square) is never asked
+    again under a key whose outcome is unknown. So after an unknown outcome a call is never sent under a
+    **new** key without an admin's confirmation; the **same** key is sent again only within its window,
+    where Stripe gives back whatever the first call made and can't make a second object.
   - *Failures tell nothing and end nothing.* A lookup or a call that fails (a `5xx`, a timeout, a
     listing that isn't a whole list or holds more than a lookup reads: 20 pages of 100, newest first),
     and a failed read of whose account the key is or of an object's state, leave the outcome as it was,
@@ -902,6 +909,21 @@ signature is the authentication. The reverse proxy must forward `POST /hooks/*` 
 more has to be exposed for payments; [install](install.md#webhooks-from-payment-providers)).
 The route is in [api.md](api.md#post-hookspublic_id).
 
+**Square signs over the address.** Square's signature covers the notification URL as well as the
+body, so a delivery verifies only against the exact address registered at Square. The server keeps
+the address it showed when the admin saved the webhook signing secret (`webhook_registered_url`),
+and verifies Square's deliveries against that one (or the current one, when none was recorded),
+made from the public URL and never from the request's `Host`. When the server's public URL changes
+afterwards, the integration's `webhook_url_changed` is `true` and the settings page says so: the
+provider still sends to, and Square still signs over, the old address. The admin registers the new
+address at the provider and saves the signing secret again (the same one is fine), which records
+the new address and clears the warning. The same warning shows for Stripe, whose deliveries also
+keep going to the old address. Each secret is verified over the address it was saved for: when a
+new secret replaces one, the replaced secret keeps the address it was saved for
+(`webhook_previous_registered_url`), so during the day it keeps verifying, Square's deliveries
+signed with it over the old address are accepted, and it never verifies over the new address,
+nor the new secret over the old one.
+
 What a delivery goes through, in this order, each step cheaper than the next:
 
 1. **Limits and size.** A limit per client address, counted before anything is looked up (so a
@@ -913,7 +935,8 @@ What a delivery goes through, in this order, each step cheaper than the next:
    anyway.
 3. **The signature, over the raw bytes, before any parsing**: constant-time comparison against
    the current webhook secret and, for a day after an admin replaces it, the previous one; the
-   provider's timestamp tolerance applies. A delivery for an integration is only ever checked
+   provider's timestamp tolerance applies (Stripe: five minutes; Square: the event's
+   `created_at`, a day back and five minutes ahead, [below](#square)). A delivery for an integration is only ever checked
    against that integration's own secrets, so a valid signature of one integration opens no
    other, in this workspace or another. For this to hold, **no two integrations share a webhook
    secret**: setting or replacing one that another integration (in any workspace) uses as its
@@ -1091,6 +1114,9 @@ a worker of its own (`StartPolling`, in the server process, always on, whether o
 URL) reads the objects of the refs that are still open and feeds what it finds through the same path a
 webhook's event takes. It never reads an event feed: it retrieves the objects the server made.
 
+- **Only an adapter that polls.** A provider is polled only when its adapter implements
+  `PaymentPoller`. Square's doesn't: the worker holds a Square integration's refs and reads nothing of
+  them, so a Square payment is learnt only from its webhook, which needs a public URL.
 - **Same path, so once.** A finding is stored in `integration_events` as an event of the source `poll`
   with the id `poll:<object>:<state>` (`poll:cs_…:paid`, `poll:cs_…:expired`): once per integration, by
   the table's unique key. The event worker then applies it with [the same step](#applying-events) as a
@@ -1135,8 +1161,8 @@ webhook's event takes. It never reads an event feed: it retrieves the objects th
 
 ### What the adapter was written against (Stripe)
 
-Pinned from Stripe's public documentation on the day the adapter was written (the code comments
-in `internal/integrations/stripe_webhook.go` say the same). A change of any of it is a change of
+Pinned from Stripe's public documentation on the day the adapter was written, and implemented in
+`internal/integrations/stripe_webhook.go`. A change of any of it is a change of
 code and of this section; the real-provider check is manual and never in CI.
 
 - **Signature.** The `Stripe-Signature` header is comma-separated `name=value` entries: `t`, the
@@ -1181,6 +1207,77 @@ code and of this section; the real-provider check is manual and never in CI.
   reference made in its own mode (one made before the key was replaced) and is ignored
   (`integration_event_mode_mismatch`) against any other.
 
+### Square
+
+The adapter is `internal/integrations/square.go` and `square_webhook.go`, written against Square's
+published API specification (`github.com/square/connect-api-specification`, release `2026-11-18`,
+the source of [Square's API reference](https://developer.squareup.com/reference/square)) and its
+guides, as read on the day it was written. The code comments cite each page; a change of any of it
+is a change of code and of this section.
+
+- **Version and hosts.** Every call sends `Square-Version: 2026-11-18`
+  (`integrations.SquareAPIVersion`). The host is `connect.squareupsandbox.com` or
+  `connect.squareup.com`, by the integration's `environment`, a choice and never a URL.
+- **Payment links** ([CreatePaymentLink](https://developer.squareup.com/reference/square/checkout-api/create-payment-link)):
+  one order of one ad hoc line (the app's description, quantity 1, the exact amount) at the
+  integration's `location_id`. The link asks exactly that amount: every checkout option that would
+  let a buyer pay another is sent and false (`allow_tipping`, `enable_coupon`, `enable_loyalty`;
+  Square shows a seller's coupons and loyalty rewards unless they are turned off), and
+  `shipping_fee` and `app_fee_money` are never sent. The fake Square refuses a link without them. The key's token is the `idempotency_key`, the
+  order's `reference_id` and the link's `payment_note`, which Square copies to the payment
+  ("After processing the payment, Square adds this note to the resulting Payment as well as the
+  post payment confirmation email"): the note is how a payment's events carry the token back, and
+  the payer sees it, a 32-digit reference, in their confirmation email. With a public URL the payer
+  is sent back to the server's done page (`checkout_options.redirect_url`; Square has no cancel
+  page); without one they stay on Square's confirmation. A link is paid once ("The buyer can use
+  the payment link only once"), its order going from `DRAFT` to `OPEN` with a tender, and never
+  expires ([Quick Pay Checkout](https://developer.squareup.com/docs/checkout-api/quick-pay-checkout)).
+  Its address must be on `sandbox.square.link` or `square.link`, by environment.
+- **Its state** is read through the link's order (`GET /v2/orders/{id}`): `DRAFT` or `OPEN` with no
+  tender is open; a tender, `COMPLETED` or `CANCELED` (a deleted link,
+  [Manage checkout](https://developer.squareup.com/docs/checkout-api/manage-checkout)) is settled,
+  for a person to reconcile.
+- **Lookup by token.** Square's list of payment links has no filter, so a lookup reads every page
+  (up to 20 of up to 1000 links) for the link whose `payment_note` is the key's token, and adopts it
+  only if its order asks the same amount and currency with the same `reference_id`. More pages than
+  that is `CallLookupIncomplete`, which tells nothing: the key stays unknown.
+- **Idempotency** ([Idempotency](https://developer.squareup.com/docs/build-basics/common-api-patterns/idempotency)):
+  the same key and request return the first successful answer, the same key with another request
+  is `IDEMPOTENCY_KEY_REUSED`. Square publishes no period for which a key is kept, so a key whose
+  outcome is unknown is never asked again: it is only looked for by its token, and never replaced
+  by a new one without an admin ([Payment links](#payment-links)). A call that certainly never left is
+  not unknown, and is sent again under the same key.
+- **Errors** ([Handling errors](https://developer.squareup.com/docs/build-basics/handling-errors)):
+  Square documents no answer as given before the request ran (not even `429`, after which "Square
+  might temporarily stop processing your requests"), so every answer to a creation that isn't a
+  success leaves its outcome unknown: `401` and `403` are the credentials, `408`, `429` and `5xx`
+  may pass, any other `4xx` is a refusal. Only a request that never left is not executed.
+- **Signature** ([Validate notifications](https://developer.squareup.com/docs/webhooks/step3validate)):
+  `x-square-hmacsha256-signature` is the Base64 HMAC-SHA256, keyed with the subscription's
+  signature key, of the notification URL followed by the exact body (Square's SDKs, whose
+  known answers a test checks, do the same). It is compared in constant time, against two keys
+  as Stripe's is.
+- **Time.** No header carries a signed time; the event's `created_at`, inside the signed body, is
+  read once the signature matched. Square retries a failed delivery "for up to 24 hours after the
+  originating event" with the same `event_id`, in no guaranteed order
+  ([Webhooks overview](https://developer.squareup.com/docs/webhooks/overview)), so a delivery is
+  accepted up to 24 hours and 5 minutes after its event and 5 minutes ahead of it. A replay inside
+  that window is stopped by the event's id, stored once, and by the ref's state, which only moves
+  forward.
+- **Mode.** Square's events don't say whether they are of the sandbox; each environment has its own
+  subscriptions and signature keys, so a delivery that verified is of the integration's mode.
+- **Events.** Square has no event per outcome, only a payment's creation and its updates, so the
+  payment's own fields decide:
+
+  | Normalized | Square's event | Notes |
+  |---|---|---|
+  | `payment.succeeded` | `payment.created` or `payment.updated` of a `COMPLETED` payment that has refunded nothing and whose `note` is a token the server issues | Square may tell one payment more than once; the ref's state change applies it once. The amount is the payment's `total_money`. |
+  | `payment.refunded` | `payment.updated` of a `COMPLETED` payment with `refunded_money` above zero | What has been refunded so far, mapped to the ref through the payment's id. `refund.created` and `refund.updated` carry one refund's own amount, not the total, and are ignored. |
+
+  `APPROVED` and `PENDING` payments aren't paid yet, and a `FAILED` or `CANCELED` one leaves the link
+  open for the payer to try again, so none is an event; a Square link never expires. The buyer's
+  email, address and card are never decoded.
+
 ## The fakes tests use
 
 `internal/integrations/testprovider` is what the tests of the cards that call a provider run
@@ -1209,7 +1306,13 @@ against, so none of them needs a network:
   host reaches the adapter only through the request builder's test option
   (`integrations.WithTestEndpoint`), never through configuration. The keys and secrets in it are
   obvious fakes. Nothing in the server imports the package, and a test in `cmd/taskto` fails if
-  its binary links it. The fake Square comes with the Square adapter.
+  its binary links it.
+- **A fake Square** (`testprovider/square.go`): payment links (create, list with a cursor and a page
+  size a test sets, retrieve), orders and the merchant, at `Square-Version` `2026-11-18`, refusing
+  another version, a wrong token, unknown fields and another location. It keeps idempotency keys as
+  Square documents (the same request gets the first answer, another is `IDEMPOTENCY_KEY_REUSED`),
+  fails on demand before or after doing the work, and plays the payer (pay once, refund in parts,
+  delete a link) with the events Square sends for each, signed over the notification URL.
 
 ## The end-to-end, isolation and contract suites
 
@@ -1236,8 +1339,10 @@ Three groups of tests run in CI's Go job, with no real network:
   polls (`PaymentPoller`), a payment read back dated by the provider's time of it, the time its webhook
   event carries, not the time of the read. An adapter runs it by giving a `paymentsFixture` (its
   adapter, a client for its fake, the fake's payer, expiry and refund, and a clock it can move);
-  `contract_stripe_test.go` is Stripe's, and `TestTheContractSuiteNoticesABrokenAdapter` runs the cases
-  against adapters broken on purpose, to show they fail.
+  `contract_stripe_test.go` is Stripe's and `contract_square_test.go` Square's, and
+  `TestTheContractSuiteNoticesABrokenAdapter` runs the cases against adapters broken on purpose, to show
+  they fail. A provider that signs its time inside the body (Square) re-signs a body with its time
+  moved, and one that retries for a day gives its own window (`Tolerance`, `Ahead`).
 
 ## Trying an integration by hand
 
@@ -1246,8 +1351,10 @@ server holds (the secrets are set and open, the settings are valid) and says not
 whether the provider accepts the credentials. The fake can't know if Stripe changed, so before a
 release that touches the adapter, and whenever the pinned API version is raised, somebody tries it
 against the real Stripe, **by hand and never in CI** (as `make dictation-e2e` is never in CI), in
-its **test mode**, with test keys of their own created at Stripe. Never use live keys to try the
-software, and never paste a key into an issue, a chat, a log or a commit.
+its **test mode**, with test keys of their own created at Stripe (Square: its **sandbox**, with a
+sandbox access token, the sandbox location's id and a webhook subscription's signature key, as
+[Square](#square) says). Never use live keys to try the software, and never paste a key into an
+issue, a chat, a log or a commit.
 
 The smoke test, on a server with a public address that forwards `POST /hooks/*` (or a tunnel to it),
 and takes about twenty minutes:

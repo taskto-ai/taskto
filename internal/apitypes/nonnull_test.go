@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// kept says, for each package, which tests prove that the fields tagged apitypes:"nonnull" are
-// never nil in what its code sends: the test file and the tests, each one decoding what the
-// route replies (so a null is a nil) and calling nonnull.Require on it. A new tagged field
-// needs a test here, or the tag is a claim nobody checks.
 var kept = map[string]struct {
 	file  string
 	tests []string

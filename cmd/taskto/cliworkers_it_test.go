@@ -2,13 +2,6 @@
 
 package main
 
-// Conversations on CLI workers through the server binary, its real sidecar and the fake CLIs
-// (internal/cliworker/clitest, which print what the real ones print): connecting Claude Code
-// and Codex with their logins, a conversation running on each, its session resumed, an expired
-// login waited out and the conversation going on after the Reconnect, another user's
-// conversation never reaching the owner's login, and a sidecar killed in the middle of a turn
-// without the CLI running twice. Gated by TASKTO_AGENT_IT=1 like the other integration tests.
-
 import (
 	"context"
 	"encoding/json"
@@ -41,7 +34,6 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
-	// The fake CLIs, found on the server's PATH as the real ones would be.
 	fakes := filepath.Join(dir, "fakes")
 	if err := os.Mkdir(fakes, 0o700); err != nil {
 		t.Fatal(err)
@@ -50,8 +42,6 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 	t.Setenv("PATH", fakes+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	dataDir := filepath.Join(dir, "data")
-	// local-unsafe: two users on one OS user, as no real install may run (the one-user rule
-	// is tested in internal/cliaccounts); the isolation checked here is the server's.
 	server, addr := startServer(t, bin, "-addr", "127.0.0.1:0", "-data-dir", dataDir, "-agent", "-agent-entry", entry,
 		"-insecure-cookies", "-cli-workers", "local-unsafe")
 	layout := cliworker.Layout{Root: filepath.Join(dataDir, "cli")}
@@ -117,7 +107,6 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 		}
 		return ""
 	}
-	// connect signs a in to cli through the API, as the user would in the browser.
 	connect := func(a *api, user int64, cli string) {
 		var info cliworker.LoginInfo
 		if err := json.Unmarshal(a.expect(http.StatusOK, http.MethodPost, "/api/me/cli-accounts/"+cli+"/login", map[string]any{}), &info); err != nil {
@@ -137,7 +126,6 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 	connect(owner, ownerID, "claude")
 	connect(owner, ownerID, "codex")
 
-	// The CLIs are models of the workspace.
 	var models struct {
 		Providers []struct {
 			Provider string `json:"provider"`
@@ -167,8 +155,6 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 		}
 		return conv.ID
 	}
-	// answers returns the conversation's answers so far: the assistant messages with text, or
-	// nil while the agent runtime restarts.
 	answers := func(a *api, conv int64) []string {
 		var msgs struct {
 			Messages []struct {
@@ -194,7 +180,6 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 		}
 		return out
 	}
-	// ask sends content and returns the answer to it.
 	ask := func(a *api, conv int64, content string) string {
 		before := len(answers(a, conv))
 		a.expect(http.StatusAccepted, http.MethodPost, fmt.Sprintf("%s/%d/messages", base, conv), map[string]string{"content": content})
@@ -207,8 +192,6 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 	}
 	claudeCalls := func(user int64) int { return len(clitest.Calls(t, layout.User(user).Config(cliworker.Claude))) }
 
-	// A conversation on Claude Code: the answer is the CLI's, and the next turn resumes the
-	// same CLI session.
 	conv := newConversation(owner, "cli-claude")
 	if got := ask(owner, conv, "hello from the test"); got != "echo: hello from the test" {
 		t.Fatalf("answer = %q", got)
@@ -217,14 +200,11 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 		t.Fatalf("second answer = %q", got)
 	}
 
-	// Codex, on its own login.
 	codexConv := newConversation(owner, "cli-codex")
 	if got := ask(owner, codexConv, "hello codex"); got != "echo: hello codex" {
 		t.Fatalf("codex answer = %q", got)
 	}
 
-	// A permission question (docs/agent-safety.md): the CLI asks before its command runs, the
-	// conversation shows it, only the owner sees and answers it, and the turn goes on.
 	ownerCodex := layout.User(ownerID).Config(cliworker.Codex)
 	clitest.WriteScenario(t, ownerCodex, clitest.Scenario{Tool: &clitest.ToolUse{Name: "Bash", Input: map[string]any{"command": "touch proof.txt"}}})
 	codexBase := fmt.Sprintf("%s/%d", base, codexConv)
@@ -253,18 +233,15 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 	if last := after[len(after)-1]; !strings.Contains(last, "tool Bash: ran") {
 		t.Fatalf("answer after allowing = %q", last)
 	}
-	// What the CLI did, as the conversation keeps it, shows the question and the answer.
 	if _, body := owner.do(http.MethodGet, codexBase+"/entries", nil); !strings.Contains(string(body), "? Codex asks to use Bash: touch proof.txt") || !strings.Contains(string(body), "✓ allowed") {
 		t.Errorf("the conversation doesn't show the question and its answer: %s", body)
 	}
-	// The owner lets the CLI act without asking in this conversation: the next turn asks nothing.
 	owner.expect(http.StatusOK, http.MethodPatch, codexBase, map[string]string{"cli_permissions": "allow_all"})
 	if got := ask(owner, codexConv, "make it again"); !strings.Contains(got, "tool Bash: ran") {
 		t.Fatalf("answer with allow_all = %q", got)
 	}
 	clitest.WriteScenario(t, ownerCodex, clitest.Scenario{})
 
-	// Isolation: the member's conversation never reaches the owner's login.
 	before := claudeCalls(ownerID)
 	theirs := newConversation(member, "cli-claude")
 	if got := ask(member, theirs, "use the owner's account"); !strings.Contains(got, "isn't connected") {
@@ -274,7 +251,6 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 		t.Fatalf("calls: owner %d (was %d), member %d", claudeCalls(ownerID), before, claudeCalls(memberID))
 	}
 
-	// An expired login: the turn waits for the Reconnect, then the conversation goes on.
 	ownerClaude := layout.User(ownerID).Config(cliworker.Claude)
 	clitest.WriteScenario(t, ownerClaude, clitest.Scenario{Expired: true})
 	n := len(answers(owner, conv))
@@ -294,8 +270,6 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 		t.Fatalf("answer after the Reconnect = %q", last)
 	}
 
-	// The sidecar killed in the middle of a turn: once it is back, its tool re-attaches to the
-	// turn the worker kept running, and the CLI runs once.
 	clitest.WriteScenario(t, ownerClaude, clitest.Scenario{SleepMS: 4000})
 	before = claudeCalls(ownerID)
 	n = len(answers(owner, conv))
@@ -321,8 +295,6 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 		t.Fatalf("the CLI ran %d times for one turn", calls-before)
 	}
 
-	// Switching: Claude Code reaches its limit in the middle of a turn, the turn goes on
-	// with Codex, the answer is Codex's, and the conversation's model is Codex's from then on.
 	owner.expect(http.StatusOK, http.MethodPut, "/api/me/cli-switching", map[string]any{
 		"enabled": true, "queue": []map[string]string{{"account": "claude"}, {"account": "codex"}},
 	})
@@ -339,13 +311,11 @@ func TestCLIWorkersThroughTheServer(t *testing.T) {
 	if model.Provider != "cli-codex" {
 		t.Fatalf("model after the switch = %+v", model)
 	}
-	// The next turn runs on Codex, where the conversation is now.
 	if got := ask(owner, conv, "and on"); !strings.HasPrefix(got, "echo: and on") {
 		t.Fatalf("answer on Codex = %q", got)
 	}
 }
 
-// waitLong is waitFor with time for a turn, a login and a sidecar restart.
 func waitLong(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)

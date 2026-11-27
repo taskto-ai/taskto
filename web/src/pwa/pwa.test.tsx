@@ -18,7 +18,6 @@ afterEach(() => {
   delete document.documentElement.dataset.keyboard
 })
 
-// A worker and a registration the test drives.
 function fakeWorker(state: ServiceWorker['state'] = 'installing') {
   const handlers: Record<string, () => void> = {}
   const worker = {
@@ -70,7 +69,7 @@ test('an update that installs while the app runs prompts, and reloads nothing by
     reg.installing = next.worker
     handlers.updatefound()
   })
-  expect(screen.queryByRole('status')).toBeNull() // still installing
+  expect(screen.queryByRole('status')).toBeNull()
   act(() => {
     ;(next.worker as { state: string }).state = 'installed'
     next.handlers.statechange()
@@ -116,7 +115,7 @@ test("another tab's update never reloads this one", () => {
   const { reg } = fakeRegistration(waiting.worker)
   const { container, handlers } = fakeContainer({} as ServiceWorker)
   track(reg, container, reload)
-  act(() => handlers.controllerchange()) // this tab never asked
+  act(() => handlers.controllerchange())
   expect(reload).not.toHaveBeenCalled()
 })
 
@@ -196,17 +195,17 @@ test('the on-screen keyboard: the app is sized to the visible viewport, and only
   const stop = trackKeyboard(win)
   expect(document.documentElement.dataset.keyboard).toBeUndefined()
 
-  Object.assign(vv, { height: 480, offsetTop: 40 }) // the keyboard is up, the page scrolled
+  Object.assign(vv, { height: 480, offsetTop: 40 })
   handlers.resize()
   expect(document.documentElement.dataset.keyboard).toBe('open')
   expect(document.documentElement.style.getPropertyValue('--tt-viewport-h')).toBe('480px')
   expect(document.documentElement.style.getPropertyValue('--tt-viewport-top')).toBe('40px')
 
-  Object.assign(vv, { scale: 2 }) // a pinch-zoom is not a keyboard
+  Object.assign(vv, { scale: 2 })
   handlers.resize()
   expect(document.documentElement.dataset.keyboard).toBeUndefined()
 
-  Object.assign(vv, { scale: 1, height: 790, offsetTop: 0 }) // a small change (the URL bar) neither
+  Object.assign(vv, { scale: 1, height: 790, offsetTop: 0 })
   handlers.resize()
   expect(document.documentElement.dataset.keyboard).toBeUndefined()
   stop()

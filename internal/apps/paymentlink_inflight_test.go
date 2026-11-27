@@ -11,10 +11,6 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// A record edited while the provider makes its link, so that it no longer meets the action's condition:
-// the link exists at the provider, and the entry says so (it is kept with the entry, and a payment on it
-// is still recorded), not that nothing was created. The record isn't written. Retried once the record
-// meets the condition again, the entry writes that same link, and no other is made.
 func TestAConditionBrokenWhileTheLinkIsMadeSaysTheLinkIsKept(t *testing.T) {
 	p := newPay(t)
 	p.release(`"amount_field": "total", "currency": "EUR",`, `"amount_field": "total", "currency": "EUR", "when": {"field": "status", "op": "eq", "value": "sent"},`)
@@ -32,13 +28,11 @@ func TestAConditionBrokenWhileTheLinkIsMadeSaysTheLinkIsKept(t *testing.T) {
 	if data, rev2, _ := p.row(); strings.Contains(data, "pay_url\":\"h") || rev2 != rev {
 		t.Fatalf("the record was written: %s", data)
 	}
-	// Retried while the record still doesn't qualify: the same answer, and nothing asked of anyone.
 	expect(t, p.alice.do(http.MethodPost, appPath(p.shared, p.app.ID, fmt.Sprintf("/effects/%d/retry", e.ID)), map[string]any{}), http.StatusOK)
 	p.work()
 	if e := p.entries(p.alice).Effects[0]; e.Error == nil || e.Error.Code != apierr.CodeIntegrationConditionChangedLinkKept || p.links.count() != 1 {
 		t.Fatalf("entry = %+v, %d calls", e, p.links.count())
 	}
-	// The record qualifies again: a retry writes the link the entry made, the only one.
 	p.exec(`UPDATE app_rows SET data = json_set(data, '$.status', 'sent') WHERE id = ?`, p.invoice)
 	expect(t, p.alice.do(http.MethodPost, appPath(p.shared, p.app.ID, fmt.Sprintf("/effects/%d/retry", e.ID)), map[string]any{}), http.StatusOK)
 	p.work()
@@ -53,9 +47,6 @@ func TestAConditionBrokenWhileTheLinkIsMadeSaysTheLinkIsKept(t *testing.T) {
 	}
 }
 
-// An entry that wrote its link and stopped before it was noted done is done again. A `when` rule that
-// reads the link's own id field ("no link yet") fails on the record as the entry left it; the entry
-// then finds its own link on the record and ends done, instead of failing as if nothing were made.
 func TestACrashAfterTheWriteFinishesWhenTheRuleReadsTheLinksField(t *testing.T) {
 	p := newPay(t)
 	p.release(`"amount_field": "total", "currency": "EUR",`, `"amount_field": "total", "currency": "EUR", "when": {"field": "payment_id", "op": "ne", "value": "cs_test_1"},`)
@@ -86,7 +77,6 @@ func TestACrashAfterTheWriteFinishesWhenTheRuleReadsTheLinksField(t *testing.T) 
 		t.Fatal("the record was written again")
 	}
 
-	// Another entry, whose rule fails on a link that isn't its own, still fails as nothing was made.
 	q := newPay(t)
 	q.release(`"amount_field": "total", "currency": "EUR",`, `"amount_field": "total", "currency": "EUR", "when": {"field": "payment_id", "op": "ne", "value": "cs_other"},`)
 	q.send(q.alice, "op-send-0002")

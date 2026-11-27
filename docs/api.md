@@ -4361,6 +4361,7 @@ An integration looks like this:
   "currencies": ["EUR", "USD"],
   "secrets": {"api_key": "set", "webhook_secret": "not set"},
   "webhook_url": "https://taskto.example.com/hooks/0123456789abcdef0123456789abcdef",
+  "webhook_url_changed": false,
   "disabled": false,
   "disabled_at": null,
   "spaces": [12],
@@ -4399,6 +4400,12 @@ An integration looks like this:
   is made from the current `-public-url` each time, so it follows a change of it. The
   integration's `webhook_secret` is what verifies what arrives there. `last_event_at` is when the
   last verified event came.
+- **`webhook_url_changed`**: `true` when the address the `webhook_secret` was last saved for (the
+  `webhook_url` of that moment) isn't `webhook_url` any more: the public URL changed, or is gone.
+  The provider still sends to the old address, and Square signs each delivery over it, so its
+  deliveries are verified against that address until the admin registers the new one at the
+  provider and saves the `webhook_secret` again (the same value is fine), which records the new
+  address and makes this `false`. `false` when no address was recorded.
 - **`spaces`**: ids of the spaces whose apps may use the integration **that the caller may
   manage**: their own private space and the workspace's shared spaces (archived ones too, so
   they can be taken out). Another person's private space is never in it: **`other_spaces`**
@@ -4587,15 +4594,20 @@ In order:
    anything is looked up).
 3. The integration is found by `public_id`. The signature is verified **over the raw bytes,
    before the body is parsed**, in constant time, against the integration's webhook secret and,
-   for a day after an admin replaces it, the one it replaced. The provider's tolerance applies
-   to the signed timestamp, in both directions (Stripe: five minutes). The same work is done
+   for a day after an admin replaces it, the one it replaced. Square's signature also covers the
+   notification URL: each secret's own, the one it was saved for (`webhook_url_changed`; the
+   replaced secret keeps the address it was saved for), made from the public URL, never from the
+   request's `Host`. The provider's tolerance applies to the signed
+   time (Stripe: its `t`, five minutes either way; Square: the event's `created_at`, inside the
+   signed body, up to a day and five minutes back, since Square retries for a day, and five minutes
+   ahead). The same work is done
    for an id that can't be delivered to (one that doesn't exist, is disabled or has no secret,
    or isn't of the shape of an id), against a secret of the server's own.
    Only a delivery that verifies counts against the second limit, 600 per minute per id (over
    it: `429 webhook_rate_limited`), so unsigned requests can't use up an integration's quota.
 4. Every way of not getting this far is **one answer**, byte for byte: `404 not_found`, with
    the same headers. An id that doesn't exist, one that is disabled or has no webhook secret,
-   an id of a provider that has no webhooks yet, a secret that doesn't open, a missing,
+   a secret that doesn't open, a delivery signed over another address (Square), a missing,
    malformed, wrong, tampered or too old signature, and a valid signature of *another*
    integration. The response never says which, and nothing about the workspaces or
    integrations that exist.

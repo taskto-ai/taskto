@@ -14,9 +14,6 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// The key has an object on record, seen and not checked (A, open at Stripe). A lookup lists another
-// session of the key's token (B), which expires before its state is read. B never takes A's place on
-// the key, and its expiry never moves the ref on: A may be paid. The entry waits, nothing is made.
 func TestAnotherSessionOfTheKeyNeverReplacesTheOneOnRecord(t *testing.T) {
 	ctx := context.Background()
 	p := newPay(t, publicURL)
@@ -62,9 +59,6 @@ func TestAnotherSessionOfTheKeyNeverReplacesTheOneOnRecord(t *testing.T) {
 	}
 }
 
-// Another try notes an object A on the key while this try's lookup runs from an older read of the key
-// (which had none). What this try finds (a session B that expired, or one it would install) never takes
-// the key from A: the key isn't marked expired, and B is never installed as the ref's link.
 func TestAnOlderReadOfTheKeyNeverOverridesTheObjectNotedSince(t *testing.T) {
 	ctx := context.Background()
 	setup := func(t *testing.T) (*pay, paylink.Request, ref, attempt, string) {
@@ -121,10 +115,6 @@ func TestAnOlderReadOfTheKeyNeverOverridesTheObjectNotedSince(t *testing.T) {
 	})
 }
 
-// The first call's answer was lost (no object on record, session A open at Stripe), and the lookup
-// lists another session B of the key's token first, which expires before its state is read. B's expiry
-// doesn't move the ref on while A, another object of the token, may still be paid: the lookup is read
-// again, and the entry waits for a person instead of taking a new key.
 func TestAnExpiryMovesTheRefOnOnlyWhenNoOtherObjectOfTheTokenMayBePaid(t *testing.T) {
 	ctx := context.Background()
 	p := newPay(t, publicURL)

@@ -1,12 +1,3 @@
-// Photos in an app: an input that takes them from the camera or the library and uploads each to
-// the server, and the thumbnails that show them. A photo is never an outside address: it is an
-// attachment the server keeps, fetched with the viewer's own session (docs/api.md).
-//
-// The camera is one way in and never the only one. A file input with `capture` opens the camera on
-// a phone, and if the person has blocked it (or the device has none) the library's input, which
-// has no `capture`, still works. A photo taken this way is sent to the app: the browser may not
-// keep a copy in the device's camera roll, so nothing here promises one.
-
 import { createContext, useContext, useEffect, useId, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { useFormat, useT } from '../i18n'
@@ -26,29 +17,20 @@ import {
 } from './photos'
 import './capture.css'
 
-// Where the app's attachments are (…/spaces/{space}/apps/{app}), given by the screen that draws
-// them; uploads is false where the screen is a preview, whose buttons change nothing.
 export type AppFiles = {
   base: string
   uploads: boolean
-  // Offline (docs/offline.md): there is no server to upload to. A photo is staged on the device and
-  // given a local id, which the record holds until the outbox has uploaded the photo and the
-  // server's id has replaced it.
   local?: LocalPhotos
 }
 
 export type LocalPhotos = {
-  // Keeps the photo in memory under a new id; it is written to the device with the record that holds it.
   stage(file: Blob): string
-  // Something an <img> can show for the id, if the photo is here.
   url(id: string): string | undefined
   forget(id: string): void
 }
 
 export const AppFilesContext = createContext<AppFiles | null>(null)
 
-// Whether the person has blocked the camera for this site, as far as the browser says: false if
-// it doesn't say, since the camera input is harmless then.
 export function useCameraBlocked(): boolean {
   const [blocked, setBlocked] = useState(false)
   useEffect(() => {
@@ -64,9 +46,7 @@ export function useCameraBlocked(): boolean {
           s.onchange = () => setBlocked(s.state === 'denied')
         })
         .catch(() => {})
-    } catch {
-      // No such permission here (some browsers refuse the name): not knowing is not blocking.
-    }
+    } catch {}
     return () => {
       live = false
       if (status) status.onchange = null
@@ -75,12 +55,10 @@ export function useCameraBlocked(): boolean {
   return blocked
 }
 
-// One upload that hasn't finished: on its way, or failed and waiting to be resumed.
 type Pending = {
   key: number
   name: string
   file: File
-  // Once the server has made the upload: what a retry resumes.
   id?: string
   sent: number
   failed?: string
@@ -101,7 +79,6 @@ export function PhotoField({
   field: string
   value: string[]
   limits?: PhotoLimits
-  // Called with the whole new list of attachment ids.
   onChange: (ids: string[]) => void
 }) {
   const t = useT()
@@ -110,12 +87,9 @@ export function PhotoField({
   const [problem, setProblem] = useState<string | null>(null)
   const cameraBlocked = useCameraBlocked()
   const hintId = useId()
-  // Uploads finish at different times: they add to the list as it is, not as it was drawn.
   const current = useRef(value)
   current.current = value
-  // The uploads of this screen that the person then removed, or cancelled: they stop.
   const stopped = useRef(new Set<number>())
-  // The photos uploaded here and not yet in a record: removing one discards it on the server too.
   const mine = useRef(new Set<string>())
 
   const uploads = !!files?.uploads
@@ -164,7 +138,6 @@ export function PhotoField({
         continue
       }
       if (files?.local) {
-        // Nothing to send now: the photo goes with the record, when the outbox sends it.
         current.current = [...current.current, files.local.stage(file)]
         onChange(current.current)
         continue
@@ -251,10 +224,6 @@ export function PhotoField({
         </ul>
       )}
       <div className="ui-photo-add">
-        {/* The camera: where the browser has one, this opens it; where it hasn't, or the person has
-            blocked it, the library's input below does the same job. A file input has no component of
-            its own: it is kept, unseen over its label, for the keyboard and screen readers, and the
-            label is what is seen, drawn as a button. */}
         <label className={buttonClass()} data-disabled={!canAdd || cameraBlocked || undefined}>
           <Icon name="upload" size={16} />
           {t('apps.photos.take')}
@@ -300,7 +269,6 @@ export function PhotoField({
   )
 }
 
-// The thumbnails of attachments, each opening its picture in a tab of its own.
 export function PhotoStrip({
   base,
   ids,
@@ -313,7 +281,6 @@ export function PhotoStrip({
   local?: LocalPhotos
 }) {
   const t = useT()
-  // Offline, only the photos this device holds can be shown: the others are on the server.
   if (local) ids = ids.filter((id) => local.url(id) !== undefined)
   if (ids.length === 0) return null
   return (

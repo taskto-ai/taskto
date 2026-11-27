@@ -3,9 +3,6 @@
     min-inline-size: 0;
   }
 
-  /* On a narrow screen the tabs scroll sideways in their row; the page doesn't, and the row never
-     scrolls up and down. The hairline under the row is drawn inside it, so the current tab's
-     rule can lie on it without overflowing it. */
   .ui-tabs-list {
     display: flex;
     gap: var(--space-1);
@@ -45,7 +42,6 @@
     outline-offset: calc(-1 * var(--line-focus));
   }
 
-  /* The current tab: ink text and an ink rule under it, so it is marked by more than colour. */
   .ui-tab[aria-current="page"],
   .ui-tab[aria-selected="true"] {
     color: var(--color-text);

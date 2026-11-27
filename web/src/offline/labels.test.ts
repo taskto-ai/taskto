@@ -1,7 +1,3 @@
-// The records an app shows offline read their choices by label (`_labels`, as the server's items have
-// them), whatever the copy held: a record changed on this device, one made on it, or one an older
-// server sent without them.
-
 import { expect, test } from 'vitest'
 import { itemsOf } from './local'
 import type { Download, OutboxItem } from './store'
@@ -43,9 +39,7 @@ const queued = (name: string, context: Record<string, unknown>, record: object, 
 test('a record reads its choice by label, and a change made here changes the label with it', () => {
   const d = copy([
     { id: 1, _revision: 1, description: 'Lunch', kind: 'food', _labels: { kind: 'Food' } },
-    // A copy taken from a server that sent no labels.
     { id: 2, _revision: 1, description: 'Bus', kind: 'travel' },
-    // An option with no label reads as it is stored.
     { id: 3, _revision: 1, description: 'Misc', kind: 'other' },
   ])
   const edit = queued('edit', { id: 1, kind: 'travel' }, { id: 1, revision: 1 }, 'update')

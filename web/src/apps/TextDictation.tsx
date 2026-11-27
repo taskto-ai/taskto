@@ -1,10 +1,3 @@
-// Puts a microphone (FieldDictation.tsx) beside the text fields an app's screen draws.
-//
-// A2UI's TextField is the renderer's own element, not ours, so this finds the ones on the screen,
-// as labels.ts finds their labels, and draws the microphone after each. What is dictated goes in as
-// typed text would: set on the input, with the input event the field listens to, so the screen's
-// data model takes it from there. Only free-text fields get one (not numbers or passwords).
-
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { FieldDictation } from './FieldDictation'
@@ -15,13 +8,11 @@ let ids = 0
 
 const FIELDS = 'a2ui-basic-textfield'
 
-// The workspace an app's routes are under (…/api/workspaces/{workspace}/…), if base says.
 export function workspaceOf(base: string | undefined): number | null {
   const m = base ? /\/workspaces\/(\d+)\//.exec(base) : null
   return m ? Number(m[1]) : null
 }
 
-// The text put into input where the cursor is, as the person's typing would.
 export function insertText(input: HTMLInputElement | HTMLTextAreaElement, text: string) {
   const at = input.selectionStart ?? input.value.length
   const end = input.selectionEnd ?? at

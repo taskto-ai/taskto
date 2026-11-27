@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 
-// Model providers: when a change takes away what had the keyboard (the removed row's menu), the
-// section's title takes it, as on the Integrations tab.
-
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { Me, ProviderAccount, Workspace } from '../api'

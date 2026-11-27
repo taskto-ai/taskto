@@ -1,11 +1,3 @@
-// An app the agent saved, shown in the conversation where it did: launched the same way the Apps
-// page launches it (AppStage), with a link to open it there. What it shows is labelled: the live
-// release, which people use and whose actions run as they do there (same session, CSRF guard and
-// the server's check that the user may write the space), or its draft, a preview, when the agent's
-// changes aren't published yet and the person may design or publish the app. An app the user
-// can't launch (gone, moved, in a space they can no longer read, or offline) is a short note
-// instead.
-
 import { ApiError, type App, api, ws } from '../api'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
@@ -19,8 +11,6 @@ import './AppPreview.css'
 
 export function AppPreview({ workspace, space, app }: { workspace: number; space: number; app: number }) {
   const base = `${ws(workspace)}/spaces/${space}/apps/${app}`
-  // null: the server has no such app for this user, the same answer for one in a space they
-  // can't read.
   const info = useLoad(
     () =>
       api<App>(base).catch((e: unknown) => {

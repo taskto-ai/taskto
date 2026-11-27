@@ -1,10 +1,3 @@
-// The approvals of apps' use of outside services, for the workspace's admins: what each app asks
-// (the contract, in plain words), by whom, in which space, and the decision: approve, choosing
-// which of the workspace's integrations it is connected to, reject, or revoke what was approved. The
-// queue holds only what the requester submitted and the names of the app and its space: an admin
-// reads no app and no record of it, which is why an app in someone's private space is approved the
-// same way. The server checks the role on every route; this only asks.
-
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
@@ -37,7 +30,6 @@ import './Approvals.css'
 type Filter = 'requested' | 'approved' | 'rejected' | 'revoked'
 const FILTERS: Filter[] = ['requested', 'approved', 'rejected', 'revoked']
 
-// What a decision on a request that was already decided says: the row on screen is out of date.
 const STALE = ['app_integration_not_pending', 'app_integration_not_approved']
 
 type Page = { items: IntegrationApproval[]; next: string | null }
@@ -51,22 +43,18 @@ export function ApprovalsTab({ workspace }: { workspace: number }) {
   const [more, setMore] = useState(false)
   const [reviewing, setReviewing] = useState<IntegrationApproval | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  // A decision that came too late (someone else decided the request first): said above the list.
   const [problem, setProblem] = useState<string | null>(null)
-  const [nonce, setNonce] = useState(0)
-  // The newest request for a list is the one that is shown: a slow answer for a filter left behind
-  // is dropped.
   const latest = useRef(0)
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the list is read again for another filter or after a decision
-  useEffect(() => {
+  const readList = useCallback((workspace: number, filter: Filter) => {
     const mine = ++latest.current
     setPage(null)
     setError(null)
     api<IntegrationApprovalList>(`${ws(workspace)}/integration-approvals?status=${filter}`)
       .then((r) => latest.current === mine && setPage({ items: r.approvals, next: r.next_cursor }))
       .catch((e: unknown) => latest.current === mine && setError(errorText(e)))
-  }, [workspace, filter, nonce])
+  }, [])
+  useEffect(() => readList(workspace, filter), [readList, workspace, filter])
 
   const older = useCallback(async () => {
     if (!page?.next) return
@@ -88,15 +76,13 @@ export function ApprovalsTab({ workspace }: { workspace: number }) {
     setReviewing(null)
     setProblem(null)
     setNotice(message)
-    setNonce((n) => n + 1)
+    readList(workspace, filter)
   }
-  // The request was decided meanwhile: the dialog closes and the list is read again, so what stays is
-  // what the server holds now, never the row that was open.
   const stale = (message: string) => {
     setReviewing(null)
     setNotice(null)
     setProblem(message)
-    setNonce((n) => n + 1)
+    readList(workspace, filter)
   }
 
   return (
@@ -171,7 +157,6 @@ export function ApprovalsTab({ workspace }: { workspace: number }) {
   )
 }
 
-// One request, whole: the contract in words, who asked, and what an admin may do with it as it stands.
 function ReviewDialog({
   workspace,
   approval: a,
@@ -189,14 +174,10 @@ function ReviewDialog({
   const f = useFormat()
   const waiting = a.status === 'requested'
   const approved = a.status === 'approved'
-  // A request that waits is decided with an integration, which only it reads.
   const integrations = useLoad(
     () => (waiting ? api<{ integrations: Integration[] }>(`${ws(workspace)}/integrations`) : Promise.resolve(null)),
     [workspace, waiting],
   )
-  // The spaces the admin manages: the ones whose grant they can keep in the integration's settings.
-  // Another member's private space is not among them, and neither the integrations' lists nor this
-  // one say anything of it, so what its approval made is read from the approval itself.
   const spaces = useLoad(
     () =>
       waiting || approved
@@ -211,18 +192,10 @@ function ReviewDialog({
 
   const options = (integrations.data?.integrations ?? []).filter((i) => i.kind === a.kind && !i.disabled)
   const picked = options.find((i) => String(i.id) === (chosen || (options.length === 1 ? String(options[0].id) : '')))
-  // The admin can't open another person's private space to allow the integration there: approving is
-  // how they consent to the app using it, so the space is allowed with the approval when it isn't yet.
   const allowing = picked !== undefined && !picked.spaces.includes(a.space_id)
   const space = a.space_kind === 'private' ? t('knowledge.spaces.private') : a.space_name
-  // Whether the admin can keep the space's grant, in Settings, Integrations: only a space they manage.
-  // Known only once the lookup has succeeded: a failed one is said, and guides neither way.
   const keepable = spaces.data == null ? undefined : spaces.data.some((s) => s.id === a.space_id)
 
-  // The grant of the space the approval made: it ends with the last approval that needs it, unless
-  // an admin keeps it in the integration's spaces. The queue says it of this approval's own space, so
-  // it is known for a space the admin can't list too. Read again before a revoke is confirmed
-  // (`revoke`), since another session may have kept the grant since the list was read.
   const madeGrantOf = (row: Pick<IntegrationApproval, 'status' | 'space_grant'>) =>
     row.status === 'approved' && row.space_grant === 'approval'
 
@@ -244,8 +217,6 @@ function ReviewDialog({
     }
   }
 
-  // The approval as the server holds it now, not as the list said when it was read: the warning the
-  // admin confirms must describe what the revoke does, so both what it is live as and the grant it made.
   const refreshed = async (): Promise<IntegrationApproval> => {
     let cursor: string | null = null
     do {
@@ -265,7 +236,6 @@ function ReviewDialog({
     try {
       row = await refreshed()
     } catch {
-      // The list's word stands; the server decides the revoke either way.
     } finally {
       setBusy(false)
     }
@@ -391,9 +361,6 @@ function ReviewDialog({
                   </Link>
                 </p>
               )}
-              {/* A space the admin doesn't manage (another member's private space) has no setting to keep
-                  its grant in, and the integrations' list doesn't say whether it has one: the grant lasts as
-                  long as the approval, whatever it was before. */}
               {picked && keepable === false && (
                 <p className="approvals-note">{t('settings.approvals.allowSpaceTemporary')}</p>
               )}

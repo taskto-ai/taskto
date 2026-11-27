@@ -6,25 +6,12 @@ import (
 	"unicode/utf8"
 )
 
-// The glossary correction: after any engine, words that sound like a glossary term but
-// came out spelled otherwise are replaced by the term. It runs on the server, so it works
-// for every engine, hosted ones included, without the glossary leaving the server.
-//
-//   - A run of up to maxSpan words matches a term when they are equal ignoring case,
-//     accents, punctuation and the spaces between the words ("task to" is "taskto").
-//   - A run of as many words as the term matches it when, the same way, they are within a
-//     small edit distance of it: 1 for terms of 6 to 9 letters, 2 for longer ones, and the
-//     first letter is the same. Shorter terms must match exactly.
-//   - A match that would only change case or accents is left alone for terms under four
-//     letters, so a term like "Go" doesn't capitalize every "go".
-
 const maxSpan = 4
 
 func isWordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.Is(unicode.Mn, r)
 }
 
-// accents maps accented Latin letters, lower-cased, to their base letter.
 var accents = func() map[rune]rune {
 	m := map[rune]rune{}
 	for base, list := range map[rune]string{
@@ -39,7 +26,6 @@ var accents = func() map[rune]rune {
 	return m
 }()
 
-// fold is s as matching compares it: lower case, without accents, of word characters only.
 func fold(s string) []rune {
 	out := make([]rune, 0, len(s))
 	for _, r := range s {
@@ -55,14 +41,11 @@ func fold(s string) []rune {
 	return out
 }
 
-// token is a word of the text, at text[start:end].
 type token struct {
 	start, end int
 	key        []rune
 }
 
-// tokenize finds the words of text: runs of word characters, with an apostrophe, hyphen or
-// period between two of them kept inside ("don't", "Wi-Fi", "Node.js").
 func tokenize(text string) []token {
 	var out []token
 	start := -1
@@ -97,10 +80,8 @@ type term struct {
 	words int
 }
 
-// corrector holds a glossary ready for matching.
 type corrector struct {
 	exact map[string]term
-	// fuzzy holds the terms long enough to match approximately, by word count and first letter.
 	fuzzy map[fuzzyKey][]term
 }
 
@@ -129,7 +110,6 @@ func newCorrector(terms []string) *corrector {
 	return c
 }
 
-// allowedDistance is how far a term of n letters may be from what was heard.
 func allowedDistance(n int) int {
 	switch {
 	case n >= 10:
@@ -140,7 +120,6 @@ func allowedDistance(n int) int {
 	return 0
 }
 
-// Correct returns text with glossary terms put in.
 func Correct(text string, terms []string) string {
 	if len(terms) == 0 {
 		return text
@@ -171,11 +150,8 @@ func (c *corrector) correct(text string) string {
 	return b.String()
 }
 
-// match finds the term that the words at the start of toks are: the longest exact match,
-// else the closest approximate one. It returns how many words it covers.
 func (c *corrector) match(text string, toks []token) (int, term, bool) {
 	n := 1
-	// Words join a run only across spaces, never across punctuation.
 	for n < len(toks) && n < maxSpan && strings.TrimSpace(text[toks[n-1].end:toks[n].start]) == "" {
 		n++
 	}
@@ -206,7 +182,6 @@ func (c *corrector) match(text string, toks []token) (int, term, bool) {
 	return bestSpan, best, bestDist >= 0
 }
 
-// distance is the Levenshtein distance between a and b, or limit+1 once it is over limit.
 func distance(a, b []rune, limit int) int {
 	if d := len(a) - len(b); d > limit || -d > limit {
 		return limit + 1

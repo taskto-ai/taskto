@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// An invoice of 10.00 is sent, and while its session is open the invoice is sent again with its total
-// changed to 11.00. The record keeps one payable link: the change of its total is refused while the
-// link may be paid (app_payment_link_open), so the second send never asks for a second session.
 func TestAnInvoiceSentAgainWithAnotherTotalKeepsOnePayableLink(t *testing.T) {
 	p := newPay(t, publicURL)
 	record, ref := p.sentInvoice(10, "EUR", "op-resend-0001")

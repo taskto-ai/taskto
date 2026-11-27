@@ -8,8 +8,6 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// The integration's key replaced by one of the other mode while the provider makes the link: the link
-// is of the old mode, and is not written to the record (integration_account_changed).
 func TestALinkOfAModeTheIntegrationNoLongerHasIsNotWritten(t *testing.T) {
 	p := newPay(t)
 	p.send(p.alice, "op-send-0001")

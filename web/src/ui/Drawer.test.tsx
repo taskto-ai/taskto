@@ -141,7 +141,6 @@ test("a screen's own class goes on the drawer, beside its own", () => {
   expect(drawer.className).toBe('ui-drawer ui-test-drawer')
 })
 
-// A board whose next card takes a while to load: the drawer shows the first card until it has.
 const never = new Promise<never>(() => {})
 function Waits(): null {
   use(never)
@@ -170,7 +169,6 @@ describe('Drawer, between renders', () => {
       </Suspense>,
     )
     fireEvent.click(screen.getByRole('button', { name: 'Next card' }))
-    // The next card is still loading: the drawer on screen is the first one's.
     expect(screen.getByRole('region', { name: 'Write the launch post' })).toBeTruthy()
     fireEvent.keyDown(document.body, { key: 'Escape' })
     expect(closed).toEqual(['Write the launch post'])

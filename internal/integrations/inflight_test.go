@@ -11,14 +11,9 @@ import (
 	"taskto.ai/taskto/internal/integrations/testprovider"
 )
 
-// invoiceAppWhen is the invoicing app whose link asks that the invoice be sent.
 var invoiceAppWhen = strings.Replace(invoiceApp, `"kind": "create_payment_link", "integration": "payments",`,
 	`"kind": "create_payment_link", "integration": "payments", "when": {"field": "status", "op": "eq", "value": "sent"},`, 1)
 
-// The invoice is taken back to a draft while Stripe makes its link: the link exists at Stripe, and
-// is not written to the record, so the entry says it was made and kept (not that nothing was). The
-// reference keeps it, so a payment on it is never lost: it settles the reference, and the admins are
-// told that the app's rule left the record as it was.
 func TestALinkMadeWhileTheRecordStoppedQualifyingKeepsItsPayment(t *testing.T) {
 	if invoiceAppWhen == invoiceApp {
 		t.Fatal("the invoicing app has no payment link effect to add a rule to")
@@ -54,9 +49,6 @@ func TestALinkMadeWhileTheRecordStoppedQualifyingKeepsItsPayment(t *testing.T) {
 	}
 }
 
-// The record stops meeting the condition while its entry waits on an unknown outcome (the call's answer
-// was lost, and the session it made exists at Stripe). The entry is not told "nothing was created": it
-// stays on the key's lookup, finds the session, keeps it with its reference, and says so.
 func TestAConditionBrokenWhileTheOutcomeIsUnknownKeepsLookingForTheLink(t *testing.T) {
 	p := newPayWith(t, publicURL, invoiceAppWhen)
 	record := p.invoice(10, "EUR")

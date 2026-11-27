@@ -6,20 +6,9 @@ import (
 	"slices"
 )
 
-// Each action has a fixed set of details, each of a fixed type. A detail that isn't in its
-// action's set, or whose value isn't of its type, makes Record fail, so free text a person typed
-// (a token's name, a space's title, a model's name) can't get into the log, whatever it holds:
-// the log carries the target's id, and the names of the fields that changed, instead.
-//
-// The text kinds are the ones whose values are checked against a pattern too narrow for a
-// credential to pass as them, or come from the code or the operator, not from a person's typing.
-
-// kind is the type of one detail: it checks a value and returns the form to store.
 type kind struct {
-	name  string
-	check func(v any) (any, error)
-	// boolean kinds may carry a secret's name ("api_key_changed"): they say that something
-	// changed, never what it is.
+	name    string
+	check   func(v any) (any, error)
 	boolean bool
 }
 
@@ -46,12 +35,10 @@ func matching(name string, re *regexp.Regexp, max int) kind {
 	return typed(name, func(s string) bool { return len(s) <= max && re.MatchString(s) })
 }
 
-// oneOf is a string from a fixed list.
 func oneOf(values ...string) kind {
 	return typed("one of "+fmt.Sprint(values), func(s string) bool { return slices.Contains(values, s) })
 }
 
-// someOf is a list of strings from a fixed list: the names of fields.
 func someOf(values ...string) kind {
 	k := typed("list of "+fmt.Sprint(values), func(l []string) bool {
 		if len(l) > maxDetailList {
@@ -78,27 +65,20 @@ var (
 		}
 		return nil, fmt.Errorf("a %T isn't a whole number", v)
 	}}
-	// tag is a short code: a provider's id from the operator's file, a reason code, a language.
-	tag = matching("tag", tagRe, 35)
-	// host is the host (and port) of an address, never its path or credentials.
-	host = matching("host", hostRe, 255)
-	// email is an address that has been through the same checks as an account's.
+	tag   = matching("tag", tagRe, 35)
+	host  = matching("host", hostRe, 255)
 	email = matching("email address", emailRe, 254)
 
-	roles      = oneOf("admin", "member")
-	spaceRoles = oneOf("editor", "viewer")
-	modes      = oneOf("own_else_shared", "own", "shared")
-	clis       = oneOf("claude", "codex", "grok")
-	// The integration registry's providers, kinds and modes (internal/integrations); a test there
-	// checks that every registered provider is recordable.
+	roles                = oneOf("admin", "member")
+	spaceRoles           = oneOf("editor", "viewer")
+	modes                = oneOf("own_else_shared", "own", "shared")
+	clis                 = oneOf("claude", "codex", "grok")
 	integrationProviders = oneOf("stripe", "square")
 	integrationKinds     = oneOf("payments")
 	integrationModes     = oneOf("test", "live")
 	cascadeFlag          = boolean
 )
 
-// schemas says which details each action may carry, and of what type. An action that isn't here
-// can't be recorded.
 var schemas = map[string]map[string]kind{
 	SetupCompleted:       {},
 	LoginSucceeded:       {"method": oneOf("password")},
@@ -175,8 +155,6 @@ var schemas = map[string]map[string]kind{
 		"notice_confirmed": boolean,
 	},
 
-	// An integration's secrets are said to be set or changed, never what they are; its name is not
-	// recorded (the target's id says which it was).
 	IntegrationCreated: {
 		"provider": integrationProviders, "kind": integrationKinds, "mode": integrationModes,
 		"api_key_set": boolean, "webhook_secret_set": boolean,
@@ -186,16 +164,13 @@ var schemas = map[string]map[string]kind{
 		"fields":          someOf("display_name", "settings", "max_amount", "currencies", "api_key", "webhook_secret"),
 		"api_key_changed": boolean, "webhook_secret_changed": boolean,
 	},
-	IntegrationRemoved:       {"provider": integrationProviders, "kind": integrationKinds},
-	IntegrationDisabled:      {"provider": integrationProviders},
-	IntegrationEnabled:       {"provider": integrationProviders},
-	IntegrationSpacesChanged: {"provider": integrationProviders, "added": number, "removed": number},
-	IntegrationSpacesKept:    {"provider": integrationProviders, "kept": number},
-	// The app and the entry by id; never the amount or the record.
+	IntegrationRemoved:        {"provider": integrationProviders, "kind": integrationKinds},
+	IntegrationDisabled:       {"provider": integrationProviders},
+	IntegrationEnabled:        {"provider": integrationProviders},
+	IntegrationSpacesChanged:  {"provider": integrationProviders, "added": number, "removed": number},
+	IntegrationSpacesKept:     {"provider": integrationProviders, "kept": number},
 	IntegrationNewLinkAllowed: {"provider": integrationProviders, "app_id": number, "effect_id": number},
 
-	// An approval names the app and the integration by id, and the slot by its kind: the slot's own
-	// name is the app builder's text, so it is not recorded.
 	AppIntegrationRequested: {"kind": integrationKinds, "app_id": number},
 	AppIntegrationApproved: {
 		"kind": integrationKinds, "app_id": number, "integration_id": number, "provider": integrationProviders,

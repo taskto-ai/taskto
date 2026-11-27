@@ -1,6 +1,3 @@
-/* An app the agent saved, launched in the conversation (AppPreview): compact, its screen scrolling
-   within itself so a long form doesn't take the whole conversation. */
-
 @layer screens {
   .ui-app-preview {
     display: grid;

@@ -11,7 +11,6 @@ test('the first window is the history', () => {
 
 test('entries that leave the window stay', () => {
   const first = mergeView(null, { entries: entries(5, 6, 7), before: 4 })
-  // The window drops its oldest: they stay, and so does what came before them.
   const moved = mergeView(first, { entries: entries(7, 8), before: 6 })
   expect(ids(moved)).toEqual([5, 6, 7, 8])
   expect(moved.before).toBe(4)
@@ -36,6 +35,5 @@ test('a page for where the history no longer starts is dropped', () => {
 
 test('a window that no longer joins what was kept starts again', () => {
   const h = mergeView(null, { entries: entries(5, 6), before: 4 })
-  // A reconnect that missed 7 to 9: what was kept can't be shown with a hole in it.
   expect(mergeView(h, { entries: entries(10, 11), before: 9 })).toEqual({ entries: entries(10, 11), before: 9 })
 })

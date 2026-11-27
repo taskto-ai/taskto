@@ -17,22 +17,14 @@ import (
 	"taskto.ai/taskto/internal/mail"
 )
 
-// mailTestTimeout bounds a test send, on top of the sender's own.
 const mailTestTimeout = 45 * time.Second
 
 const (
-	// defaultMailTestCooldown is how long a person waits between test sends, whatever
-	// workspace they are an admin of: the route sends real mail through the operator's relay.
 	defaultMailTestCooldown = 30 * time.Second
-	// mailTestConcurrency is how many test sends the whole server makes at once.
-	mailTestConcurrency = 3
-	// busyRetryAfter is what a person is told to wait when the server's test sends are all busy.
-	busyRetryAfter = 5 * time.Second
+	mailTestConcurrency     = 3
+	busyRetryAfter          = 5 * time.Second
 )
 
-// mailTestGate limits the test route: one send per person per cooldown (across workspaces:
-// the key is the user), and at most mailTestConcurrency at once on the server. It is in
-// memory; a restart forgets it, which is fine for a courtesy to the operator's relay.
 type mailTestGate struct {
 	cooldown time.Duration
 	now      func() time.Time
@@ -49,9 +41,6 @@ func newMailTestGate(cooldown time.Duration, now func() time.Time) *mailTestGate
 	return &mailTestGate{cooldown: cooldown, now: now, last: map[int64]time.Time{}}
 }
 
-// enter lets user send, and returns the function that ends the send. If user sent a test less
-// than a cooldown ago, or the server's test sends are all busy, it returns false and how long
-// to wait. A refused attempt doesn't start a new cooldown.
 func (g *mailTestGate) enter(user int64) (leave func(), ok bool, wait time.Duration) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -62,7 +51,7 @@ func (g *mailTestGate) enter(user int64) (leave func(), ok bool, wait time.Durat
 	if g.running >= mailTestConcurrency {
 		return nil, false, busyRetryAfter
 	}
-	for u, at := range g.last { // the ones that ended their cooldown no longer count
+	for u, at := range g.last {
 		if now.Sub(at) >= g.cooldown {
 			delete(g.last, u)
 		}
@@ -79,30 +68,21 @@ func (g *mailTestGate) enter(user int64) (leave func(), ok bool, wait time.Durat
 	}, true, 0
 }
 
-// mailRoutes mounts the admins' outgoing email routes (docs/api.md#outgoing-email). The
-// SMTP server is the whole server's, set by its operator (docs/install.md#email), so only
-// operators see it (auth.Service.RequireOperator), as they see the backups, and not the admins
-// of a workspace someone else made. svc may be nil: not configured.
 func mailRoutes(mux *http.ServeMux, accounts *auth.Service, svc *mail.Service, gate *mailTestGate) {
 	mux.Handle("GET /api/workspaces/{workspace}/mail", accounts.RequireOperator(mailStatus(svc, accounts)))
 	mux.Handle("POST /api/workspaces/{workspace}/mail/test", accounts.RequireOperator(mailTest(svc, accounts, gate)))
 }
 
-// mailStatus is GET /api/workspaces/{workspace}/mail: whether the server can send email, and
-// where. It never says the user name or the password, only whether the server signs in.
 func mailStatus(svc *mail.Service, accounts *auth.Service) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reply := struct {
-			Configured bool `json:"configured"`
-			// SendsLinks is whether the server emails reset and invite links: it also needs the
-			// public address (docs/install.md#email), which a link is built on.
+			Configured bool   `json:"configured"`
 			SendsLinks bool   `json:"sends_links"`
 			Host       string `json:"host,omitempty"`
 			Port       int    `json:"port,omitempty"`
 			Security   string `json:"security,omitempty"`
 			From       string `json:"from,omitempty"`
-			// Password is "set" or "not set", never the password.
-			Password string `json:"password,omitempty"`
+			Password   string `json:"password,omitempty"`
 		}{SendsLinks: accounts.EmailLinks()}
 		if svc.Configured() {
 			info := svc.Info()
@@ -114,14 +94,10 @@ func mailStatus(svc *mail.Service, accounts *auth.Service) http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(reply) //nolint:gosec // G117: "password" is "set" or "not set", never the password
+		_ = json.NewEncoder(w).Encode(reply)
 	})
 }
 
-// mailTest is POST /api/workspaces/{workspace}/mail/test: sends a test message to the
-// caller's own address, in their language. Only to themselves: an admin can't use the
-// server to send mail to anyone else through this route. It is limited (mailTestGate): 429
-// with Retry-After when the caller sent a test a moment ago or the server is busy with them.
 func mailTest(svc *mail.Service, accounts *auth.Service, gate *mailTestGate) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !svc.Configured() {
@@ -151,8 +127,6 @@ func mailTest(svc *mail.Service, accounts *auth.Service, gate *mailTestGate) htt
 	})
 }
 
-// writeMailError answers a failed send. The server's own reply can name hosts and
-// addresses, so it goes to the log; the answer is a code the web app translates.
 func writeMailError(w http.ResponseWriter, r *http.Request, svc *mail.Service, err error) {
 	var se *mail.SendError
 	if !errors.As(err, &se) {
@@ -160,7 +134,6 @@ func writeMailError(w http.ResponseWriter, r *http.Request, svc *mail.Service, e
 		apierr.Internal(w)
 		return
 	}
-	// SendError holds the stage and the reply's code, never the relay's text.
 	slog.WarnContext(r.Context(), "mail: the test email failed", "stage", se.Stage, "smtp_code", se.Code, "err", err)
 	host := svc.Info().Host
 	if refused := egress.Refusal(err); refused != nil {

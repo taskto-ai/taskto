@@ -13,7 +13,6 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 )
 
-// cardHitJSON is a card found, as the API says it.
 type cardHitJSON struct {
 	SpaceID   int64  `json:"space_id"`
 	SpaceName string `json:"space_name"`
@@ -35,7 +34,6 @@ func boardsURL(sp access.Space) string {
 	return fmt.Sprintf("/api/workspaces/%d/spaces/%d/boards", sp.WorkspaceID, sp.ID)
 }
 
-// firstBoard is the first board of sp that u can list: a private space's personal board.
 func (w *world) firstBoard(u *user, sp access.Space) int64 {
 	w.e.t.Helper()
 	rec := u.do(http.MethodGet, boardsURL(sp), nil)
@@ -47,7 +45,6 @@ func (w *world) firstBoard(u *user, sp access.Space) int64 {
 	return list[0].ID
 }
 
-// teamBoard creates a team board in sp, as u.
 func (w *world) teamBoard(u *user, sp access.Space, name string) int64 {
 	w.e.t.Helper()
 	rec := u.do(http.MethodPost, boardsURL(sp), map[string]string{"name": name})
@@ -64,7 +61,6 @@ func cardURL(sp access.Space, board int64, tail string) string {
 	return fmt.Sprintf("%s/%d/cards%s", boardsURL(sp), board, tail)
 }
 
-// addCard adds a card to a board, as u.
 func (w *world) addCard(u *user, sp access.Space, board int64, title, body string) cardJSON {
 	w.e.t.Helper()
 	rec := u.do(http.MethodPost, cardURL(sp, board, ""), map[string]string{"title": title, "body": body})
@@ -85,7 +81,6 @@ func (w *world) commentOn(u *user, sp access.Space, board int64, c cardJSON, bod
 	expect(w.e.t, u.do(http.MethodPost, cardURL(sp, board, fmt.Sprintf("/%d/comments", c.ID)), map[string]string{"body": body}), http.StatusCreated)
 }
 
-// searchCards searches the workspace, or one space, for cards as u.
 func (w *world) searchCards(u *user, sp *access.Space, q string) *cardsReply {
 	w.e.t.Helper()
 	target := fmt.Sprintf("/api/workspaces/%d/search/cards?q=%s", w.ws, url.QueryEscape(q))
@@ -98,7 +93,6 @@ func (w *world) searchCards(u *user, sp *access.Space, q string) *cardsReply {
 	return &r
 }
 
-// titles lists the titles of the cards of a reply.
 func (r *cardsReply) titles() []string {
 	out := []string{}
 	for _, c := range r.Results {
@@ -107,7 +101,6 @@ func (r *cardsReply) titles() []string {
 	return out
 }
 
-// wantTitles checks which cards a reply has, in any order: use wantRanked for an order.
 func wantTitles(t *testing.T, who string, r *cardsReply, want ...string) {
 	t.Helper()
 	got := r.titles()
@@ -132,9 +125,6 @@ func wantRanked(t *testing.T, who string, r *cardsReply, want ...string) {
 	}
 }
 
-// Cards are found only in the boards of the spaces the caller can read: their private
-// space, and the shared spaces they are a member of; never another member's private space
-// or a shared space they aren't in, admins included.
 func TestCardSearchIsOnlyOfBoardsTheCallerCanRead(t *testing.T) {
 	w := newWorld(t)
 	team := w.teamBoard(w.owner, w.team, "Roadmap")
@@ -146,14 +136,11 @@ func TestCardSearchIsOnlyOfBoardsTheCallerCanRead(t *testing.T) {
 	w.addCard(w.mallory, w.private[w.mallory], w.firstBoard(w.mallory, w.private[w.mallory]), "Quokka plot", "Mallory's own")
 	w.addCard(w.owner, w.private[w.owner], w.firstBoard(w.owner, w.private[w.owner]), "Quokka ledger", "Owner's own")
 
-	// Each sees the team's board, and their own board, and nothing else; the owner is the
-	// workspace's admin and a member of the secret space, but not of the others' private ones.
 	wantTitles(t, "alice", w.searchCards(w.alice, nil, "quokka"), "Quokka diary", "Quokka rollout")
 	wantTitles(t, "bob (a viewer)", w.searchCards(w.bob, nil, "quokka"), "Quokka notes", "Quokka rollout")
 	wantTitles(t, "mallory (in no shared space)", w.searchCards(w.mallory, nil, "quokka"), "Quokka plot")
 	wantTitles(t, "owner", w.searchCards(w.owner, nil, "quokka"), "Quokka acquisition", "Quokka ledger", "Quokka rollout")
 
-	// One space: its own cards, and 404 for a space the caller can't read, as for documents.
 	wantTitles(t, "alice in team", w.searchCards(w.alice, &w.team, "quokka"), "Quokka rollout")
 	alicePrivate, malloryPrivate := w.private[w.alice], w.private[w.mallory]
 	wantTitles(t, "alice in her own space", w.searchCards(w.alice, &alicePrivate, "quokka"), "Quokka diary")
@@ -167,17 +154,13 @@ func TestCardSearchIsOnlyOfBoardsTheCallerCanRead(t *testing.T) {
 		rec := c.who.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces/%d/search/cards?q=quokka", c.sp.WorkspaceID, c.sp.ID), nil)
 		expect(t, rec, http.StatusNotFound)
 	}
-	// Without a session, nothing.
 	anon := &user{e: w.e}
 	expect(t, anon.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/cards?q=quokka", w.ws), nil), http.StatusUnauthorized)
 
-	// A space's cards are never found through another space the caller can read.
 	wantTitles(t, "mallory in her own space", w.searchCards(w.mallory, &malloryPrivate, "quokka"), "Quokka plot")
 	wantTitles(t, "mallory searching for what only the team has", w.searchCards(w.mallory, nil, "rollout"))
 }
 
-// A person who left the workspace has a private space nobody reads, and the cards of an
-// archived space or board are still found by those who read them.
 func TestCardSearchOfClosedAndArchivedSpaces(t *testing.T) {
 	w := newWorld(t)
 	oldBoard := w.teamBoard(w.owner, w.old, "Old board")
@@ -189,10 +172,7 @@ func TestCardSearchOfClosedAndArchivedSpaces(t *testing.T) {
 	expect(t, w.owner.do(http.MethodPatch, boardsURL(w.team)+fmt.Sprintf("/%d", team), map[string]any{"archived": true, "version": 1}), http.StatusOK)
 	w.finish()
 
-	// Alice reads the archived space (a viewer) and the archived board.
 	wantTitles(t, "alice", w.searchCards(w.alice, nil, "narwhal"), "Narwhal archive", "Narwhal census")
-	// Nobody reads the private space of the person who left, the owner included; the
-	// stranger has no access to anything.
 	wantTitles(t, "owner", w.searchCards(w.owner, nil, "narwhal"), "Narwhal archive", "Narwhal census")
 	rec := w.stranger.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/cards?q=narwhal", w.ws), nil)
 	if rec.Code == http.StatusOK {
@@ -200,8 +180,6 @@ func TestCardSearchOfClosedAndArchivedSpaces(t *testing.T) {
 	}
 }
 
-// What is found follows the card: its title, body, thread and column, in the same
-// transaction the board's change was made in or at the next search.
 func TestCardSearchFollowsTheCard(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")
@@ -214,21 +192,18 @@ func TestCardSearchFollowsTheCard(t *testing.T) {
 	found("spring", "Plan the orchard")
 	found("pears")
 
-	// A change to the title and body is searched at once; the words that went are gone.
 	c = w.patchCard(w.alice, w.team, board, c, map[string]any{"title": "Plan the vineyard", "body": "Pears in autumn"})
 	found("orchard")
 	found("spring")
 	found("vineyard", "Plan the vineyard")
 	found("pears", "Plan the vineyard")
 
-	// A comment changes no version of the card, and is searched too, by every reader.
 	w.commentOn(w.alice, w.team, board, c, "Grapes need a trellis")
 	found("trellis", "Plan the vineyard")
 	w.commentOn(w.alice, w.team, board, c, "Second thoughts about the pergola")
 	found("pergola", "Plan the vineyard")
 	found("trellis", "Plan the vineyard")
 
-	// Moving and archiving say where the card is; an archived card stays found.
 	moved := decode[struct {
 		ID      int64
 		Version int64
@@ -242,8 +217,6 @@ func TestCardSearchFollowsTheCard(t *testing.T) {
 		t.Fatalf("after the archive: %+v", r.Results)
 	}
 
-	// A card that is gone, with its board or its space, is no longer found, and its index
-	// goes with it.
 	if _, err := w.e.idx.db.Exec(`DELETE FROM boards WHERE id = ?`, board); err != nil {
 		t.Fatal(err)
 	}
@@ -254,8 +227,6 @@ func TestCardSearchFollowsTheCard(t *testing.T) {
 	}
 }
 
-// A card is found by its text, shown with the words that matched marked, never as markup;
-// documents and cards are searched apart.
 func TestCardSearchResultsAndDocuments(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")
@@ -264,7 +235,6 @@ func TestCardSearchResultsAndDocuments(t *testing.T) {
 	w.put(w.alice, w.team, "pangolin.md", "# Pangolins\nA document")
 
 	r := w.searchCards(w.bob, nil, "pangolin")
-	// A title counts more than the body.
 	wantRanked(t, "bob", r, "Pangolin", "Budget")
 	hit := r.Results[1]
 	if hit.SpaceName != "Team" || hit.BoardName != "Work" || hit.BoardID != board || hit.SpaceID != w.team.ID || hit.Column != "backlog" {
@@ -280,7 +250,6 @@ func TestCardSearchResultsAndDocuments(t *testing.T) {
 		t.Fatalf("snippet = %+v", hit.Snippet)
 	}
 
-	// The documents' search finds the document, not the cards.
 	rec := w.search(w.bob, nil, "pangolin")
 	expect(t, rec, http.StatusOK)
 	docs := decode[Results](t, rec)
@@ -288,7 +257,6 @@ func TestCardSearchResultsAndDocuments(t *testing.T) {
 		t.Fatalf("documents found: %+v", docs.Results)
 	}
 
-	// A query is checked as a document search's is.
 	for _, q := range []string{"", "   ", "!!!", strings.Repeat("a", MaxQueryLen+1)} {
 		rec := w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/cards?q=%s", w.ws, url.QueryEscape(q)), nil)
 		expect(t, rec, http.StatusBadRequest)
@@ -297,7 +265,6 @@ func TestCardSearchResultsAndDocuments(t *testing.T) {
 		http.StatusBadRequest, string(apierr.CodeSearchQueryRequired), nil)
 }
 
-// Cards come a page at a time, as documents do.
 func TestCardSearchPages(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")
@@ -306,7 +273,6 @@ func TestCardSearchPages(t *testing.T) {
 	}
 	var seen []string
 	next := 0
-	// Pages of 2, 2 and 1, the first two saying where the next starts.
 	for i, want := range []struct{ size, next int }{{2, 2}, {2, 4}, {1, -1}} {
 		rec := w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/cards?q=lemur&limit=2&offset=%d", w.ws, next), nil)
 		expect(t, rec, http.StatusOK)
@@ -331,7 +297,6 @@ func TestCardSearchPages(t *testing.T) {
 	}
 }
 
-// Text in scripts written without spaces is found anywhere in a card, as in a document.
 func TestCardSearchUnspacedScripts(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")
@@ -340,7 +305,6 @@ func TestCardSearchUnspacedScripts(t *testing.T) {
 	wantTitles(t, "bob", w.searchCards(w.bob, nil, "大阪"))
 }
 
-// The index of cards made at startup covers the cards there already were.
 func TestCardsAreIndexedAtStartup(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")
@@ -355,7 +319,6 @@ func TestCardsAreIndexedAtStartup(t *testing.T) {
 	wantTitles(t, "bob", w.searchCards(w.bob, nil, "capybara"), "Capybara census")
 }
 
-// A backlog longer than a batch is indexed in full, each batch from where the last stopped.
 func TestCardsBacklogLongerThanABatchIsIndexed(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")
@@ -375,7 +338,6 @@ func TestCardsBacklogLongerThanABatchIsIndexed(t *testing.T) {
 	}
 }
 
-// removeMember takes u out of a shared space, as the owner would, straight in the database.
 func (w *world) removeMember(sp access.Space, u *user) {
 	w.e.t.Helper()
 	if _, err := w.e.idx.db.Exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, sp.ID, u.id); err != nil {
@@ -383,8 +345,6 @@ func (w *world) removeMember(sp access.Space, u *user) {
 	}
 }
 
-// Who may read a space is asked again after the cards are indexed: a member removed while
-// a search indexes gets none of the space's cards, those indexed meanwhile included.
 func TestCardSearchChecksAccessAgainAfterIndexing(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")
@@ -397,7 +357,6 @@ func TestCardSearchChecksAccessAgainAfterIndexing(t *testing.T) {
 		sp   *access.Space
 	}{{"the workspace", nil}, {"the space", &w.team}} {
 		name, sp := c.name, c.sp
-		// Each case starts with bob in the team, and loses him during the search.
 		if _, err := w.e.idx.db.Exec(`INSERT OR IGNORE INTO space_members (space_id, user_id, role) VALUES (?, ?, 'viewer')`, w.team.ID, w.bob.id); err != nil {
 			t.Fatal(err)
 		}
@@ -415,8 +374,6 @@ func TestCardSearchChecksAccessAgainAfterIndexing(t *testing.T) {
 	}
 }
 
-// What is found, and in which order, depends on the cards the caller reads only: cards in
-// spaces they can't read change neither, and no score is returned.
 func TestCardSearchOrderIsNotChangedByCardsTheCallerCannotRead(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")
@@ -432,12 +389,10 @@ func TestCardSearchOrderIsNotChangedByCardsTheCallerCannotRead(t *testing.T) {
 		t.Fatalf("a title with every word goes first: %q", before)
 	}
 
-	// Alice's private board gets cards that make "zebra" common in the whole index.
 	mine := w.firstBoard(w.alice, w.private[w.alice])
 	for i := range 40 {
 		w.addCard(w.alice, w.private[w.alice], mine, fmt.Sprintf("Zebra %d", i), "zebra zebra zebra zebra")
 	}
-	// Indexed, as a search of Alice's or the sync at startup does.
 	if err := w.e.idx.syncCards(ctx, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +401,6 @@ func TestCardSearchOrderIsNotChangedByCardsTheCallerCannotRead(t *testing.T) {
 		t.Fatalf("bob's order changed with cards he can't read: %q, then %q", before, after)
 	}
 
-	// Nothing of a score is in the API's reply.
 	rec := w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/cards?q=zebra", w.ws), nil)
 	expect(t, rec, http.StatusOK)
 	var raw struct{ Results []map[string]any }
@@ -462,8 +416,6 @@ func TestCardSearchOrderIsNotChangedByCardsTheCallerCannotRead(t *testing.T) {
 	}
 }
 
-// A card edited after the search indexed it is not quoted from the old text: the search
-// indexes again and looks once more.
 func TestCardSearchDoesNotQuoteAnOldBody(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")
@@ -493,8 +445,6 @@ func TestCardSearchDoesNotQuoteAnOldBody(t *testing.T) {
 	}
 }
 
-// A card that keeps changing under the search is left out, and the reply says so rather
-// than quote old text.
 func TestCardSearchSaysWhenCardsAreBehind(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")
@@ -514,7 +464,6 @@ func TestCardSearchSaysWhenCardsAreBehind(t *testing.T) {
 	}
 	wantTitles(t, "bob", got, "Aardvark quiet")
 
-	// And a failed sync is the same: the cards behind are not quoted.
 	w.e.idx.afterCardSync = nil
 	if _, err := w.e.idx.db.Exec(`DROP TRIGGER search_cards_fts_delete`); err != nil {
 		t.Fatal(err)
@@ -530,7 +479,6 @@ func TestCardSearchSaysWhenCardsAreBehind(t *testing.T) {
 	wantTitles(t, "bob after a failed sync", got, "Aardvark quiet")
 }
 
-// Any change to a thread is searched: a comment edited or deleted, whatever wrote it.
 func TestCardSearchFollowsEditsAndDeletionsOfComments(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")
@@ -544,13 +492,11 @@ func TestCardSearchFollowsEditsAndDeletionsOfComments(t *testing.T) {
 	found("ibis", "Thread")
 	found("heron", "Thread")
 
-	// The newest comment is edited: the newest comment's ID doesn't change.
 	if _, err := w.e.idx.db.Exec(`UPDATE card_comments SET body = 'second said egret' WHERE body LIKE '%heron'`); err != nil {
 		t.Fatal(err)
 	}
 	found("heron")
 	found("egret", "Thread")
-	// An older one is edited, and one is deleted.
 	if _, err := w.e.idx.db.Exec(`UPDATE card_comments SET body = 'first said stork' WHERE body LIKE '%ibis'`); err != nil {
 		t.Fatal(err)
 	}
@@ -563,8 +509,6 @@ func TestCardSearchFollowsEditsAndDeletionsOfComments(t *testing.T) {
 	found("egret", "Thread")
 }
 
-// A search indexes the queued cards of the spaces it looks in, found from the queue and the
-// boards' index by space, never by a walk of every card; cards of other spaces wait.
 func TestCardSyncIsOfTheSpacesSearchedOnly(t *testing.T) {
 	w := newWorld(t)
 	w.addCard(w.alice, w.team, w.teamBoard(w.alice, w.team, "Work"), "Pika", "")
@@ -601,7 +545,6 @@ func TestCardSyncIsOfTheSpacesSearchedOnly(t *testing.T) {
 	}
 }
 
-// Cards never indexed, or indexed in an older format, are queued at startup.
 func TestCardsOfAnOldFormatAreQueued(t *testing.T) {
 	w := newWorld(t)
 	w.addCard(w.alice, w.team, w.teamBoard(w.alice, w.team, "Work"), "Dik-dik", "")
@@ -631,8 +574,6 @@ func TestCardsOfAnOldFormatAreQueued(t *testing.T) {
 	}
 }
 
-// A search whose every match is waiting to be indexed again has an empty page, and says it
-// is incomplete: the flag comes with the page, even when the page has no rows.
 func TestCardSearchWithNothingIndexableSaysIncomplete(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")
@@ -648,9 +589,6 @@ func TestCardSearchWithNothingIndexableSaysIncomplete(t *testing.T) {
 	}
 }
 
-// A card removed from a page by the access check leaves the page short: the one read ahead
-// to know whether another page follows is not returned in its place, or the next page, which
-// starts after the limit, would repeat it.
 func TestCardSearchPageIsNotRefilledWithTheLookahead(t *testing.T) {
 	w := newWorld(t)
 	w.addCard(w.bob, w.private[w.bob], w.firstBoard(w.bob, w.private[w.bob]), "Quoll own", "")
@@ -670,8 +608,6 @@ func TestCardSearchPageIsNotRefilledWithTheLookahead(t *testing.T) {
 	}
 }
 
-// An incomplete page offers no continuation: its offset would count the cards indexed at
-// that moment, and repeat or skip one once the rest are.
 func TestCardSearchIncompletePageHasNoNextOffset(t *testing.T) {
 	w := newWorld(t)
 	board := w.teamBoard(w.alice, w.team, "Work")

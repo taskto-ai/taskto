@@ -1819,6 +1819,12 @@
         "api_key": "Secret key",
         "webhook_secret": "Webhook signing secret"
       },
+      "secretOf": {
+        "square": {
+          "api_key": "Access token",
+          "webhook_secret": "Webhook signature key"
+        }
+      },
       "setting": {
         "environment": "Environment",
         "location_id": "Location ID"
@@ -1843,6 +1849,9 @@
       "allowedIn": "Allowed in: {spaces}",
       "allowedNowhere": "Not allowed in any space yet, so no app can use it.",
       "webhookAddress": "Register this address at the provider:",
+      "webhookMoved": "Address changed",
+      "webhookMovedHelp": "The server’s public URL changed after “{secret}” was saved, so the provider still sends events to the old address. Register the address above at the provider, then save “{secret}” again.",
+      "squareSignsAddress": "Square signs each event over this exact address: if the server’s public URL changes, register the new address at Square and save the signature key again.",
       "polling": "No public URL: webhooks are unavailable, and reconciling payments without them isn't built yet.",
       "switchedOff": "Switched off",
       "switchOff": "Switch off",

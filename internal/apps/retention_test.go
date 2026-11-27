@@ -10,7 +10,6 @@ import (
 	"taskto.ai/taskto/internal/config"
 )
 
-// at sets the service's clock to d after the real time now.
 func (w *world) at(d time.Duration) {
 	w.e.t.Helper()
 	base := time.Now()
@@ -46,8 +45,6 @@ func TestTheDefaultRetentionIsTheConfigsDefault(t *testing.T) {
 	}
 }
 
-// A deleted record is restorable inside the window; after it the record and its history are gone,
-// and a live record, with its history, is never touched.
 func TestDeletedRecordsAreRemovedAfterTheirRetention(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -62,7 +59,6 @@ func TestDeletedRecordsAreRemovedAfterTheirRetention(t *testing.T) {
 	expect(t, w.act(w.alice, s, a, "delete_expense", map[string]any{"id": lunch}, nil), http.StatusOK)
 	expect(t, w.act(w.alice, s, a, "delete_expense", map[string]any{"id": coffee}, nil), http.StatusOK)
 
-	// Inside the window nothing goes, and a record is restored as ever.
 	w.at(day(89))
 	if n := w.purge(); n != 0 {
 		t.Fatalf("purged %d records inside the window", n)
@@ -72,8 +68,6 @@ func TestDeletedRecordsAreRemovedAfterTheirRetention(t *testing.T) {
 		t.Fatalf("deleted = %+v", got)
 	}
 
-	// After it, the deleted record and its history are gone; the restored one and the live one
-	// are not, whatever their age.
 	w.at(day(91))
 	if n := w.purge(); n != 1 {
 		t.Fatalf("purged %d records, want the one still deleted", n)
@@ -92,9 +86,7 @@ func TestDeletedRecordsAreRemovedAfterTheirRetention(t *testing.T) {
 	if got := operations(decode[History](t, w.history(w.alice, s, a, lunch))); got != "3:restore 2:delete 1:insert" {
 		t.Fatalf("the restored record's history = %q", got)
 	}
-	// A purged record is as one that never was, for a change too.
 	expect(t, w.act(w.alice, s, a, "edit_expense", map[string]any{"id": coffee, "amount": "1"}, nil), http.StatusUnprocessableEntity)
-	// And nothing is left to purge.
 	if n := w.purge(); n != 0 {
 		t.Fatalf("purged %d more", n)
 	}
@@ -115,16 +107,12 @@ func TestRetentionOffKeepsDeletedRecordsForEver(t *testing.T) {
 	expect(t, w.restore(w.alice, s, a, id, nil), http.StatusOK)
 }
 
-// A loop of inserts and deletes, however long it runs, leaves the database a window's worth of
-// records, not all of them.
 func TestAnInsertAndDeleteLoopDoesNotGrowWithoutBound(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
 	a := w.editable(w.alice, s)
 	w.e.s.WithDeletedRetention(day(7))
 	const days = 40
-	// One base time, so the clock moves in exact days and the record deleted exactly seven days
-	// ago is exactly at the cutoff, which is kept (a record goes once strictly older).
 	base := time.Now()
 	for i := 0; i < days; i++ {
 		w.e.s.clock = func() time.Time { return base.Add(day(i)) }
@@ -132,15 +120,12 @@ func TestAnInsertAndDeleteLoopDoesNotGrowWithoutBound(t *testing.T) {
 		w.add(w.alice, s, a, d, "1")
 		id, _ := w.idOf(w.alice, s, a, d)
 		expect(t, w.act(w.alice, s, a, "delete_expense", map[string]any{"id": id}, nil), http.StatusOK)
-		// The deletion is stamped by the real clock; stamp it with the simulated day instead.
 		if _, err := w.e.db.Exec(`UPDATE app_rows SET deleted_at = ? WHERE id = ?`, w.e.s.stamp(w.e.s.clock()), id); err != nil {
 			t.Fatal(err)
 		}
 		w.purge()
 		rows := w.count(`SELECT count(*) FROM app_rows WHERE app_id = ?`, a.ID)
 		history := w.count(`SELECT count(*) FROM app_row_history WHERE app_id = ?`, a.ID)
-		// Today's record and the seven days' before are kept, each with two history entries;
-		// before the window is full, all of them.
 		want := min(i+1, 8)
 		if rows != want || history != 2*want {
 			t.Fatalf("day %d: %d rows and %d history entries are kept, want %d and %d", i, rows, history, want, 2*want)
@@ -148,7 +133,6 @@ func TestAnInsertAndDeleteLoopDoesNotGrowWithoutBound(t *testing.T) {
 	}
 }
 
-// More than a batch is removed, in as many as it takes.
 func TestPurgeRemovesMoreThanOneBatch(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -169,8 +153,6 @@ func TestPurgeRemovesMoreThanOneBatch(t *testing.T) {
 	}
 }
 
-// The receipt of an operation outlives the record it made, so a device that replays an old
-// request is answered as it was while the receipt is kept, and not made a second record.
 func TestAReceiptOutlivesItsPurgedRecord(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -198,13 +180,12 @@ func TestAReceiptOutlivesItsPurgedRecord(t *testing.T) {
 	if err := w.e.db.QueryRow(`SELECT record_id FROM app_operations WHERE operation = 'op-retention-0001'`).Scan(&record); err != nil || record != nil {
 		t.Fatalf("the receipt is gone or still names the record: %v, %v", record, err)
 	}
-	press() // answered from the receipt: no second record
+	press()
 	if n := w.count(`SELECT count(*) FROM app_rows WHERE app_id = ?`, a.ID); n != 1 {
 		t.Fatalf("the replay made records: %d rows, want the newer one", n)
 	}
 }
 
-// A record with an effect that waits is kept until it has run; its finished effects go with it.
 func TestARecordWithAnEffectThatWaitsIsKept(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -244,8 +225,6 @@ func TestARecordWithAnEffectThatWaitsIsKept(t *testing.T) {
 	}
 }
 
-// The photos of a purged record go with it: its rows at once, its files at the next sweep of
-// files no row knows.
 func TestAPurgedRecordsPhotosAreSweptAway(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -274,7 +253,6 @@ func TestAPurgedRecordsPhotosAreSweptAway(t *testing.T) {
 	}
 }
 
-// A record edited in a loop keeps its newest versions only.
 func TestAHistoryKeepsItsNewestRevisions(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -291,15 +269,11 @@ func TestAHistoryKeepsItsNewestRevisions(t *testing.T) {
 	if n != MaxRevisions || newest != MaxRevisions+21 || oldest != newest-MaxRevisions+1 {
 		t.Fatalf("history holds %d versions, %d to %d", n, oldest, newest)
 	}
-	// The record itself and its history's route are as ever.
 	if got := decode[History](t, w.history(w.alice, s, a, id)); len(got.History) == 0 || got.History[0].Revision != int64(newest) {
 		t.Fatalf("history = %+v", got.History)
 	}
 }
 
-// The id of a purged record is never given to another, not even when the table is emptied of
-// records after it (as a cascade of an app's deletion does): a stale change that names it finds
-// nothing, and the new record is untouched.
 func TestAPurgedRecordsIDIsNeverGivenAgain(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -317,8 +291,6 @@ func TestAPurgedRecordsIDIsNeverGivenAgain(t *testing.T) {
 	if second <= first {
 		t.Fatalf("the new record has id %d, not after %d", second, first)
 	}
-	// Whatever is left of the table goes (the cascade of an app's deletion): the next record is
-	// still above the one the sweep removed.
 	if _, err := w.e.db.Exec(`DELETE FROM app_rows`); err != nil {
 		t.Fatal(err)
 	}
@@ -327,17 +299,12 @@ func TestAPurgedRecordsIDIsNeverGivenAgain(t *testing.T) {
 	if third <= first {
 		t.Fatalf("the record after the table emptied has id %d, not after %d", third, first)
 	}
-	// A change that names the purged record is refused, and the new one is as it was.
 	expect(t, w.act(w.alice, s, a, "edit_expense", map[string]any{"id": first, "amount": "9"}, nil), http.StatusUnprocessableEntity)
 	if _, now := w.idOf(w.alice, s, a, "third"); now != rev {
 		t.Fatalf("the new record is at revision %d, was %d", now, rev)
 	}
 }
 
-// A sweep that stops after any batch (the server stopping, or its time budget) leaves nothing
-// dangling, and the next one finishes: each batch is one transaction that takes the record's
-// history, attachments, effects and search entries with it, and what a stop between the commit
-// and the removal of files leaves is files no row knows, which the file sweep removes.
 func TestAnInterruptedSweepLeavesNothingDanglingAndTheNextFinishes(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -358,7 +325,6 @@ func TestAnInterruptedSweepLeavesNothingDanglingAndTheNextFinishes(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	// A photo on the record deleted last, so its file is left when the sweep stops after the commit.
 	id := w.upload(w.alice, s, a, "photos", testPNG(t, 40, 30), 4096)
 	row := w.recordWith(w.alice, s, a, id)
 	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/actions"), ClientAction{
@@ -377,14 +343,12 @@ func TestAnInterruptedSweepLeavesNothingDanglingAndTheNextFinishes(t *testing.T)
 		}
 	}
 
-	// A sweep that is already stopped removes nothing.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if n, err := w.e.s.PurgeDeleted(ctx); err != nil || n != 0 {
 		t.Fatalf("a stopped sweep removed %d records: %v", n, err)
 	}
 
-	// One batch committed, then the server stopped.
 	cutoff := w.e.s.stamp(w.e.s.clock().Add(-w.e.s.DeletedRetention()))
 	if n, err := w.e.s.purgeBatch(context.Background(), cutoff); err != nil || n != retentionBatch {
 		t.Fatalf("a batch removed %d records: %v", n, err)
@@ -394,7 +358,6 @@ func TestAnInterruptedSweepLeavesNothingDanglingAndTheNextFinishes(t *testing.T)
 		t.Fatalf("%d deleted records remain after one batch", n)
 	}
 
-	// The next sweep finishes, and removes only what was deleted.
 	if _, err := w.e.s.PurgeDeleted(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -409,8 +372,6 @@ func TestAnInterruptedSweepLeavesNothingDanglingAndTheNextFinishes(t *testing.T)
 		t.Fatal("the attachment's row remains")
 	}
 
-	// The files, which the sweep stopped before removing, are removed by the file sweep, and
-	// running it twice is harmless.
 	if len(w.files(s, a)) == 0 {
 		t.Fatal("the files went before the sweep of files")
 	}

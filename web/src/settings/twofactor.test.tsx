@@ -7,8 +7,6 @@ import { type Call, fakeFetch } from '../test/fakes'
 import { answer, chooseFromMenu } from '../test/ui'
 import { SettingsPage } from './SettingsPage'
 
-// The QR writer is a .wasm file the browser loads: the panel is tested with a drawing in its place,
-// and the URI it is asked to draw.
 const drawn = vi.hoisted(() => ({ texts: [] as string[] }))
 vi.mock('./qr', () => ({
   qrSvg: async (text: string) => {
@@ -70,8 +68,7 @@ test('turning it on: the password, then the secret as a QR code and as text, the
   expect(secret.value).toBe('AAAABBBBCCCCDDDD')
   const qr = await screen.findByRole('img', { name: 'QR code for your authenticator app' })
   expect((qr as HTMLImageElement).src).toContain('data:image/svg+xml')
-  expect(drawn.texts).toEqual([URI]) // drawn here, from what the server sent: nothing goes elsewhere to be drawn
-  // Nothing is on until a right code: the status is still off.
+  expect(drawn.texts).toEqual([URI])
   expect(sent(calls, 'GET', '/api/me/two-factor')).toHaveLength(1)
 
   const code = screen.getByLabelText('Then enter the six-digit code the app shows')
@@ -83,7 +80,6 @@ test('turning it on: the password, then the secret as a QR code and as text, the
   fireEvent.click(screen.getByRole('button', { name: 'Confirm and turn on' }))
   const list = await screen.findByRole('list', { name: 'Your recovery codes' })
   expect(list.textContent).toBe('aaaa-bbbb-ccccdddd-eeee-ffff')
-  // It is on from this moment, while the codes are on screen: the badge says so.
   expect(await screen.findByText('On')).toBeTruthy()
   expect(screen.queryByText('Off')).toBeNull()
   expect(sent(calls, 'POST', '/api/me/two-factor/confirm').at(-1)).toEqual({
@@ -91,7 +87,6 @@ test('turning it on: the password, then the secret as a QR code and as text, the
     code: '123456',
   })
 
-  // Once they are saved the codes are gone from the page, and the panel says it is on.
   fireEvent.click(screen.getByRole('button', { name: 'I saved them' }))
   await screen.findByText('Two-factor login is on.')
   expect(screen.queryByText('aaaa-bbbb-cccc')).toBeNull()
@@ -113,7 +108,6 @@ test('with it on: new recovery codes and turning it off take the password and a 
   render(<SettingsPage me={me} workspace={member} tab="password" />)
   await screen.findByText('Two-factor login is on.')
   expect(screen.getByText('3 recovery codes left.')).toBeTruthy()
-  // Both actions wait for the password and a code.
   const newCodes = screen.getByRole('button', { name: 'Make new recovery codes' }) as HTMLButtonElement
   expect(newCodes.disabled).toBe(true)
   expect((screen.getByRole('button', { name: 'Turn off…' }) as HTMLButtonElement).disabled).toBe(true)
@@ -128,7 +122,6 @@ test('with it on: new recovery codes and turning it off take the password and a 
   fireEvent.click(screen.getByRole('button', { name: 'I saved them' }))
   await screen.findByText('Two-factor login is on.')
 
-  // The form was emptied after the first use. A wrong code, then the right one; it asks before it turns off.
   fireEvent.change(screen.getByLabelText('Your password'), { target: { value: 'fake-password-123' } })
   fireEvent.change(screen.getByLabelText('Code from your app, or a recovery code'), { target: { value: '000000' } })
   fireEvent.click(screen.getByRole('button', { name: 'Turn off…' }))
@@ -198,7 +191,6 @@ test("an admin clears a member's two-factor login, once asked, only where the me
   })
   render(<SettingsPage me={me} workspace={admin} tab="members" />)
   await screen.findByText('alice@example.com')
-  // Not for yourself (Settings has it), and not for a member who has none.
   expect(screen.queryByRole('button', { name: 'More actions for Owner' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'More actions for Bob' }))
   expect(screen.queryByRole('menuitem', { name: 'Clear two-factor' })).toBeNull()
@@ -225,8 +217,6 @@ test('a refused clear says why', async () => {
   expect((await screen.findByRole('alert')).textContent).toContain("you don't administer")
 })
 
-// A confirmation whose answer was lost may have turned it on: the panel asks the server instead of
-// staying on a form that can only answer "already on".
 test('a confirmation that fails reloads the status, and a panel that finds it on shows that', async () => {
   let enabled = false
   const calls = fakeFetch({
@@ -235,7 +225,7 @@ test('a confirmation that fails reloads the status, and a panel that finds it on
       body: { enrolment: 'fake-enrolment', secret: 'AAAABBBBCCCCDDDD', otpauth_uri: URI },
     },
     'POST /api/me/two-factor/confirm': () => {
-      enabled = true // the first confirmation went through, its answer didn't arrive
+      enabled = true
       return { status: 409, body: { error: 'on', code: 'two_factor_already_on' } }
     },
   })

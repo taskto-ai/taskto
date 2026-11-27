@@ -1,19 +1,3 @@
-// A signature field's input (docs/api.md, "Location, signature and barcode fields").
-//
-// Two ways to sign, both ending in a PNG that is uploaded exactly like a photo (photos.ts, the same
-// three steps and the same resume) and whose id the record holds:
-//
-// - drawing on a pad, with a finger, a stylus or a mouse. The pad is a canvas that takes pointer
-//   events and has `touch-action: none`, on the canvas only: a touch that starts on the pad draws
-//   and does not scroll, and the rest of the page scrolls as ever. The strokes are kept as fractions
-//   of the pad's size, so turning the device (the pad is resized) redraws them where they were;
-// - typing the name, with a checkbox saying that is the signature, for anyone who can't or would
-//   rather not draw (a keyboard, a switch device, a screen reader). The name is drawn into the same
-//   kind of picture.
-//
-// Once a record holds a signature the server refuses to change it, so a stored one is drawn
-// read-only; before that it can be redone, and the discarded picture is removed from the server.
-
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { useT } from '../i18n'
@@ -30,17 +14,14 @@ import { discardPhoto, photoUrl, thumbnailUrl, uploadPhoto } from './photos'
 import './capture.css'
 import { steps } from '../session'
 
-// A point of a stroke as fractions of the pad's width and height.
 type Point = { x: number; y: number }
 type Stroke = Point[]
 
-// The picture's size in pixels: three times as wide as high, as the pad is.
 export const SIGNATURE_WIDTH = 600
 export const SIGNATURE_HEIGHT = 200
 const INK = 'rgb(17 17 16)'
 const PAPER = '#fff'
 
-// Draws strokes into a context of a canvas of w by h pixels, ink on paper.
 export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[], w: number, h: number, ink: number) {
   ctx.fillStyle = PAPER
   ctx.fillRect(0, 0, w, h)
@@ -52,7 +33,6 @@ export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[], w:
   for (const stroke of strokes) {
     if (stroke.length === 0) continue
     if (stroke.length === 1) {
-      // A tap is a dot.
       ctx.beginPath()
       ctx.arc(stroke[0].x * w, stroke[0].y * h, ink / 2, 0, Math.PI * 2)
       ctx.fill()
@@ -65,7 +45,6 @@ export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[], w:
   }
 }
 
-// The PNG of strokes, at the picture's fixed size.
 export function strokesToCanvas(strokes: Stroke[]): HTMLCanvasElement {
   const canvas = document.createElement('canvas')
   canvas.width = SIGNATURE_WIDTH
@@ -75,7 +54,6 @@ export function strokesToCanvas(strokes: Stroke[]): HTMLCanvasElement {
   return canvas
 }
 
-// The PNG of a typed name, centred, in a script-like italic.
 export function nameToCanvas(name: string): HTMLCanvasElement {
   const canvas = document.createElement('canvas')
   canvas.width = SIGNATURE_WIDTH
@@ -89,7 +67,6 @@ export function nameToCanvas(name: string): HTMLCanvasElement {
     ctx.textBaseline = 'middle'
     let size = 64
     ctx.font = `italic ${size}px "Snell Roundhand", "Segoe Script", "Brush Script MT", cursive, serif`
-    // Shrink a long name to fit the picture.
     const width = ctx.measureText(name).width
     if (width > SIGNATURE_WIDTH - 40) {
       size = Math.max(16, Math.floor((size * (SIGNATURE_WIDTH - 40)) / width))
@@ -119,7 +96,6 @@ export function SignatureField({
   label?: string
   files: AppFiles | null
   field: string
-  // The id of the signature's attachment.
   value: string | undefined
   onChange: (id: string | undefined) => void
   readOnly?: boolean
@@ -127,7 +103,12 @@ export function SignatureField({
   const t = useT()
   const ids = useId()
   const heading = label ?? t('apps.signature.label')
-  const canvas = useRef<HTMLCanvasElement>(null)
+  const canvas = useRef<HTMLCanvasElement | null>(null)
+  const [pad, setPad] = useState<HTMLCanvasElement | null>(null)
+  const attachPad = useCallback((el: HTMLCanvasElement | null) => {
+    canvas.current = el
+    setPad(el)
+  }, [])
   const strokes = useRef<Stroke[]>([])
   const active = useRef<number | null>(null)
   const [count, setCount] = useState(0)
@@ -136,7 +117,6 @@ export function SignatureField({
   const [confirmed, setConfirmed] = useState(false)
   const [saving, setSaving] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
-  // The signatures uploaded here and not yet in a record: signing again discards the last.
   const mine = useRef(new Set<string>())
   const uploads = !!files?.uploads
 
@@ -147,12 +127,8 @@ export function SignatureField({
     drawStrokes(ctx, strokes.current, el.width, el.height, Math.max(2, el.width / 200))
   }, [])
 
-  // The pad is as wide as its space and a third as high; its pixels follow (with the device's pixel
-  // ratio), and the strokes, being fractions, are drawn again where they were. That is also what
-  // turning the device does.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: redraw is stable; the pad exists while signing
   useEffect(() => {
-    const el = canvas.current
+    const el = pad
     if (!el) return
     const resize = () => {
       const ratio = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 3) : 1
@@ -173,7 +149,7 @@ export function SignatureField({
       window.removeEventListener('resize', resize)
       window.removeEventListener('orientationchange', resize)
     }
-  }, [mode, value])
+  }, [pad, redraw])
 
   const point = (e: React.PointerEvent<HTMLCanvasElement>): Point => {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -186,7 +162,6 @@ export function SignatureField({
   }
 
   const down = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // Only the primary button of a mouse, and one finger or pen at a time.
     if ((e.pointerType === 'mouse' && e.button !== 0) || active.current !== null || !uploads || saving) return
     active.current = e.pointerId
     e.currentTarget.setPointerCapture?.(e.pointerId)
@@ -226,13 +201,10 @@ export function SignatureField({
     redraw()
   }
 
-  // Uploads the picture like a photo; its id goes to the form. Offline there is no server to upload to:
-  // the picture is staged on the device, as a photo is, and the queue uploads it with the record.
   const save = async (picture: HTMLCanvasElement) => {
     if (!files) return
     setSaving(true)
     setProblem(null)
-    // The picture is made before it goes up: a session that ended meanwhile uploads nothing.
     const s = steps()
     try {
       const png = await canvasToPng(picture)
@@ -249,7 +221,6 @@ export function SignatureField({
       setName('')
       setConfirmed(false)
     } catch (e) {
-      // What was drawn or typed stays, to send again.
       setProblem(t('apps.signature.failed', { error: errorText(e) }))
     } finally {
       setSaving(false)
@@ -267,7 +238,6 @@ export function SignatureField({
       <fieldset className="ui-capture" data-submit-free>
         <legend className="ui-capture-label">{heading}</legend>
         {files.local ? (
-          // Still on this device: nothing of it is on the server to link to.
           <img className="ui-signature-image" src={files.local.url(value)} alt={t('apps.signature.alt')} />
         ) : (
           <a className="ui-capture-link" href={photoUrl(files.base, value)} target="_blank" rel="noopener noreferrer">
@@ -313,9 +283,8 @@ export function SignatureField({
       />
       {mode === 'draw' ? (
         <>
-          {/* touch-action: none is on the pad and nowhere else: the page scrolls around it. */}
           <canvas
-            ref={canvas}
+            ref={attachPad}
             className="ui-signature-canvas"
             style={{ touchAction: 'none' }}
             role="img"

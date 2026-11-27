@@ -1,11 +1,3 @@
-// The component catalog personal apps may use: A2UI's basic components and functions, without
-// the ones that load or open outside addresses (an app is shared, and a picture from elsewhere
-// would tell that server who opens it), plus taskto.ai's own (Stat, Show, PhotoInput, Photos,
-// LocationInput, SignatureInput, BarcodeInput). A surface naming anything outside
-// it is rejected by the renderer, so an app can only ever be built from these. The Go server
-// checks every saved app against the same catalog (internal/apps/catalog.go); its
-// testdata/catalog.json is the contract the tests hold both to.
-
 import { createComponentImplementation, useSignalValue } from '@a2ui/react/v0_9'
 import { basicCatalog, Catalog, CommonSchemas } from '@a2ui/web_core/v0_9'
 import { z } from 'zod'
@@ -30,8 +22,6 @@ const StatApi = {
     .strict(),
 }
 
-// A labelled headline number, such as a total: a term and its value, drawn as a tile (AppView.css);
-// tiles in one of the app's rows wrap onto the next line when there isn't room.
 const Stat = createComponentImplementation(StatApi, ({ props }) => (
   <dl className="ui-stat">
     <dt className="ui-stat-label">{props.label}</dt>
@@ -39,9 +29,6 @@ const Stat = createComponentImplementation(StatApi, ({ props }) => (
   </dl>
 ))
 
-// Draws its child only while its rule holds of the form (/draft, the default) or of the record a
-// screen shows (/record). It hides an input for people and decides nothing the server accepts.
-// Reading the whole object is what keeps it up to date: a change to any of its fields notifies it.
 const ShowApi = {
   name: 'Show',
   schema: z
@@ -59,9 +46,6 @@ const Show = createComponentImplementation(ShowApi, ({ props, buildChild, contex
   return holds(props.when as Rule, values ?? {}) ? buildChild(props.child) : null
 })
 
-// An input for an attachment field: photos from the camera or the library, each uploaded to the
-// server, their ids held in value (a list at a path such as /draft/photos). field names the
-// collection's attachment field, whose limits the server puts at /_files/<field>.
 const PhotoInputApi = {
   name: 'PhotoInput',
   schema: z
@@ -89,9 +73,6 @@ const PhotoInput = createComponentImplementation(PhotoInputApi, ({ props, contex
   )
 })
 
-// An input for a location field (internal/apps/capture.go): the person's position, read once on a
-// button or as the form is submitted, or typed when the device can't give it. value holds the
-// location object; readOnly only shows what is stored.
 const LocationInputApi = {
   name: 'LocationInput',
   schema: z
@@ -119,8 +100,6 @@ const LocationInput = createComponentImplementation(LocationInputApi, ({ props, 
   )
 })
 
-// An input for a signature field: a pad to draw on, or a typed name, saved as a PNG attachment whose
-// id is held in value.
 const SignatureInputApi = {
   name: 'SignatureInput',
   schema: z
@@ -148,7 +127,6 @@ const SignatureInput = createComponentImplementation(SignatureInputApi, ({ props
   )
 })
 
-// An input for a barcode field: the code typed, or scanned with the camera.
 const BarcodeInputApi = {
   name: 'BarcodeInput',
   schema: z
@@ -173,8 +151,6 @@ const BarcodeInput = createComponentImplementation(BarcodeInputApi, ({ props, co
   )
 })
 
-// The thumbnails of the attachments whose ids are in value, drawn from the server with the viewer's
-// own session: never from an outside address.
 const PhotosApi = {
   name: 'Photos',
   schema: z
@@ -192,9 +168,6 @@ const Photos = createComponentImplementation(PhotosApi, ({ props }) => {
   ) : null
 })
 
-// The host of an app's screens, which the server adds as the root: it draws the screen the data
-// model names (/screen). Moving between screens only changes that, so what is typed into the form
-// (/draft) is where it was left.
 const ScreensApi = {
   name: 'Screens',
   schema: z
@@ -210,22 +183,11 @@ const Screens = createComponentImplementation(ScreensApi, ({ props, buildChild }
   return <div className="ui-app-screen">{shown ? buildChild(shown.child) : null}</div>
 })
 
-// Left out: what loads from elsewhere, and regular expressions. An app's pattern would run in
-// every viewer's browser against text other members can store, and a pattern such as (a+)+
-// or .*.*.*.* can freeze it; the server refuses both too (internal/apps/catalog.go).
 const LEFT_OUT = new Set(['Image', 'Video', 'AudioPlayer', 'openUrl', 'regex'])
 
-// A2UI's Icon, drawn by us: its name is SVG path data ({"svgPath": "…"}), which the server checked
-// on save and iconPath checks again here. The <svg> and <path> are made here and the string goes
-// only into the path's d attribute, through React: never markup, a URL, a style or a class. The
-// view box is fixed and the fill is the text's colour. A name draws nothing: this client loads no
-// icon font, and the word would read as text. An icon with a label is an image named so (the
-// server requires one for an icon that is all of a button); without one it is decoration, hidden
-// from assistive technology, as beside a label.
 const basicIcon = basicCatalog.components.get('Icon')
 const IconApi = { name: 'Icon', schema: basicIcon?.schema ?? z.object({}).passthrough() }
 
-// The surface's components as the definition gives them, for iconsShowingTheirName.
 function surfaceComponents(context: {
   surfaceComponents: { getAll(): Map<string, { type: string; properties: Record<string, unknown> }> }
 }) {
@@ -237,8 +199,6 @@ function surfaceComponents(context: {
 
 const Icon = createComponentImplementation(IconApi, ({ props, context }) => {
   const { name, accessibility } = props as { name?: unknown; accessibility?: { label?: unknown } }
-  // A name is all a control shows: the name as text, as it was before icons were paths, so the
-  // control keeps its size and its name. React puts it in as text, never as markup.
   if (typeof name === 'string') {
     const shown = iconsShowingTheirName(surfaceComponents(context)).has(context.componentModel.id)
     return shown ? <span className="ui-app-icon-name">{name}</span> : null
@@ -247,20 +207,20 @@ const Icon = createComponentImplementation(IconApi, ({ props, context }) => {
   if (!d) return null
   const label = typeof accessibility?.label === 'string' ? accessibility.label.trim() : ''
   return (
-    // biome-ignore lint/a11y/noSvgWithoutTitle: an icon without a label is aria-hidden; one with a label is named by aria-label.
     <svg
       className="ui-app-icon"
       viewBox="0 0 24 24"
       fill="currentColor"
       focusable="false"
-      {...(label ? { role: 'img', 'aria-label': label } : { 'aria-hidden': true })}
+      role={label ? 'img' : undefined}
+      aria-label={label || undefined}
+      aria-hidden={label ? undefined : true}
     >
       <path d={d} />
     </svg>
   )
 })
 
-// A2UI's TextField without its validationRegexp prop, for the same reason.
 const basicTextField = basicCatalog.components.get('TextField')
 const TextField = basicTextField && {
   ...basicTextField,
@@ -288,6 +248,4 @@ export const appsCatalog = new Catalog(
   [...basicCatalog.functions.values()].filter((f) => !LEFT_OUT.has(f.name)),
 )
 
-// The names of what the catalog holds, and what a release may need, live in capabilities.ts, which
-// doesn't load the renderer; they are said again here for the modules that have the catalog anyway.
 export { catalogCapabilities, DEFINITION_VERSION, EFFECT_KINDS, unsupportedBy } from './capabilities'

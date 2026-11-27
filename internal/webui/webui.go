@@ -1,12 +1,3 @@
-// Package webui serves the built web app from inside the binary.
-//
-// An embed directive can't reach outside its package directory, and fails when its
-// pattern matches nothing, while go vet, go test and CI's Go job run without building
-// the web app.
-// So the build copies web/dist into dist/ here (`make build`), and dist/ always holds
-// at least a committed .gitkeep for the pattern to match. Everything else in dist/ is
-// ignored by git (the root .gitignore's `dist/`; .gitkeep was force-added). When
-// dist/ has no index.html, the binary serves a placeholder page instead.
 package webui
 
 import (
@@ -28,8 +19,6 @@ var dist embed.FS
 //go:embed placeholder
 var placeholder embed.FS
 
-// FS returns the built web app and true, or a placeholder page and false when the
-// binary was built without the app.
 func FS() (fs.FS, bool) {
 	return pick(mustSub(dist, "dist"), mustSub(placeholder, "placeholder"))
 }
@@ -44,24 +33,11 @@ func pick(built, placeholder fs.FS) (fs.FS, bool) {
 func mustSub(fsys fs.FS, dir string) fs.FS {
 	sub, err := fs.Sub(fsys, dir)
 	if err != nil {
-		panic(err) // dir is a literal, valid path
+		panic(err)
 	}
 	return sub
 }
 
-// Handler serves the files of a built single-page app from fsys:
-//
-//   - a path naming a file serves that file, with its content type from its extension;
-//   - files under /assets/ are named by Vite after a hash of their content, so they are
-//     cached for a year, and a missing one is a 404 (not the page, which would be
-//     served as a script or stylesheet by mistake);
-//   - any other path serves index.html, so the app's own router can handle it. The page
-//     and other unhashed files are revalidated on every load (ETag): among them the
-//     service worker (sw.js) and the manifest, which must never be served stale, or an
-//     installed app would not learn of a new version.
-//
-// Routes the API owns are the caller's business: mount Handler on "/" only after them,
-// and keep it from answering their unknown paths with the page.
 func Handler(fsys fs.FS) (http.Handler, error) {
 	files := map[string]file{}
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
@@ -85,9 +61,6 @@ func Handler(fsys fs.FS) (http.Handler, error) {
 	return &handler{files: files}, nil
 }
 
-// contentTypes are set by extension where the system's MIME table, which Go reads, may lack
-// the type or differ: the manifest has none in Go's own table, and a service worker must be
-// served as JavaScript.
 var contentTypes = map[string]string{
 	".webmanifest": "application/manifest+json",
 	".js":          "text/javascript; charset=utf-8",
@@ -129,7 +102,5 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ct, ok := contentTypes[path.Ext(name)]; ok {
 		w.Header().Set("Content-Type", ct)
 	}
-	// ServeContent sets the content type from the name's extension and answers
-	// If-None-Match and Range requests.
 	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(f.data))
 }

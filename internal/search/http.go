@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,31 +21,26 @@ import (
 	"taskto.ai/taskto/internal/providers"
 )
 
-// Routes mounts the search endpoints on mux: a space's search behind c.RequireSpace
-// (Read), the workspace's behind a.RequireMember over the caller's Readable spaces, the
-// embeddings setting, which only admins change, and a space's consent to it, which those
-// who can read the space see, and its owner or editors change. docs/api.md describes them.
 func (x *Index) Routes(mux *http.ServeMux, a *auth.Service, c *access.Checker) {
-	// Searching takes access tokens; the settings and the consent take a session.
-	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search", auth.AcceptTokens(c.RequireSpace(access.Read, http.HandlerFunc(x.handleSpace))))
+	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search", auth.AcceptTokens(c.RequireSpace(access.Read, x.handleSpace(c))))
 	mux.Handle("GET /api/workspaces/{workspace}/search", auth.AcceptTokens(a.RequireMember(x.handleWorkspace(c))))
-	// The cards of boards, searched apart from the documents.
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search/cards", auth.AcceptTokens(c.RequireSpace(access.Read, x.handleSpaceCards(c))))
 	mux.Handle("GET /api/workspaces/{workspace}/search/cards", auth.AcceptTokens(a.RequireMember(x.handleWorkspaceCards(c))))
-	// The records of apps, and the caller's own conversations, searched apart too.
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search/records", auth.AcceptTokens(c.RequireSpace(access.Read, x.handleSpaceRecords(c))))
 	mux.Handle("GET /api/workspaces/{workspace}/search/records", auth.AcceptTokens(a.RequireMember(x.handleWorkspaceRecords(c))))
-	// A conversation is private to its owner and its routes take a session: so does this.
 	mux.Handle("GET /api/workspaces/{workspace}/search/conversations", a.RequireMember(http.HandlerFunc(x.handleConversations)))
 	mux.Handle("GET /api/workspaces/{workspace}/search/settings", a.RequireMember(http.HandlerFunc(x.handleSettings)))
 	mux.Handle("PUT /api/workspaces/{workspace}/search/settings", a.RequireAdmin(http.HandlerFunc(x.handleSetSettings)))
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search/embedding", c.RequireSpace(access.Read, http.HandlerFunc(x.handleConsent)))
-	mux.Handle("PUT /api/workspaces/{workspace}/spaces/{space}/search/embedding", c.RequireSpace(access.Read, http.HandlerFunc(x.handleSetConsent)))
+	mux.Handle("PUT /api/workspaces/{workspace}/spaces/{space}/search/embedding", c.RequireSpace(access.Read, x.handleSetConsent(c)))
 }
 
-func (x *Index) handleSpace(w http.ResponseWriter, r *http.Request) {
-	sp, _ := access.SpaceFrom(r.Context())
-	x.search(w, r, sp.WorkspaceID, []access.Space{sp})
+func (x *Index) handleSpace(c *access.Checker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, _ := auth.UserFrom(r.Context())
+		sp, _ := access.SpaceFrom(r.Context())
+		x.search(w, r, c, u.ID, sp.WorkspaceID, []access.Space{sp})
+	}
 }
 
 func (x *Index) handleWorkspace(c *access.Checker) http.HandlerFunc {
@@ -56,7 +52,7 @@ func (x *Index) handleWorkspace(c *access.Checker) http.HandlerFunc {
 			serverError(w, r, err)
 			return
 		}
-		x.search(w, r, m.WorkspaceID, spaces)
+		x.search(w, r, c, u.ID, m.WorkspaceID, spaces)
 	}
 }
 
@@ -116,7 +112,7 @@ func (x *Index) handleConversations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-func (x *Index) search(w http.ResponseWriter, r *http.Request, workspaceID int64, spaces []access.Space) {
+func (x *Index) search(w http.ResponseWriter, r *http.Request, c *access.Checker, userID, workspaceID int64, spaces []access.Space) {
 	q := Query{Text: r.URL.Query().Get("q")}
 	var ok bool
 	if q.Limit, ok = queryInt(w, r, "limit"); !ok {
@@ -125,14 +121,13 @@ func (x *Index) search(w http.ResponseWriter, r *http.Request, workspaceID int64
 	if q.Offset, ok = queryInt(w, r, "offset"); !ok {
 		return
 	}
-	res, err := x.Search(r.Context(), workspaceID, spaces, q)
+	res, err := x.Search(r.Context(), c, userID, workspaceID, spaces, q)
 	if searchFailed(w, r, err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
 }
 
-// searchCards is search for the cards of spaces' boards.
 func (x *Index) searchCards(w http.ResponseWriter, r *http.Request, c *access.Checker, userID, workspaceID int64, spaces []access.Space) {
 	q := Query{Text: r.URL.Query().Get("q")}
 	var ok bool
@@ -149,7 +144,6 @@ func (x *Index) searchCards(w http.ResponseWriter, r *http.Request, c *access.Ch
 	writeJSON(w, http.StatusOK, res)
 }
 
-// searchRecords is search for the records of the apps in spaces.
 func (x *Index) searchRecords(w http.ResponseWriter, r *http.Request, c *access.Checker, userID, workspaceID int64, spaces []access.Space) {
 	q, ok := queryOf(w, r)
 	if !ok {
@@ -162,8 +156,6 @@ func (x *Index) searchRecords(w http.ResponseWriter, r *http.Request, c *access.
 	writeJSON(w, http.StatusOK, res)
 }
 
-// queryOf reads a search from a request's parameters q, limit and offset, answering 400 and
-// returning false if one is not valid.
 func queryOf(w http.ResponseWriter, r *http.Request) (Query, bool) {
 	q := Query{Text: r.URL.Query().Get("q")}
 	var ok bool
@@ -176,7 +168,6 @@ func queryOf(w http.ResponseWriter, r *http.Request) (Query, bool) {
 	return q, true
 }
 
-// searchFailed answers a failed search, and reports whether it was one.
 func searchFailed(w http.ResponseWriter, r *http.Request, err error) bool {
 	switch {
 	case err == nil:
@@ -206,14 +197,10 @@ func queryInt(w http.ResponseWriter, r *http.Request, name string) (int, bool) {
 	return n, true
 }
 
-// settingsReply is a workspace's search settings, and how far its embeddings are.
 type settingsReply struct {
-	// Embeddings is the embeddings model, or null for full-text search only.
 	Embeddings *Embeddings `json:"embeddings"`
-	// Documents are the workspace's indexed files; Pending, its Markdown documents still
-	// waiting for their vectors (0 without an embeddings model).
-	Documents int `json:"documents"`
-	Pending   int `json:"pending"`
+	Documents  int         `json:"documents"`
+	Pending    int         `json:"pending"`
 }
 
 func (x *Index) settings(ctx context.Context, workspaceID int64) (settingsReply, error) {
@@ -242,7 +229,6 @@ func (x *Index) handleSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, reply)
 }
 
-// probeTimeout bounds the call that checks a new embeddings model answers.
 const probeTimeout = 30 * time.Second
 
 func (x *Index) handleSetSettings(w http.ResponseWriter, r *http.Request) {
@@ -274,7 +260,6 @@ func (x *Index) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 			serverError(w, r, err)
 			return
 		}
-		// A model that doesn't answer now would leave every document failing: say so here.
 		ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
 		_, err = x.embed(ctx, ep, model, []string{"taskto.ai"})
 		cancel()
@@ -306,7 +291,11 @@ func (x *Index) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 
 func (x *Index) handleConsent(w http.ResponseWriter, r *http.Request) {
 	sp, _ := access.SpaceFrom(r.Context())
-	c, err := x.consent(r.Context(), sp.WorkspaceID, sp.ID)
+	c, err := x.consent(r.Context(), sp)
+	if errors.Is(err, access.ErrNotFound) {
+		apierr.Write(w, http.StatusNotFound, apierr.CodeSpaceNotFound, "no such space")
+		return
+	}
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -314,19 +303,21 @@ func (x *Index) handleConsent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
-func (x *Index) handleSetConsent(w http.ResponseWriter, r *http.Request) {
+func (x *Index) handleSetConsent(c *access.Checker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		x.setConsentRoute(c, w, r)
+	}
+}
+
+func (x *Index) setConsentRoute(c *access.Checker, w http.ResponseWriter, r *http.Request) {
 	sp, _ := access.SpaceFrom(r.Context())
 	u, _ := auth.UserFrom(r.Context())
-	// The space's owner or one of its editors, archived or not: consent is about where its
-	// text goes, not its content. Viewers, and admins who aren't editors, can't.
 	if sp.Role != access.RoleOwner && sp.Role != access.RoleEditor {
 		apierr.Write(w, http.StatusForbidden, apierr.CodeConsentForbidden, "only the space's owner or one of its editors can change this")
 		return
 	}
 	var req struct {
-		Enabled *bool `json:"enabled"`
-		// The endpoint the person was shown, as GET answered it: consent is then to that
-		// one only, not to whatever an admin set in between.
+		Enabled  *bool            `json:"enabled"`
 		Endpoint *ConsentEndpoint `json:"endpoint"`
 	}
 	if !readJSON(w, r, &req) {
@@ -336,7 +327,28 @@ func (x *Index) handleSetConsent(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, apierr.CodeBadRequest, "enabled is required")
 		return
 	}
-	err := x.setConsent(r.Context(), sp.WorkspaceID, sp.ID, u.ID, *req.Enabled, req.Endpoint)
+	if x.afterConsentBody != nil {
+		x.afterConsentBody()
+	}
+	authorize := func(ctx context.Context, tx *sql.Tx) error {
+		cur, err := c.CheckTx(ctx, tx, u.ID, sp.ID)
+		if err != nil {
+			return err
+		}
+		if cur.Role != access.RoleOwner && cur.Role != access.RoleEditor {
+			return errConsentForbidden
+		}
+		return nil
+	}
+	err := x.setConsent(r.Context(), sp, u.ID, *req.Enabled, req.Endpoint, authorize)
+	if errors.Is(err, errConsentForbidden) {
+		apierr.Write(w, http.StatusForbidden, apierr.CodeConsentForbidden, "only the space's owner or one of its editors can change this")
+		return
+	}
+	if errors.Is(err, access.ErrNotFound) {
+		apierr.Write(w, http.StatusNotFound, apierr.CodeSpaceNotFound, "no such space")
+		return
+	}
 	if errors.Is(err, errNoConsentEndpoint) {
 		apierr.Write(w, http.StatusConflict, apierr.CodeConsentNoModel, "this workspace has no embeddings model to consent to")
 		return
@@ -349,19 +361,20 @@ func (x *Index) handleSetConsent(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	c, err := x.consent(r.Context(), sp.WorkspaceID, sp.ID)
+	reply, err := x.consent(r.Context(), sp)
+	if errors.Is(err, access.ErrNotFound) {
+		apierr.Write(w, http.StatusNotFound, apierr.CodeSpaceNotFound, "no such space")
+		return
+	}
 	if err != nil {
 		serverError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, c)
+	writeJSON(w, http.StatusOK, reply)
 }
 
-// maxRequest is the largest request body.
 const maxRequest = 64 << 10
 
-// readJSON decodes the request body into v strictly, answering 400 or 413 and returning
-// false on failure.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequest))
 	dec.DisallowUnknownFields()
@@ -381,17 +394,14 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return false
 }
 
-// serverError logs err and answers 500 without details.
 func serverError(w http.ResponseWriter, r *http.Request, err error) {
 	if r.Context().Err() != nil {
-		return // the client went away
+		return
 	}
 	slog.Error("search: request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 	apierr.Internal(w)
 }
 
-// writeJSON encodes before writing, so an encoding failure is a 500 rather than a 200
-// with a broken body.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {

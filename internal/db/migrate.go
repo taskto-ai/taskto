@@ -14,33 +14,23 @@ import (
 	"strconv"
 )
 
-// migrations holds the schema changes, applied in order of their number. A migration
-// is never edited once it has been merged: change the schema with a new file.
-//
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-// migrationName is NNNN_description.sql; NNNN is the version.
 var migrationName = regexp.MustCompile(`^(\d{4})_[a-z0-9_]+\.sql$`)
 
 type migration struct {
 	version  int
 	name     string
 	sql      string
-	checksum string // sha256 of the file, to catch a migration edited after it ran
+	checksum string
 }
 
-// record is what schema_migrations holds about an applied migration.
 type record struct {
 	name     string
 	checksum string
 }
 
-// reworded lists the migrations whose comments were reworded after they had run, with
-// nothing else in them changed. A database that recorded the file as it was (before)
-// still starts. TestRewordedMigrationsChangedOnlyComments checks that sqlOnly, the
-// checksum of the file without its comment lines, is still what the database ran.
-// Never add to this to change a migration's SQL: write a new migration.
 var reworded = map[string]struct{ before, sqlOnly string }{
 	"0014_cli_account_slots.sql": {
 		before:  "20b68b60a148c16a28beb3e590798493d79ddb54bb4f572ed0e211c025ef9f38",
@@ -60,8 +50,6 @@ var reworded = map[string]struct{ before, sqlOnly string }{
 	},
 }
 
-// sameMigration says whether rec, as a database recorded it, is m: the same file, or
-// one whose comments were reworded since (reworded).
 func sameMigration(rec record, m migration) bool {
 	if rec.name != m.name {
 		return false
@@ -70,9 +58,6 @@ func sameMigration(rec record, m migration) bool {
 	return rec.checksum == m.checksum || ok && rec.checksum == r.before
 }
 
-// Migrate applies the migrations the database doesn't have yet, each in its own
-// transaction, and returns the names of those it applied. It stops at the first one
-// that fails, leaving the database as that migration found it.
 func Migrate(ctx context.Context, sqlDB *sql.DB) ([]string, error) {
 	sub, err := fs.Sub(migrations, "migrations")
 	if err != nil {
@@ -105,8 +90,6 @@ func migrate(ctx context.Context, sqlDB *sql.DB, fsys fs.FS) ([]string, error) {
 			return nil, fmt.Errorf("the database has migration %s, which this binary doesn't know: it was written by a newer version of taskto.ai", rec.name)
 		}
 	}
-	// A migration is never edited or renamed once it has run anywhere: that database would
-	// silently differ from a fresh one. Say so instead of starting.
 	for _, m := range all {
 		if rec, ok := done[m.version]; ok && !sameMigration(rec, m) {
 			return nil, fmt.Errorf("migration %04d changed after it was applied (recorded as %s): add a new migration instead of editing one", m.version, rec.name)
@@ -129,7 +112,6 @@ func migrate(ctx context.Context, sqlDB *sql.DB, fsys fs.FS) ([]string, error) {
 	return applied, nil
 }
 
-// load reads and orders the migration files.
 func load(fsys fs.FS) ([]migration, error) {
 	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
@@ -176,8 +158,6 @@ func appliedVersions(ctx context.Context, sqlDB *sql.DB) (map[int]record, error)
 	return done, rows.Err()
 }
 
-// apply runs one migration and records it, in a single transaction. It reports false
-// if another process applied the migration first.
 func apply(ctx context.Context, sqlDB *sql.DB, m migration) (ran bool, err error) {
 	tx, err := sqlDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -191,8 +171,6 @@ func apply(ctx context.Context, sqlDB *sql.DB, m migration) (ran bool, err error
 		}
 	}()
 
-	// The transaction holds the write lock from its start (_txlock=immediate), so this
-	// check and the migration can't interleave with another process doing the same.
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = ?)`, m.version).Scan(&exists); err != nil {
 		return false, err

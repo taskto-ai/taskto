@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// members returns "id:name:role" of each person list_members answered with.
 func members(t *testing.T, out map[string]any) []string {
 	t.Helper()
 	var got []string
@@ -30,7 +29,6 @@ func TestListMembers(t *testing.T) {
 		}
 	}
 
-	// A workspace's members: only that workspace's, whichever the user is in.
 	want(members(t, w.ok(w.aliceConv, "list_members", map[string]any{})),
 		fmt.Sprintf("%d:Alice:admin", w.alice), fmt.Sprintf("%d:Bob:member", w.bob))
 	want(members(t, w.ok(w.bobConv, "list_members", map[string]any{})),
@@ -38,7 +36,6 @@ func TestListMembers(t *testing.T) {
 	want(members(t, w.ok(w.aliceConv2, "list_members", map[string]any{})),
 		fmt.Sprintf("%d:Alice:admin", w.alice), fmt.Sprintf("%d:Carol:member", w.carol))
 
-	// A shared space's members, with their roles in it; a private space's owner alone.
 	want(members(t, w.ok(w.aliceConv, "list_members", map[string]any{"space_id": w.shared})),
 		fmt.Sprintf("%d:Alice:editor", w.alice), fmt.Sprintf("%d:Bob:viewer", w.bob))
 	want(members(t, w.ok(w.bobConv, "list_members", map[string]any{"space_id": w.shared})),
@@ -47,12 +44,8 @@ func TestListMembers(t *testing.T) {
 		fmt.Sprintf("%d:Alice:owner", w.alice))
 }
 
-// list_members lists only the members of what the conversation's owner can read: not another
-// user's private space, not a shared space they aren't in (a workspace admin included), not a
-// space of another workspace, and a space that doesn't exist answers the same.
 func TestListMembersCannotReachWhatTheOwnerCannotRead(t *testing.T) {
 	w := newWorld(t)
-	// A shared space of workspace one with bob only: alice, the workspace's admin, isn't in it.
 	bobsOnly := w.insert(`INSERT INTO spaces (workspace_id, kind, name) VALUES (?, 'shared', 'Bob only') RETURNING id`, w.one)
 	w.exec(`INSERT INTO space_members (space_id, user_id, role) VALUES (?, ?, 'editor')`, bobsOnly, w.bob)
 	carolConv := w.conversation(w.two, w.carol)
@@ -78,18 +71,15 @@ func TestListMembersCannotReachWhatTheOwnerCannotRead(t *testing.T) {
 		}
 	}
 
-	// Carol, in workspace two only, never sees workspace one's people.
 	for _, who := range members(t, w.ok(carolConv, "list_members", map[string]any{})) {
 		if who == fmt.Sprintf("%d:Bob:member", w.bob) {
 			t.Fatalf("carol sees bob: %v", who)
 		}
 	}
-	// A member who has left the workspace gets nothing: the conversation is refused.
 	w.exec(`DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`, w.one, w.bob)
 	w.status(http.StatusForbidden, w.bobConv, "list_members", map[string]any{})
 }
 
-// A disabled account's conversations get no tools, for as long as it is disabled.
 func TestListMembersRefusesADisabledOwner(t *testing.T) {
 	w := newWorld(t)
 	w.ok(w.aliceConv, "list_members", map[string]any{})
@@ -107,9 +97,6 @@ func TestListMembersRefusesBadArguments(t *testing.T) {
 	}
 }
 
-// A space_id or cursor that is there but null, 0 or negative is refused: only leaving space_id
-// out asks for the whole workspace, so a null from a model that fills every field never
-// widens a call.
 func TestListMembersRefusesNullAndNonPositiveIDs(t *testing.T) {
 	w := newWorld(t)
 	for _, field := range []string{"space_id", "cursor"} {
@@ -118,14 +105,11 @@ func TestListMembersRefusesNullAndNonPositiveIDs(t *testing.T) {
 			w.status(http.StatusBadRequest, w.aliceConv, "list_members", map[string]any{"space_id": w.shared, field: v})
 		}
 	}
-	// Left out, they are the whole workspace's first page.
 	if got := members(t, w.ok(w.aliceConv, "list_members", map[string]any{})); len(got) != 2 {
 		t.Fatalf("members = %v", got)
 	}
 }
 
-// bigWorkspace adds n people to workspace one, and returns the IDs of all its members,
-// ascending.
 func (w *world) bigWorkspace(n int) []int64 {
 	w.t.Helper()
 	w.exec(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
@@ -151,8 +135,6 @@ func (w *world) bigWorkspace(n int) []int64 {
 	return ids
 }
 
-// pages lists every page of list_members for conv from the first, and returns the IDs, in the
-// order they came, and how many pages there were.
 func (w *world) pages(conv int64, args map[string]any) ([]int64, int) {
 	w.t.Helper()
 	var got []int64
@@ -172,15 +154,10 @@ func (w *world) pages(conv int64, args map[string]any) ([]int64, int) {
 	}
 }
 
-// A workspace with more people than a reply holds is listed whole, a page at a time by user
-// ID, whatever the size of a person: a reply that is cut short or has more after it carries
-// next_cursor, and that is part of what is measured, so no size leaves a reply over the limit
-// (as 875 people that fill it, and one more, once did).
 func TestListMembersPagesThroughALargeWorkspace(t *testing.T) {
 	w := newWorld(t)
 	want := w.bigWorkspace(1300)
 	sawCut, sawMore := false, false
-	// The names' sizes sweep across the one at which a page's reply is exactly the limit.
 	for nameLen := 1; nameLen <= 160; nameLen += 3 {
 		w.exec(`UPDATE users SET name = substr(replace(hex(zeroblob(?)), '0', 'n'), 1, ?) WHERE email LIKE 'member%@example.com'`, nameLen, nameLen)
 		got, pages := w.pages(w.aliceConv, map[string]any{})
@@ -189,7 +166,7 @@ func TestListMembersPagesThroughALargeWorkspace(t *testing.T) {
 		}
 		first := w.ok(w.aliceConv, "list_members", map[string]any{})
 		if n := len(first["members"].([]any)); n < membersPage {
-			sawCut = true // cut by the size, not by the page's number
+			sawCut = true
 		} else {
 			sawMore = true
 		}
@@ -198,7 +175,6 @@ func TestListMembersPagesThroughALargeWorkspace(t *testing.T) {
 		t.Fatalf("the sweep didn't cover both a reply cut by its size (%v) and one cut by its count (%v)", sawCut, sawMore)
 	}
 
-	// The last page has no next_cursor, and a cursor past everyone is an empty page.
 	last := want[len(want)-1]
 	out := w.ok(w.aliceConv, "list_members", map[string]any{"cursor": last})
 	if _, more := out["next_cursor"]; more || len(out["members"].([]any)) != 0 {
@@ -206,7 +182,6 @@ func TestListMembersPagesThroughALargeWorkspace(t *testing.T) {
 	}
 }
 
-// A shared space's people are paged by the same cursor.
 func TestListMembersPagesASharedSpace(t *testing.T) {
 	w := newWorld(t)
 	ids := w.bigWorkspace(700)
@@ -216,7 +191,6 @@ func TestListMembersPagesASharedSpace(t *testing.T) {
 	if pages < 2 {
 		t.Fatalf("%d people in %d pages", len(got), pages)
 	}
-	// alice and bob were in it from the start, with the 700 added.
 	if len(ids) != 702 || !slices.Equal(got, ids) {
 		t.Fatalf("%d people, want the workspace's %d, each once, by id", len(got), len(ids))
 	}

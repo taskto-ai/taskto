@@ -1,9 +1,3 @@
-// The data explorer of one launched app: its records a page at a time, which the server sorts,
-// filters and searches, with the totals of everything that matches (never of the page alone). A table
-// on a wide screen, rows on a phone; opening a record shows it in a drawer beside the list, where it
-// is edited, its history read and, for a deleted one, restored. The server decides what each person
-// reads and may change: this only asks.
-
 import { useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { type AppDefinition, type AppField, type AppRecord, api, type RecordPage } from '../api'
 import { type Format, type T, useFormat, useT } from '../i18n'
@@ -41,10 +35,10 @@ import {
 import { RecordDetail } from './RecordDetail'
 import { optionLabel, shown, who } from './RecordParts'
 import './AppExplorer.css'
+import { byPlace } from '../byPlace'
 
 const NARROW = '(max-width: 48rem)'
 
-// Whether the screen is a phone's: the explorer draws cards there and a table elsewhere.
 export function useNarrow(): boolean {
   const media = useMemo(
     () => (typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(NARROW) : null),
@@ -69,19 +63,13 @@ export function AppExplorer({
   onChanged,
   leaveRef,
 }: {
-  // …/spaces/{space}/apps/{app}
   base: string
   appId: number
-  // The live release's definition: its fields and actions. An app that isn't published has none.
   definition: AppDefinition | undefined
   release?: number
-  // Whether the caller may change records (the space lets them write and their roles allow it).
   canChange: boolean
   canRestore: boolean
-  // A record was changed, deleted or restored: the app's screen is loaded again.
   onChanged: () => void
-  // Given the explorer's way out (ask first while the open record holds unsaved changes, then go),
-  // for what closes the explorer from outside it: the records panel's close and the header's toggle.
   leaveRef?: { current: ((go: () => void) => void) | null }
 }) {
   const t = useT()
@@ -94,7 +82,6 @@ export function AppExplorer({
   const [search, setSearch] = useState('')
   const [searchDraft, setSearchDraft] = useState('')
   const [sort, setSort] = useState<Sort>(defaultSort('live'))
-  // The cursors of the pages visited, the first page's being none: Previous goes back down the stack.
   const [cursors, setCursors] = useState<string[]>([''])
   const numbers = numberFields(fields)
   const [totalsField, setTotalsField] = useState<string | null>(numbers[0]?.name ?? null)
@@ -110,8 +97,6 @@ export function AppExplorer({
   const qs = queryString(query)
   const list = useLoad(() => api<RecordPage>(`${base}/records/query?${qs}`), [base, qs])
 
-  // The record open in the drawer holds what isn't saved (a changed field, a conflict on screen):
-  // read when something would close it, so the person is asked first and keeping is the default.
   const unsaved = useRef(false)
   const [leaveDialog, confirmLeave] = useConfirm()
   const askToLeave = () =>
@@ -122,10 +107,6 @@ export function AppExplorer({
       cancelLabel: t('apps.explorer.leave.keep'),
       tone: 'danger',
     })
-  // Does `go` at once when nothing is unsaved (as before: the list asks the server straight away),
-  // and only after the person chose to discard when something is. Every `go` given here closes the
-  // drawer or puts another record in it, so what was typed goes with it; the flag is cleared by the
-  // drawer itself when it really goes (RecordDetail says so as it unmounts), never ahead of that.
   const leaving = (go: () => void) => {
     if (!unsaved.current) return go()
     void askToLeave().then((discard) => {
@@ -133,22 +114,13 @@ export function AppExplorer({
     })
   }
   if (leaveRef) leaveRef.current = leaving
-  // Leaving the page (another section, another workspace, the browser's Back) asks the same, while a
-  // record holds unsaved changes. A move that keeps this explorer (another address of the same app)
-  // would keep the drawer and its draft too: discarding closes the drawer first, so "discard" is true.
-  // Signing out (`whole`) only asks: the person may still cancel at the next question, and then the
-  // drawer must still hold what they typed; it goes with the app's pages once the sign-out is certain.
   useBeforeLeave((go, whole) =>
     leaving(() => {
       if (unsaved.current && !whole) setOpen(null)
       go()
     }),
   )
-  // After a record left the list (deleted, restored), the keyboard goes to the list's count, which
-  // says what the list holds now: the row it came from is gone.
   const count = useRef<HTMLParagraphElement>(null)
-  // Each opening of the drawer has a number of its own: a delete or a restore that finishes after the
-  // person moved on (to another record, or to the same record opened again) knows it isn't theirs.
   const [opening, setOpening] = useState(0)
   const openingNow = useRef(opening)
   openingNow.current = opening
@@ -158,9 +130,6 @@ export function AppExplorer({
   }
   const closeRecord = (how?: 'gone', from?: number) => {
     if (how === 'gone') {
-      // A record that left the list after another opening of the drawer (deleted, then the same or
-      // another record opened before the answer came) closes nothing: what is open, and what was
-      // typed in it, stay.
       if (from !== openingNow.current) return
       setOpen(null)
       setTimeout(() => count.current?.focus(), 0)
@@ -172,7 +141,6 @@ export function AppExplorer({
     if (id !== open) leaving(() => show(id))
   }
 
-  // A new question starts from its first page, and closes the record (asking first, as above).
   const ask = (change: () => void) =>
     leaving(() => {
       change()
@@ -246,8 +214,6 @@ export function AppExplorer({
               <Select
                 value={sort.by}
                 onChange={(e) => {
-                  // Read now: while the person is asked about unsaved changes, React puts the
-                  // controlled select back to the current sort.
                   const by = e.target.value
                   ask(() => setSort({ by, dir: firstDir(by) }))
                 }}
@@ -372,7 +338,6 @@ export function AppExplorer({
   )
 }
 
-// The totals of every record that matches, whichever page is shown.
 function Totals({
   page,
   numbers,
@@ -428,7 +393,6 @@ function FilterBar({
 }: {
   fields: AppField[]
   filters: Filter[]
-  // `applied` runs once the change is made: not when the person keeps a record's unsaved changes.
   onChange: (next: Filter[], applied?: () => void) => void
 }) {
   const t = useT()
@@ -439,13 +403,11 @@ function FilterBar({
   const [chosen, setOp] = useState('eq')
   const [value, setValue] = useState('')
   const id = useId()
-  // The operator offered follows the field's type.
   const op = ops.includes(chosen) ? chosen : 'eq'
   if (fields.length === 0) return null
   const add = (e: React.FormEvent) => {
     e.preventDefault()
     if (value === '' || !type) return
-    // The typed value goes only once the filter is in use: kept when it isn't added after all.
     onChange([...filters, { field, op, value }], () => setValue(''))
   }
   const opLabel = (o: string) => t(`apps.explorer.op.${o}` as 'apps.explorer.op.eq')
@@ -473,11 +435,10 @@ function FilterBar({
       </form>
       {filters.length > 0 && (
         <ul className="ui-explorer-chips" aria-label={t('apps.explorer.activeFilters')}>
-          {filters.map((fl, i) => {
+          {byPlace(filters).map(({ key, item: fl, place: i }) => {
             const text = `${fl.field} ${opLabel(fl.op)} ${chipValue(fl, fields, f, t)}`
             return (
-              // biome-ignore lint/suspicious/noArrayIndexKey: filters have no identity but their place
-              <li key={i} className="ui-explorer-chip">
+              <li key={key} className="ui-explorer-chip">
                 <span>{text}</span>
                 <IconButton
                   size="sm"
@@ -566,7 +527,6 @@ function RecordTable({
   const t = useT()
   const f = useFormat()
   const timeKey = deleted ? '_deleted' : UPDATED
-  // What can't be put in order is a heading only: the server refuses to sort by it.
   const sortOf = (by: string) => ({
     direction:
       sort.by === by ? (sort.dir === 'asc' ? ('ascending' as const) : ('descending' as const)) : ('none' as const),
@@ -576,7 +536,6 @@ function RecordTable({
     {
       key: '_id',
       header: t('apps.explorer.id'),
-      // The record's number names its row.
       rowHeader: true,
       cell: (rec) => (
         <Button
@@ -612,7 +571,6 @@ function RecordTable({
   return <Table caption={t('apps.records.open')} columns={columns} rows={records} rowKey={(rec) => rec.id} />
 }
 
-// A phone's records: a row each, the first field its title, then the rest, and who changed it last.
 function RecordCards({
   records,
   fields,

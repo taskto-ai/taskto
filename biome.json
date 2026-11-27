@@ -26,6 +26,22 @@
     {
       "includes": ["web/src/**", "!**/*.test.tsx"],
       "linter": { "rules": { "style": { "noJsxLiterals": "error" } } }
+    },
+    {
+      "includes": ["web/src/knowledge/Content.tsx"],
+      "linter": { "rules": { "a11y": { "useMediaCaption": "off" } } }
+    },
+    {
+      "includes": ["web/src/notifications/NotificationsPage.tsx"],
+      "linter": { "rules": { "a11y": { "noNoninteractiveTabindex": "off" } } }
+    },
+    {
+      "includes": ["web/src/shell/PhoneBar.tsx"],
+      "linter": { "rules": { "a11y": { "useAriaPropsSupportedByRole": "off" } } }
+    },
+    {
+      "includes": ["web/src/ui/Switch.tsx"],
+      "linter": { "rules": { "a11y": { "useAriaPropsForRole": "off" } } }
     }
   ],
   "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } }

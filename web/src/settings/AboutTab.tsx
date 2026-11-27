@@ -1,9 +1,3 @@
-// About: taskto.ai's licence, the credits of the third-party work this workspace uses, as
-// the server lists them (a local speech model's, or an add-on's while it is on), and for
-// admins, how the server's scheduled backups are doing (docs/install.md#backups), what its
-// host's updater last did (docs/install.md#automatic-updates), and for operators the Update now
-// button, which asks that updater for a run (docs/install.md#update-now).
-
 import { useEffect, useState } from 'react'
 
 import {
@@ -31,9 +25,7 @@ import { Notice, type NoticeTone } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
 import { Alert, Facts, FormActions, Loading, Section, SettingsTab, useAction } from './parts'
 
-// `operator`: an admin who runs the server, the only one who sees its backups.
 export function AboutTab({ workspace, operator }: { workspace: number; operator: boolean }) {
-  // A server without dictation has nothing to credit for it: no error, no credits.
   const dictation = useLoad(
     () =>
       api<DictationStatus>(dictationPath(workspace)).catch((e) => {
@@ -83,7 +75,6 @@ const RESULTS = [
   'unknown',
 ] as const
 const CHANNELS = ['release', 'main', 'off'] as const
-// The updater's reason codes (internal/updatestatus): each has its sentence in the language files.
 const REASONS = [
   'other',
   'off',
@@ -112,8 +103,6 @@ const REASONS = [
   'bad-request',
 ] as const
 const isReason = (c: string): c is (typeof REASONS)[number] => (REASONS as readonly string[]).includes(c)
-// Runs that ended with something wrong, which a person should look at, whether or not the updater
-// also blocked itself.
 const FAILURES = ['failed', 'rolled-back', 'rollback-failed', 'stopped', 'stop-failed', 'interrupted']
 const isResult = (r: string): r is (typeof RESULTS)[number] => (RESULTS as readonly string[]).includes(r)
 const isChannel = (c: string): c is (typeof CHANNELS)[number] => (CHANNELS as readonly string[]).includes(c)
@@ -130,9 +119,6 @@ const UPDATE_TONE: Record<UpdateHealth, NoticeTone> = {
   manualUpgrade: 'warning',
 }
 
-// What the host's updater last did. The updater runs on the host, and the server only reads what
-// it wrote: nothing here runs or changes it. Update now asks it for a run (a request that names no
-// version), and what a person must do about a gate is done on the host.
 function UpdatesPanel({ workspace }: { workspace: number }) {
   const t = useT()
   const f = useFormat()
@@ -195,7 +181,6 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
         )
       }
     >
-      {/* While an update goes on the server restarts, and a failed read is expected: UpdateNow says so. */}
       {!(st?.running || (st && u?.request.reason === 'pending')) && <Alert error={updates.error} />}
       {!u && !updates.error && <Loading lines={3} />}
       {u && !u.configured && <Notice tone="neutral">{t('settings.about.updates.notConfigured')}</Notice>}
@@ -310,14 +295,9 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
   )
 }
 
-// The version the host's updater would install next, which it found the last time it looked (every
-// few hours, and on every run): what it is, when it was published, where its notes are (a link the
-// server built from the updater's repository and the versions), and whether a person must install
-// it. The updater only reports it; Update now installs it when no person is needed.
 function AvailableUpdate({ available: a, notesUrl }: { available: UpdateAvailable; notesUrl?: string }) {
   const t = useT()
   const f = useFormat()
-  // A commit of the main channel is shown short, as git does; a release by its name.
   const commit = /^[0-9a-f]{40}$/.test(a.version)
   const version = <code title={a.version}>{commit ? a.version.slice(0, 12) : a.version}</code>
   return (
@@ -351,15 +331,9 @@ function AvailableUpdate({ available: a, notesUrl }: { available: UpdateAvailabl
   )
 }
 
-// How often the page asks again while an update is pending or running, and how long it waits for
-// the host to start one it asked for before it says so.
 const POLL_MS = 3000
 const GIVE_UP_MS = 15 * 60_000
 
-// Update now: asks the host's updater for the nightly run, now. The request has no version: the
-// host installs the newest of its channel, under every gate of the nightly run, and the outcome
-// (an update, or why not) comes back in the status the page already reads. The server restarts
-// during an update, so the page keeps asking and says so until it answers again.
 function UpdateNow({
   workspace,
   report,
@@ -373,7 +347,6 @@ function UpdateNow({
   workspace: number
   report: UpdateStatus
   reload: () => void
-  // How many reads have ended: the next one is asked for after the last ended, not on a clock.
   settled: number
   loading: boolean
   loadError: string | null
@@ -390,19 +363,13 @@ function UpdateNow({
   const reason = req.reason ?? ''
   const running = !!st?.running
   const pending = reason === 'pending'
-  // The updater stamps a run with the second it started in; ours is the second we asked in.
   const since = requestedAt === null ? null : Math.floor(Date.parse(requestedAt) / 1000) * 1000
   const last = st?.requests?.last ?? null
   const answered = since !== null && !!last?.at && Date.parse(last.at) >= since
-  // A request that waits, or was just made, and that nobody has answered: since when.
   const askedAt = since ?? (pending && req.pending_since ? Date.parse(req.pending_since) : null)
   const waiting = since !== null && !answered
-  // The host never took it (its path unit is off) or never answered: said, whether or not the file
-  // still waits in the directory.
   const gaveUp = !answered && !running && askedAt !== null && now - askedAt > GIVE_UP_MS
   const busy = running || ((pending || waiting) && !gaveUp)
-  // Ask again a moment after the last answer (or failure) came, never while one is on its way: the
-  // server restarts during an update, and a read that is cut off by the next one shows nothing.
   useEffect(() => {
     if (!busy || loading || settled === 0) return
     const timer = setTimeout(() => {
@@ -478,10 +445,8 @@ function BackupsPanel({ workspace }: { workspace: number }) {
   const f = useFormat()
   const backups = useLoad(() => api<BackupStatus>(backupPath(workspace)), [workspace])
   const b = backups.data
-  // A backup that started after the last outcome is still running.
   const attempt = b?.last_attempt
   const running = attempt && [b.last_success, b.last_error_at].every((x) => !x || Date.parse(x) < Date.parse(attempt))
-  // The last error, unless a success came after it.
   const failedSince =
     b?.last_error && b.last_error_at && (!b.last_success || Date.parse(b.last_error_at) > Date.parse(b.last_success))
   return (

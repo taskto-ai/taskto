@@ -21,9 +21,7 @@ function setup(overflowX: string, overflowY: string, button: DOMRect) {
 }
 
 test('a box that clips only sideways hides only what is beside it', () => {
-  // Below the box, inside it sideways: still seen.
   expect(scrolledAway(setup('clip', 'visible', rect(220, 120, 32, 32)))).toBe(false)
-  // Beside it: hidden.
   expect(scrolledAway(setup('clip', 'visible', rect(120, 500, 32, 32)))).toBe(true)
 })
 
@@ -41,7 +39,6 @@ test('two boxes that each show a part of it, but not the same part, hide it', ()
     '<div id="outer" style="overflow-y: auto"><div id="inner" style="overflow-y: auto"><button id="b">x</button></div></div>'
   const el = document.getElementById('b') as HTMLElement
   vi.spyOn(el, 'getBoundingClientRect').mockReturnValue(rect(100, 100, 100, 32))
-  // The inner box shows its top 40px, the outer its bottom 40px: nothing of it is left.
   vi.spyOn(document.getElementById('inner') as HTMLElement, 'getBoundingClientRect').mockReturnValue(
     rect(100, 0, 40, 500),
   )
@@ -54,7 +51,6 @@ test('two boxes that each show a part of it, but not the same part, hide it', ()
 test('a box that shows only a part of it outside the window hides it', () => {
   document.body.innerHTML = '<div id="box" style="overflow-y: auto"><button id="b">x</button></div>'
   const el = document.getElementById('b') as HTMLElement
-  // Half of it is in the window, but the box shows only a part above the window.
   vi.spyOn(el, 'getBoundingClientRect').mockReturnValue(rect(-100, 100, 200, 32))
   vi.spyOn(document.getElementById('box') as HTMLElement, 'getBoundingClientRect').mockReturnValue(
     rect(-100, 0, 80, 500),

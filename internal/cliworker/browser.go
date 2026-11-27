@@ -17,19 +17,10 @@ import (
 	"taskto.ai/taskto/internal/browser"
 )
 
-// The agent browser (docs/agent-browser.md) runs in the worker like a CLI turn: each process
-// starts through the helper, which prepares the user's browser directory and execs the
-// program as the user (their Unix user in container mode). The worker never opens a path in a
-// home: even the live view's connection to the user's VNC socket is made by the helper, as
-// the user, and bridged over its stdin and stdout.
-
-// BrowserPaths is user's browser directory: <their directory>/browser.
 func (l Layout) BrowserPaths(user int64) browser.Paths {
 	return browser.Paths{Root: filepath.Join(l.User(user).Root, "browser")}
 }
 
-// BrowserHost returns the browser.Host that runs the browsers' programs (bins) through the
-// helper, as each user's own Unix user when the worker isolates users.
 func (w *Worker) BrowserHost(bins map[browser.Program]string) browser.Host {
 	return &browserHost{w: w, bins: bins}
 }
@@ -52,9 +43,6 @@ func (h *browserHost) Start(user int64, spec browser.ProcSpec, extra []*os.File)
 	}
 	cmd.Stdin = strings.NewReader(string(header))
 	cmd.ExtraFiles = extra
-	// stderr is a pipe of ours, not a Writer: cmd.Wait then doesn't wait for every process
-	// that inherited it. What the programs say goes to the debug log; the helper's own
-	// refusals to the warnings.
 	r, wr, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -70,7 +58,6 @@ func (h *browserHost) Start(user int64, spec browser.ProcSpec, extra []*os.File)
 	return cmd, nil
 }
 
-// logLines logs what a browser's process writes on stderr, a line at a time.
 func logLines(r io.ReadCloser, user int64, prog browser.Program) {
 	defer r.Close()
 	sc := bufio.NewScanner(r)
@@ -85,8 +72,6 @@ func logLines(r io.ReadCloser, user int64, prog browser.Program) {
 	}
 }
 
-// DialVNC starts the helper as the user to connect to their VNC socket, and returns its
-// stdin and stdout as the stream. The helper says "ok" once it is connected.
 func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteCloser, error) {
 	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: "browser-vnc"})
 	if err != nil {
@@ -96,8 +81,6 @@ func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteClos
 	if err != nil {
 		return nil, err
 	}
-	// A pipe of our own, not StdoutPipe: Wait closes that one, and the live view may still be
-	// reading it when the stream is closed. This one is closed by Close, after Wait.
 	stdout, childOut, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -138,7 +121,6 @@ func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteClos
 			return nil, err
 		}
 	case <-ctx.Done():
-		// The helper may have answered just as ctx ended: its answer wins.
 		select {
 		case err := <-status:
 			if err != nil {
@@ -153,7 +135,6 @@ func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteClos
 	return c, nil
 }
 
-// helperConn is a running helper's stdout and stdin as one stream. Closing it ends the helper.
 type helperConn struct {
 	cmd  *exec.Cmd
 	w    io.WriteCloser
@@ -170,7 +151,6 @@ func (c *helperConn) Close() error {
 		_ = c.w.Close()
 		_ = signalGroup(c.cmd.Process.Pid, sigKill)
 		_ = c.cmd.Wait()
-		// A read still waiting ends now, with an error: the stream is over either way.
 		_ = c.out.Close()
 	})
 	return nil
@@ -180,12 +160,10 @@ func (h *browserHost) Clean(user int64) error {
 	return h.quickOp(user, "browser-clean", "removing the testing profile")
 }
 
-// Purge removes the user's whole browser directory, as the user, for a deleted account.
 func (h *browserHost) Purge(user int64) error {
 	return h.quickOp(user, "browser-purge", "removing the browser's files")
 }
 
-// quickOp runs one of the helper's short browser ops as the user, stopping it after 30 s.
 func (h *browserHost) quickOp(user int64, op, what string) error {
 	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: op})
 	if err != nil {
@@ -211,7 +189,6 @@ func (h *browserHost) quickOp(user int64, op, what string) error {
 	}
 }
 
-// runBrowserOp is the helper's side, as the user.
 func runBrowserOp(req helperRequest, layout Layout, stdout io.Writer) error {
 	p := layout.BrowserPaths(req.User)
 	switch req.Op {
@@ -219,7 +196,6 @@ func runBrowserOp(req helperRequest, layout Layout, stdout io.Writer) error {
 		if req.Browser == nil || !filepath.IsAbs(req.Bin) {
 			return errors.New("invalid request")
 		}
-		// Owner-only for whatever the programs make (x11vnc's socket among them).
 		setUmask(0o077)
 		if err := browser.Prepare(p, *req.Browser); err != nil {
 			return err
@@ -237,8 +213,6 @@ func runBrowserOp(req helperRequest, layout Layout, stdout io.Writer) error {
 		if err := unprivileged(req); err != nil {
 			return err
 		}
-		// fds 3 and up (the DevTools pipe, Xvfb's -displayfd) were the worker's ExtraFiles:
-		// they are not close-on-exec, so the program gets them.
 		return execve(argv[0], argv, env)
 	case "browser-vnc":
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

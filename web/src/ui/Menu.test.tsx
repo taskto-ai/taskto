@@ -91,7 +91,6 @@ describe('Menu', () => {
     fireEvent.click(button)
     fireEvent.keyDown(list(), { key: 'r' })
     expect(focused()).toBe('Rename')
-    // Again later: the next one with that letter.
     vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5000)
     fireEvent.keyDown(list(), { key: 'r' })
     expect(focused()).toBe('Rebuild')
@@ -106,7 +105,6 @@ describe('Menu', () => {
     expect(focused()).toBe('Rebuild')
     fireEvent.keyDown(list(), { key: 'r' })
     expect(focused()).toBe('Rename')
-    // After a pause, letters that spell more look for an item that starts with them all.
     vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5000)
     fireEvent.keyDown(list(), { key: 'h' })
     fireEvent.keyDown(list(), { key: 'i' })
@@ -165,7 +163,6 @@ describe('Menu', () => {
       await new Promise((r) => requestAnimationFrame(() => r(null)))
     })
     expect(list().style.maxBlockSize).toBe('123px')
-    // The page's scrolling still places it again (its button in sight).
     vi.spyOn(button, 'getBoundingClientRect').mockReturnValue({
       top: 300,
       bottom: 332,
@@ -199,8 +196,6 @@ describe('Menu', () => {
       y: 300,
       toJSON() {},
     } as DOMRect)
-    // A browser resets the scroll when it lays the list out with its height limit off, to
-    // measure it.
     const el = list()
     let top = 0
     Object.defineProperty(el, 'scrollTop', {
@@ -281,7 +276,6 @@ describe('Menu', () => {
   test("an Escape a tooltip took is not the menu's too: the next one closes it", () => {
     const { button } = setup()
     fireEvent.click(button)
-    // What a tooltip that can be seen does (Tooltip.tsx): it hears the key first and takes it.
     const tooltip = (e: KeyboardEvent) => e.preventDefault()
     document.addEventListener('keydown', tooltip, true)
     fireEvent.keyDown(items()[0], { key: 'Escape' })
@@ -325,7 +319,6 @@ describe('Menu', () => {
         </MenuList>
       </Menu>,
     )
-    // The visible words are in the name (a voice command says them), after what they choose.
     const button = screen.getByRole('button', { name: 'Sort by: Newest' })
     expect(button.getAttribute('aria-label')).toBeNull()
     act(() => button.click())
@@ -341,7 +334,6 @@ describe('Menu', () => {
     const button = screen.getByRole('button', { name: 'More actions' })
     fireEvent.click(button)
     const link = screen.getByRole('menuitem', { name: 'Open the page' })
-    // An anchor with its address, so it can be opened in a new tab.
     expect(link.tagName).toBe('A')
     expect(link.getAttribute('href')).toBe('/elsewhere')
     expect(document.activeElement).toBe(link)

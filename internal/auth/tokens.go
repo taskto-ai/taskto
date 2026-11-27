@@ -14,39 +14,13 @@ import (
 	"taskto.ai/taskto/internal/audit"
 )
 
-// Personal access tokens are how a person's own agents (Claude Code, Codex, a script) reach
-// the MCP server and the REST API as them, without a browser session.
-//
-//   - A token belongs to one user in one workspace, and acts with exactly that user's
-//     access there: the same checks as their session, made again on every request. It
-//     never reaches another workspace, so the data and model providers of a user's other
-//     workspaces stay out of an agent given access to one.
-//   - Only routes that take one accept it (AcceptTokens): the knowledge base, search,
-//     boards, reading the workspace's spaces and members, and reading apps and running their
-//     actions (not building, publishing or sharing them). Everything else refuses a
-//     request carrying a token with 403, whatever else it carries: logging in, setup,
-//     invites, members, spaces' administration, provider accounts, conversations, and the
-//     tokens themselves. So a token never changes the account, and never makes another
-//     token.
-//   - Only its SHA-256 is stored, and the token is shown once, when it is made. Revoking it,
-//     its expiry, and its user leaving the workspace take effect from the next request.
-//
-// Requests with a token are not a browser's: they carry no cookie the server relies on, so
-// the CSRF guard has nothing to protect them from. They go through it unchanged all the
-// same: a client that sends neither Sec-Fetch-Site nor Origin passes its cross-origin
-// check, and a body must still be JSON.
-
-// AccessTokenPrefix starts every access token, so that they can be recognised: by secret
-// scanners, and by the server among other credentials in an Authorization header.
 const AccessTokenPrefix = "ttp_"
 
-// Bounds of the tokens API.
 const (
-	maxTokens       = 50 // per member of a workspace
+	maxTokens       = 50
 	tokenTouchEvery = time.Minute
 )
 
-// Token is an access token, without the token itself.
 type Token struct {
 	ID          int64   `json:"id"`
 	WorkspaceID int64   `json:"workspace_id"`
@@ -56,18 +30,13 @@ type Token struct {
 	LastUsedAt  *string `json:"last_used_at"`
 }
 
-// TokenAgent is how a change made with the token named name shows in the knowledge base's
-// history: the committer of a change its user authored.
 func TokenAgent(name string) string { return name + " (access token)" }
 
 var (
-	// ErrTokenInvalid is the answer for a token that is unknown, revoked or expired, or whose
-	// user is no longer a member of its workspace. Callers must not tell these apart.
 	ErrTokenInvalid  = errors.New("the access token is unknown, revoked or expired")
 	errTooManyTokens = fmt.Errorf("a member can have at most %d access tokens in a workspace: revoke one first", maxTokens)
 )
 
-// errTokensRefused is the answer of routes that don't take access tokens.
 const errTokensRefused = "access tokens can't be used here: this needs a login in the browser"
 
 type (
@@ -75,24 +44,17 @@ type (
 	acceptsTokensKey struct{}
 )
 
-// TokenFrom returns the access token a request was authenticated with, put on ctx by
-// RequireMember or RequireAdmin; ok is false for a request with a session.
 func TokenFrom(ctx context.Context) (Token, bool) {
 	t, ok := ctx.Value(tokenKey{}).(Token)
 	return t, ok
 }
 
-// AcceptTokens marks a route as one access tokens may use: wrap it around RequireMember
-// (or RequireSpace). Routes without it refuse requests carrying a token.
 func AcceptTokens(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), acceptsTokensKey{}, true)))
 	})
 }
 
-// BearerToken returns the access token in the request's Authorization header, if it carries
-// one: "Bearer ttp_…". Other credentials there, such as a reverse proxy's Basic auth, are
-// not tokens, and are left alone.
 func BearerToken(r *http.Request) (string, bool) {
 	scheme, value, ok := strings.Cut(r.Header.Get("Authorization"), " ")
 	if !ok || !strings.EqualFold(scheme, "Bearer") {
@@ -102,9 +64,6 @@ func BearerToken(r *http.Request) (string, bool) {
 	return value, strings.HasPrefix(value, AccessTokenPrefix)
 }
 
-// refuseTokens wraps the routes of logins and accounts, which never take a token: a request
-// carrying one is refused before anything else, so a token can't be used to log in, set
-// the server up or accept an invite, whatever else the request carries.
 func refuseTokens(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := BearerToken(r); ok {
@@ -115,9 +74,6 @@ func refuseTokens(next http.HandlerFunc) http.Handler {
 	})
 }
 
-// TokenUser returns the user and the token raw is, now: ErrTokenInvalid unless it exists,
-// hasn't expired, and its user is still a member of its workspace. It records the use, at
-// most once a minute. Ask again for every request, so revoking a token takes effect at once.
 func (s *Service) TokenUser(ctx context.Context, raw string) (User, Token, error) {
 	if !strings.HasPrefix(raw, AccessTokenPrefix) || len(raw) > 128 {
 		return User{}, Token{}, ErrTokenInvalid
@@ -142,7 +98,6 @@ func (s *Service) TokenUser(ctx context.Context, raw string) (User, Token, error
 	if t.LastUsedAt == nil || *t.LastUsedAt <= stamp(now.Add(-tokenTouchEvery)) {
 		used, err := s.touchToken(ctx, u.ID, t, hashToken(raw), now)
 		if err != nil {
-			// The request can go ahead: last_used_at is a hint for the user, not a control.
 			slog.WarnContext(ctx, "auth: recording an access token's use", "token_id", t.ID, "err", err)
 		} else if used != "" {
 			t.LastUsedAt = &used
@@ -151,12 +106,6 @@ func (s *Service) TokenUser(ctx context.Context, raw string) (User, Token, error
 	return u, t, nil
 }
 
-// touchToken advances t's last_used_at and records the use, in one transaction, and only when the
-// advance happens: at most once a minute for a token, whoever asks first, so the log has a row
-// per minute of use and not one per request. It returns the new time, or "" when another
-// request advanced it first, or when the row is no longer the token that was authenticated: an
-// id can be reused after a revocation, so the update also matches the token's hash, user and
-// workspace.
 func (s *Service) touchToken(ctx context.Context, user int64, t Token, hash string, now time.Time) (string, error) {
 	used := stamp(now)
 	var advanced bool
@@ -183,8 +132,6 @@ func (s *Service) touchToken(ctx context.Context, user int64, t Token, hash stri
 	return used, nil
 }
 
-// tokenRequest authenticates a request carrying an access token, for routes that accept
-// one, or answers and returns false.
 func (s *Service) tokenRequest(w http.ResponseWriter, r *http.Request, raw string) (User, *Token, bool) {
 	if accepts, _ := r.Context().Value(acceptsTokensKey{}).(bool); !accepts {
 		writeError(w, http.StatusForbidden, apierr.CodeTokenRefused, errTokensRefused)
@@ -201,8 +148,6 @@ func (s *Service) tokenRequest(w http.ResponseWriter, r *http.Request, raw strin
 	}
 	return u, &t, true
 }
-
-// The tokens API: a member's own tokens in a workspace. Its routes take a session only.
 
 func (s *Service) handleTokens(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFrom(r.Context())
@@ -250,12 +195,9 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	// The only time the token is shown: the database keeps its hash.
 	writeJSON(w, http.StatusCreated, TokenCreated{Token: t, Secret: token})
 }
 
-// TokenCreated is the reply that makes an access token: the token's record and its secret,
-// shown only now.
 type TokenCreated struct {
 	Token
 	Secret string `json:"token"`
@@ -292,8 +234,6 @@ func (s *Service) handleDeleteToken(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// createToken makes a token for userID in workspaceID and returns it with the token itself,
-// which isn't kept.
 func (s *Service) createToken(ctx context.Context, workspaceID, userID int64, name string, expires *string) (Token, string, error) {
 	t := Token{WorkspaceID: workspaceID, Name: name, CreatedAt: stamp(s.now()), ExpiresAt: expires}
 	secret, _ := newToken()
@@ -316,8 +256,6 @@ func (s *Service) createToken(ctx context.Context, workspaceID, userID int64, na
 		if t.ID, err = res.LastInsertId(); err != nil {
 			return err
 		}
-		// Neither the token nor its name: the name is typed by a person, and people paste
-		// tokens into such boxes. The id says which token it was.
 		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: userID, Action: audit.AccessTokenCreated,
 			TargetType: audit.TargetAccessToken, Target: t.ID, TargetCreated: t.CreatedAt, Details: audit.Details{"expires": expires != nil}})
 	})
@@ -327,7 +265,6 @@ func (s *Service) createToken(ctx context.Context, workspaceID, userID int64, na
 	return t, token, nil
 }
 
-// tokensOf lists userID's tokens in workspaceID, oldest first, expired ones included.
 func (s *Service) tokensOf(ctx context.Context, workspaceID, userID int64) ([]Token, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, workspace_id, name, created_at, expires_at, last_used_at

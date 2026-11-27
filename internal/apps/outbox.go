@@ -23,44 +23,6 @@ import (
 	"taskto.ai/taskto/internal/quota"
 )
 
-// The transactional outbox of an app's effects.
-//
-// When an action that has effects changes a record, the change and one entry per effect that
-// applies are committed in the same transaction. The request answers then; the effects are done
-// afterwards by the worker (StartOutbox), in the server process, so they go on when the phone is
-// closed and survive a crash of the server.
-//
-// Each entry is the n-th effect of an operation, and an operation is named: by the client (the
-// idempotency key of its request, ClientAction.Operation) or, if it left it out, by the server.
-// The operation and the user who acted are unique, so a request made again, by a client that never
-// saw the answer, changes nothing and queues nothing; one made again for a different request is
-// refused. An entry is therefore queued once, and the worker does it at most once to effect:
-//
-//   - a card is made with the entry's own key (boards.NewCard.Origin), so doing the entry again
-//     after a crash between making the card and noting it finds the card and makes no second one;
-//   - a document is made only where none is, and one that is already there with the very content
-//     the entry would write is the entry's own;
-//   - moving a card to a column it is in already is nothing to do;
-//   - a payment link is asked of the provider once for the entry: the entry has one reference
-//     (integration_refs.effect_id is unique) whose random token is the provider's idempotency key,
-//     so doing the entry again after a crash finds the reference, and the link it made if the
-//     answer had been noted, and writing the link to the record again changes nothing.
-//
-// An entry runs as the user who acted, with that user's access at that time. Both the app (the
-// right the action needed) and the target are checked every time; if either was taken away the
-// entry fails with a code that says so and does nothing. The definition gave it no authority.
-// Failures that may pass (the database was busy, the card was being changed) are tried again with
-// growing waits, up to maxAttempts; the others fail at once. A failed entry stays, listed with its
-// code, until its user retries it; nothing else makes it run again.
-//
-// An entry of a user whose account is disabled (docs/api.md#disabling-a-member) is neither done nor
-// failed: the account has lost nothing for good, and its access comes back as it was when it is
-// enabled. The worker holds the entry (errHeld): it goes back to pending to be looked at again
-// after holdDelay, without using up the try and without a failure's notification, and it does what
-// it was queued for once the account is enabled, with the access the user has then.
-
-// The states of an entry, and "simulated", which is of an effect a preview reports and never
-// stores.
 const (
 	StatePending   = "pending"
 	StateRunning   = "running"
@@ -69,63 +31,40 @@ const (
 	StateSimulated = "simulated"
 )
 
-// Bounds and timings of the outbox.
 const (
-	// maxAttempts bounds the tries of an entry before it fails for good.
-	maxAttempts = 5
-	// maxOutstanding bounds an app's entries that wait or run.
+	maxAttempts    = 5
 	maxOutstanding = 500
-	// leaseTime is how long a worker owns the entry it took: after it, a worker that died has
-	// lost it.
-	leaseTime = 2 * time.Minute
-	// entryTimeout bounds one try.
-	entryTimeout = time.Minute
-	outboxPoll   = 2 * time.Second
-	// How long finished entries (and the operations of requests) are kept.
-	keepDone = 30 * 24 * time.Hour
-	keepAll  = 90 * 24 * time.Hour
-	// backoffBase is the wait after the first failed try, doubled for each next.
-	backoffBase = 5 * time.Second
-	backoffMax  = 5 * time.Minute
-	// holdDelay is how long an entry of a disabled user waits before the worker looks again.
-	holdDelay = time.Minute
-	// listLimit is the most entries a listing returns.
-	maxListed     = 200
-	defaultListed = 100
+	leaseTime      = 2 * time.Minute
+	entryTimeout   = time.Minute
+	outboxPoll     = 2 * time.Second
+	keepDone       = 30 * 24 * time.Hour
+	keepAll        = 90 * 24 * time.Hour
+	backoffBase    = 5 * time.Second
+	backoffMax     = 5 * time.Minute
+	holdDelay      = time.Minute
+	maxListed      = 200
+	defaultListed  = 100
 )
 
-// Platform is the rest of taskto.ai that effects act on. Without one an app's effects can't be done
-// (they stay queued); the server builds the apps service with one.
 type Platform struct {
-	Boards *boards.Service
-	Docs   *knowledge.Store
-	// ProviderKinds says which kinds of integration (KindPayments) a provider of the integrations'
-	// registry does, so an admin can't bind a slot to one that doesn't. It is a function, not the
-	// registry, because package integrations is built on this one. Without it no slot can be bound.
+	Boards        *boards.Service
+	Docs          *knowledge.Store
 	ProviderKinds func(provider string) []string
-	// Payments makes the payment links of create_payment_link effects (paymentlink.go). Without it
-	// such an entry can't be done (it is tried again, then fails for a retry).
-	Payments paylink.Opener
+	Payments      paylink.Opener
 }
 
-// WithPlatform gives the service what its effects act on, and returns it.
 func (s *Service) WithPlatform(p Platform) *Service {
 	s.platform = p
 	return s
 }
 
 var (
-	// ErrOperationReused is for an operation (idempotency key) used before for another request.
 	ErrOperationReused = errors.New("that operation was used for a different request")
-	// errEffectNotFailed is for retrying an effect that didn't fail.
 	errEffectNotFailed = errors.New("only a failed effect can be retried")
 )
 
 var operationPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 
-// operationKey is the operation an action is made under: the client's, checked, or, for an action
-// with effects whose client named none, one the server makes. "" is an action with no operation to
-// remember.
 func operationKey(action ClientAction, hasEffects bool) (string, error) {
 	if action.Operation != "" {
 		if !operationPattern.MatchString(action.Operation) {
@@ -143,8 +82,6 @@ func operationKey(action ClientAction, hasEffects bool) (string, error) {
 	return "srv-" + hex.EncodeToString(b[:]), nil
 }
 
-// requestHash says what a request asked for: the release it runs from (the one that decides what
-// the action does, the effects included), the action and its context.
 func requestHash(release int64, action ClientAction) string {
 	ctx, _ := json.Marshal(action.Context)
 	h := sha256.New()
@@ -158,9 +95,6 @@ func requestHash(release int64, action ClientAction) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// beginOperation records the operation of a request, in the request's transaction. replay is true
-// if the same request was made under it before (its change and effects are in already), and a
-// different one is ErrOperationReused.
 func beginOperation(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, key string, release int64, action ClientAction) (id int64, replay bool, err error) {
 	hash := requestHash(release, action)
 	res, err := tx.ExecContext(ctx, `
@@ -188,16 +122,13 @@ func beginOperation(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, k
 	return id, true, nil
 }
 
-// applied is what a change did to a record, for the effects it sets going.
 type applied struct {
 	id       int64
 	revision int64
 	data     map[string]any
-	// changed is false for an update that left the record as it was.
-	changed bool
+	changed  bool
 }
 
-// backlogError is an app with too many effects waiting.
 func backlogError() error {
 	return &fullError{
 		msg:  fmt.Sprintf("an app has at most %d effects waiting", maxOutstanding),
@@ -205,8 +136,6 @@ func backlogError() error {
 	}
 }
 
-// enqueueEffects adds, in the transaction of the change, an entry for each effect of the action
-// that applies to the record as the change left it, and returns how many it added.
 func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID int64, def Definition, action Action, ap applied) (int, error) {
 	if len(action.Effects) == 0 || !ap.changed {
 		return 0, nil
@@ -235,14 +164,11 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 		e := action.Effects[i]
 		p := e.payload(def.Collection, ap.data, ap.id)
 		if e.Kind == EffectCreatePaymentLink {
-			// Its target is the app's own space: who may read the record may be told what it asks.
 			if err := tx.QueryRowContext(ctx, `SELECT space_id FROM apps WHERE id = ?`, appID).Scan(&p.SpaceID); err != nil {
 				return 0, err
 			}
 		}
 		if e.Card != "" {
-			// An update_card or a route to a card has no target of its own: it is the one of the
-			// effect that makes the card, kept here so who may be told about it is known.
 			if maker, ok := def.cardMaker(e.Card); ok {
 				p.SpaceID, p.BoardID = maker.SpaceID, maker.BoardID
 			}
@@ -272,21 +198,19 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 	return len(queued), nil
 }
 
-// effectRow is an entry as the worker and the listings read it.
 type effectRow struct {
 	id, appID, recordID, recordRevision, userID int64
 	position, attempts                          int
-	// lease is the token of the claim that holds the entry: it only grows (see claim).
-	lease                                     int64
-	operation, action, name, kind, actionKind string
-	agent                                     bool
-	via                                       sql.NullString
-	payload                                   payload
-	state                                     string
-	nextAttemptAt                             string
-	errCode, errParams, result                sql.NullString
-	createdAt, updatedAt                      string
-	doneAt                                    sql.NullString
+	lease                                       int64
+	operation, action, name, kind, actionKind   string
+	agent                                       bool
+	via                                         sql.NullString
+	payload                                     payload
+	state                                       string
+	nextAttemptAt                               string
+	errCode, errParams, result                  sql.NullString
+	createdAt, updatedAt                        string
+	doneAt                                      sql.NullString
 }
 
 const effectFrom = `
@@ -294,7 +218,6 @@ const effectFrom = `
 	JOIN app_operations o ON o.id = e.operation_id
 	JOIN app_rows r ON r.id = e.record_id`
 
-// An entry whose account was purged has no user (user_id is NULL): 0 here, who nobody is.
 const effectColumns = `e.id, e.app_id, e.record_id, e.record_revision, coalesce(e.user_id, 0), e.position, e.attempts, e.lease,
 	o.operation, o.action, e.name, e.kind, e.action_kind, e.acted_by_agent, e.acted_via, e.payload, e.state,
 	e.next_attempt_at, e.error_code, e.error_params, e.result, e.created_at, e.updated_at, e.done_at`
@@ -315,16 +238,11 @@ func scanEffect(row scanner) (effectRow, error) {
 
 func (e effectRow) actor() Actor { return Actor{UserID: e.userID, Agent: e.agent, Via: e.via.String} }
 
-// effectError is why an entry could not be done, as a code to tell people. transient is for a
-// failure that may pass, which is tried again.
 type effectError struct {
 	code      apierr.Code
 	params    apierr.Params
 	transient bool
-	// wait, when positive, puts the entry back to pending for that long and gives the try back: the
-	// work is waiting for something outside that bounds its own wait (a payment link whose outcome at
-	// the provider is not known yet).
-	wait time.Duration
+	wait      time.Duration
 }
 
 func (e *effectError) Error() string { return string(e.code) }
@@ -339,13 +257,8 @@ func refuse(code apierr.Code, params ...apierr.Params) error {
 
 func (s *Service) stamp(t time.Time) string { return t.UTC().Format(timeFormat) }
 
-// errCrash is what a test's hook returns to make the worker stop as if the server had died where
-// the hook is called.
 var errCrash = errors.New("simulated crash")
 
-// StartOutbox starts the worker that does the entries, and returns the function that stops it
-// and waits for it. It runs in the server process: the data directory has one, since it has one
-// server (package lockfile).
 func (s *Service) StartOutbox(ctx context.Context) (stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -373,8 +286,6 @@ func (s *Service) StartOutbox(ctx context.Context) (stop func()) {
 			}
 		}
 	}()
-	// Deleted records past their retention are removed on a worker of their own, so a long
-	// sweep never holds the effects back (retention.go).
 	retained := make(chan struct{})
 	go func() {
 		defer close(retained)
@@ -387,10 +298,8 @@ func (s *Service) StartOutbox(ctx context.Context) (stop func()) {
 	}
 }
 
-// retentionEvery is how often the server looks for deleted records past their retention.
 const retentionEvery = 10 * time.Minute
 
-// retain runs PurgeDeleted at once and then every interval, until ctx is done.
 func (s *Service) retain(ctx context.Context, every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -408,7 +317,6 @@ func (s *Service) retain(ctx context.Context, every time.Duration) {
 	}
 }
 
-// poke wakes the worker, if it runs in this process.
 func (s *Service) poke() {
 	select {
 	case s.wake <- struct{}{}:
@@ -416,7 +324,6 @@ func (s *Service) poke() {
 	}
 }
 
-// drain does the entries that are due, one after another.
 func (s *Service) drain(ctx context.Context) {
 	for ctx.Err() == nil {
 		ok, err := s.runOne(ctx)
@@ -432,12 +339,6 @@ func (s *Service) drain(ctx context.Context) {
 	}
 }
 
-// purge removes the entries and operations nobody needs any more. An entry is judged by its own
-// last activity (updated_at: queued, tried, retried), never by the age of the operation that queued
-// it, so an entry retried today is not erased before it runs because its request is old: finished
-// ones go after keepDone, whatever their state after keepAll. An operation goes once it has no
-// entries left and keepDone has passed since its request. The link of a record to the card made
-// for it (app_effect_cards) is never purged: it goes with its record or app.
 func (s *Service) purge(ctx context.Context) error {
 	t := s.clock()
 	if _, err := s.db.ExecContext(ctx, `
@@ -453,8 +354,6 @@ func (s *Service) purge(ctx context.Context) error {
 	return err
 }
 
-// claim takes the next entry that is due: one that waits, or one whose worker's lease has run out.
-// An entry whose lease ran out after its last permitted try isn't tried again: it has failed.
 func (s *Service) claim(ctx context.Context) (effectRow, bool, error) {
 	var e effectRow
 	var found bool
@@ -476,7 +375,6 @@ func (s *Service) claim(ctx context.Context) (effectRow, bool, error) {
 				return err
 			}
 			if attempts >= maxAttempts {
-				// Its worker died (or kept being stopped) on the last try: the bound holds.
 				if _, err := tx.ExecContext(ctx, `
 					UPDATE app_effects SET state = 'failed', lease_until = NULL, error_code = ?, error_params = NULL, updated_at = ?
 					WHERE id = ?`, string(apierr.CodeAppEffectGaveUp), at, id); err != nil {
@@ -499,10 +397,8 @@ func (s *Service) claim(ctx context.Context) (effectRow, bool, error) {
 	return e, found, err
 }
 
-// errHeld is why an entry is not done now, and not failed either: its user's account is disabled.
 var errHeld = errors.New("the user's account is disabled")
 
-// runOne does the next entry that is due, if there is one.
 func (s *Service) runOne(ctx context.Context) (bool, error) {
 	e, found, err := s.claim(ctx)
 	if err != nil || !found {
@@ -522,10 +418,10 @@ func (s *Service) runOne(ctx context.Context) (bool, error) {
 		err = s.hooks.afterWork(e)
 	}
 	if errors.Is(err, errCrash) {
-		return false, err // the server "died": the entry is left running, as it would be
+		return false, err
 	}
 	if ctx.Err() != nil {
-		return false, ctx.Err() // stopping: the lease runs out and the entry is taken again
+		return false, ctx.Err()
 	}
 	if errors.Is(err, errHeld) || errors.Is(err, access.ErrDisabled) {
 		return true, s.hold(ctx, e)
@@ -536,9 +432,6 @@ func (s *Service) runOne(ctx context.Context) (bool, error) {
 	return true, s.succeed(ctx, e, result)
 }
 
-// hold puts an entry whose user's account is disabled back to pending, to be looked at again after
-// holdDelay, with the try it took given back. It is not a failure: no code is kept and nobody is
-// notified. A worker that no longer owns the entry changes nothing.
 func (s *Service) hold(ctx context.Context, e effectRow) error {
 	t := s.clock()
 	_, err := s.db.ExecContext(ctx, `
@@ -547,7 +440,6 @@ func (s *Service) hold(ctx context.Context, e effectRow) error {
 	return err
 }
 
-// succeed notes an entry as done, if its worker still owns it.
 func (s *Service) succeed(ctx context.Context, e effectRow, result map[string]any) error {
 	raw, err := json.Marshal(result)
 	if err != nil {
@@ -560,11 +452,9 @@ func (s *Service) succeed(ctx context.Context, e effectRow, result map[string]an
 	return err
 }
 
-// fail notes why a try failed: the entry waits for the next one, or has failed for good.
 func (s *Service) fail(ctx context.Context, e effectRow, cause error) error {
 	var ee *effectError
 	if !errors.As(cause, &ee) {
-		// Not one of the reasons the entry was written for: the database, the disk, a timeout.
 		slog.Warn("apps: effect failed", "effect", e.id, "kind", e.kind, "attempt", e.attempts, "err", cause)
 		ee = &effectError{code: apierr.CodeAppEffectGaveUp, transient: true}
 	}
@@ -575,7 +465,6 @@ func (s *Service) fail(ctx context.Context, e effectRow, cause error) error {
 		params = string(raw)
 	}
 	if ee.wait > 0 {
-		// Not a failed try: the entry waits, and the wait's own bound ends it (hold's way).
 		_, err := s.db.ExecContext(ctx, `
 			UPDATE app_effects SET state = 'pending', attempts = max(attempts - 1, 0), next_attempt_at = ?, lease_until = NULL, error_code = ?, error_params = ?, updated_at = ?
 			WHERE id = ? AND state = 'running' AND lease = ?`, s.stamp(t.Add(ee.wait)), string(ee.code), params, s.stamp(t), e.id, e.lease)
@@ -596,17 +485,12 @@ func (s *Service) fail(ctx context.Context, e effectRow, cause error) error {
 			return err
 		}
 		if n, err := res.RowsAffected(); err != nil || n != 1 {
-			return err // a worker that no longer owns the entry tells nobody
+			return err
 		}
 		return notifyEffectFailed(ctx, tx, e.id)
 	})
 }
 
-// notifyEffectFailed tells the user the entry was done for, in their notification inbox (and by
-// push, if they chose that), that it failed for good and waits for them to retry it. The
-// notification names the app and the entry, never what the entry was to make: what it says is
-// worked out when it is read, from what they may read then. A failure after a retry is a new
-// notification, one per claim.
 func notifyEffectFailed(ctx context.Context, tx *sql.Tx, effectID int64) error {
 	var userID sql.NullInt64
 	var appID, lease, spaceID, workspaceID int64
@@ -621,7 +505,7 @@ func notifyEffectFailed(ctx context.Context, tx *sql.Tx, effectID int64) error {
 		return err
 	}
 	if !userID.Valid {
-		return nil // the account that acted is gone: nobody to tell
+		return nil
 	}
 	return notifications.Add(ctx, tx, notifications.Notice{
 		UserID: userID.Int64, WorkspaceID: workspaceID, Kind: notifications.KindAppEffectFailed,
@@ -630,11 +514,6 @@ func notifyEffectFailed(ctx context.Context, tx *sql.Tx, effectID int64) error {
 	})
 }
 
-// perform does one entry: it checks, as the user who acted and as of now, that they may still do
-// what the action did and what the effect does, and then does it. The checks are repeated as close
-// to the write as the data allows: inside the transaction of a card's change (where the write lock
-// holds, so nothing they rely on changes before the card does), and, for a document, which git
-// holds, right before it is written.
 func (s *Service) perform(ctx context.Context, e effectRow) (map[string]any, error) {
 	switch e.kind {
 	case EffectCreateCard:
@@ -651,24 +530,14 @@ func (s *Service) perform(ctx context.Context, e effectRow) (map[string]any, err
 	return nil, refuse(apierr.CodeAppEffectInvalid)
 }
 
-// authorizeApp checks that the user who acted still may do, in the app, what the action did, as of
-// now: the app is there and online, they may write its space and open the app, they hold the right
-// the kind of action needed, over the record the entry came from (the user's own or all, as the
-// role now says: an update needs the right to change that record, and to read it), and the record
-// is still there. An offline app does nothing.
 func (s *Service) authorizeApp(ctx context.Context, e effectRow) error {
 	return s.authorizeAppIn(ctx, e, 0)
 }
 
-// authorizeAppIn is authorizeApp for a caller that has read other things of the app in a space it
-// names (inSpace, 0 for none): an app that is in another space now, moved since, is not found.
 func (s *Service) authorizeAppIn(ctx context.Context, e effectRow, inSpace int64) error {
 	return s.authorizeAppOn(ctx, s.db, s.access, e, inSpace)
 }
 
-// authorizeAppOn is authorizeAppIn reading through q and ac: a caller that holds a transaction passes
-// it, and the checker over it (access.Checker.On, Snapshot), so that every read of the check, and the
-// caller's own, are of one state of the database and not of several instants.
 func (s *Service) authorizeAppOn(ctx context.Context, q queryer, ac *access.Checker, e effectRow, inSpace int64) error {
 	var spaceID int64
 	var archived sql.NullString
@@ -732,8 +601,6 @@ func (s *Service) authorizeAppOn(ctx context.Context, q queryer, ac *access.Chec
 	return nil
 }
 
-// target checks the user's access to the space an effect acts in: write for one that changes
-// something, read to open it.
 func (s *Service) target(ctx context.Context, userID, spaceID int64, write bool) (access.Space, error) {
 	sp, err := s.access.Check(ctx, userID, spaceID)
 	if errors.Is(err, access.ErrNotFound) {
@@ -753,7 +620,6 @@ func (s *Service) target(ctx context.Context, userID, spaceID int64, write bool)
 	return sp, nil
 }
 
-// boardsError turns a refusal of package boards into the entry's.
 func boardsError(err error) error {
 	switch {
 	case errors.Is(err, boards.ErrNotFound):
@@ -775,9 +641,6 @@ func (s *Service) boardSvc() (*boards.Service, error) {
 	return s.platform.Boards, nil
 }
 
-// cardOrigin is the key a card made by entry id carries. An entry's number is never given again
-// (the table's rows are numbered with AUTOINCREMENT), so no later entry can find an earlier one's
-// card as its own.
 func cardOrigin(id int64) string { return fmt.Sprintf("app-effect:%d", id) }
 
 func (s *Service) createCard(ctx context.Context, e effectRow) (map[string]any, error) {
@@ -792,9 +655,6 @@ func (s *Service) createCard(ctx context.Context, e effectRow) (map[string]any, 
 	}
 	card, err := b.CreateCard(ctx, boards.Actor(e.actor()), p.SpaceID, p.BoardID, boards.NewCard{
 		Title: p.Title, Body: p.Body, Column: boards.Column(p.Column), Docs: p.Docs, Origin: cardOrigin(e.id),
-		// In the transaction that makes the card, which holds the write lock: nothing that
-		// authorized the entry changes before the card is there, and the record's link to the card
-		// is made with it, so there is never a card the record doesn't know of.
 		Check: func(*sql.Tx) error {
 			if err := s.authorizeApp(ctx, e); err != nil {
 				return err
@@ -806,8 +666,6 @@ func (s *Service) createCard(ctx context.Context, e effectRow) (map[string]any, 
 			if e.name == "" {
 				return nil
 			}
-			// A newer card for the name replaces the link and starts its moves afresh; an older
-			// entry done again late never takes it back.
 			_, err := tx.ExecContext(ctx, `
 				INSERT INTO app_effect_cards (app_id, record_id, name, space_id, board_id, card_id, made_by, last_move)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -825,16 +683,11 @@ func (s *Service) createCard(ctx context.Context, e effectRow) (map[string]any, 
 	return map[string]any{"workspace_id": sp.WorkspaceID, "space_id": p.SpaceID, "board_id": p.BoardID, "card_id": card.ID, "title": card.Title}, nil
 }
 
-// cardRef is a card an entry made, as its record's link names it.
 type cardRef struct {
 	spaceID, boardID, cardID int64
 	lastMove                 int64
 }
 
-// linkedCard finds the card the create_card effect called name made for the entry's record, in the
-// record's durable link (which the cleanup of entries leaves alone). A card still to be made by an
-// entry queued before this one is waited for (a transient failure); one that was not made, or
-// won't be, is the entry's failure.
 func (s *Service) linkedCard(ctx context.Context, e effectRow, name string) (cardRef, error) {
 	var waiting bool
 	if err := s.db.QueryRowContext(ctx, `
@@ -871,10 +724,6 @@ func (s *Service) updateCard(ctx context.Context, e effectRow) (map[string]any, 
 	}
 	column := boards.Column(e.payload.Column)
 	result := map[string]any{"workspace_id": sp.WorkspaceID, "space_id": ref.spaceID, "board_id": ref.boardID, "card_id": ref.cardID, "column": e.payload.Column}
-	// The move is made in one transaction with the note of it on the record's link: a move is
-	// made only if no later entry's move was made before, so one that is done again late (its
-	// worker died before it noted it done) never undoes what a newer one did. An entry that has
-	// nothing to do (superseded, or the card is already there) is a success all the same.
 	_, _, err = b.MoveCardIf(ctx, boards.Actor(e.actor()), ref.spaceID, ref.boardID, ref.cardID, column, func(tx *sql.Tx, c boards.Card) (bool, error) {
 		if err := s.authorizeApp(ctx, e); err != nil {
 			return false, err
@@ -901,17 +750,11 @@ func (s *Service) updateCard(ctx context.Context, e effectRow) (map[string]any, 
 	return result, nil
 }
 
-// documentMessage is the commit message of a document an effect makes; documentAgent is who the
-// history says made it for the user.
 const (
 	documentMessage = "Created by an app"
 	documentAgent   = "TaskTo app"
 )
 
-// documentCommitMessage names the entry in the commit it makes, so that a try that finds the entry
-// again after a crash between the commit and the note that it was done can tell that the document
-// was made, whatever became of the document since (edited, moved, deleted). An entry's number is
-// never given again.
 func documentCommitMessage(e effectRow) string {
 	return fmt.Sprintf("%s [effect %d/%d]", documentMessage, e.appID, e.id)
 }
@@ -927,9 +770,6 @@ func (s *Service) createDocument(ctx context.Context, e effectRow) (map[string]a
 	}
 	made := map[string]any{"workspace_id": sp.WorkspaceID, "space_id": p.SpaceID, "path": p.Path}
 	message := documentCommitMessage(e)
-	// An entry that was claimed before may have made its document and been stopped before it
-	// noted so. Its commit is looked for by the message it was given: if it is there, the entry is
-	// done, and what the document is now is none of its business.
 	if e.lease > 1 {
 		if _, found, err := s.platform.Docs.FindCommit(ctx, sp, message, documentAgent); err != nil {
 			return nil, err
@@ -937,9 +777,6 @@ func (s *Service) createDocument(ctx context.Context, e effectRow) (map[string]a
 			return made, nil
 		}
 	}
-	// The checks are repeated while the space's write lock is held, right before the commit: the
-	// entry may have waited for the lock, and what it was allowed when it began may have been
-	// withdrawn since.
 	guard := func() error {
 		if err := s.authorizeApp(ctx, e); err != nil {
 			return err
@@ -962,8 +799,6 @@ func (s *Service) createDocument(ctx context.Context, e effectRow) (map[string]a
 	case err == nil:
 		return made, nil
 	case errors.Is(err, knowledge.ErrConflict):
-		// A document is there. Made by an earlier try that never noted it, if it is exactly what
-		// this entry writes; someone else's if not, and never overwritten.
 		doc, rerr := s.platform.Docs.Read(ctx, sp, p.Path, "")
 		if rerr == nil && bytes.Equal(doc.Content, []byte(p.Content)) {
 			made["version"] = doc.Version
@@ -975,7 +810,6 @@ func (s *Service) createDocument(ctx context.Context, e effectRow) (map[string]a
 	case errors.Is(err, knowledge.ErrReadOnly):
 		return nil, refuse(apierr.CodeAppEffectTargetAccess)
 	case errors.Is(err, quota.ErrExceeded):
-		// Final, and said as what it is: a retry fits once someone makes room.
 		return nil, refuse(apierr.CodeAppEffectQuota)
 	case errors.Is(err, knowledge.ErrRepoFull):
 		return nil, refuse(apierr.CodeAppEffectInvalid)
@@ -983,8 +817,6 @@ func (s *Service) createDocument(ctx context.Context, e effectRow) (map[string]a
 	return nil, err
 }
 
-// openRoute resolves a route: the user must be able to read where it goes, and what it says is
-// kind and IDs, which the web app turns into its own address. It makes nothing.
 func (s *Service) openRoute(ctx context.Context, e effectRow) (map[string]any, error) {
 	if err := s.authorizeApp(ctx, e); err != nil {
 		return nil, err

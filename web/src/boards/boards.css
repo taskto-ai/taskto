@@ -1,8 +1,4 @@
-/* Boards: the board's columns and cards, and the open card in its drawer (docs/design.md). Every
-   value is a token; colours are roles, the columns' hues and the labels' come from the theme. */
-
 @layer screens {
-  /* A move or a drop, said to a screen reader and shown to nobody. */
   .ui-board-said {
     position: absolute;
     inline-size: 1px;
@@ -15,14 +11,6 @@
     border: 0;
   }
 
-  /* The board: its head, its notices and its columns. While a card is open on a wide board, the
-     card lies over the board, and the board keeps its look: its head and its notices keep clear of
-     the drawer (Add a card and the filters stay in reach), and the columns keep the width they have
-     with the card closed while their scroll box ends at the drawer's edge. So the last columns
-     scroll out from beside the drawer, a tile that takes the keyboard is scrolled into the part that
-     is seen, and dragging a card to that edge scrolls the board as it does with the card closed.
-     Only those three are named: what else is drawn in the board (the card's own questions, which
-     are dialogs) keeps its own size. */
   .ui-board {
     display: flex;
     flex-direction: column;
@@ -38,8 +26,6 @@
 
     .ui-board[data-drawer] > .ui-board-columns {
       margin-inline-end: var(--width-drawer);
-      /* As wide as with the card closed: the board's width (this box's and the drawer's) shared out,
-         none narrower than a column may be. */
       grid-template-columns: repeat(
           var(--board-columns),
           max(
@@ -50,8 +36,6 @@
     }
   }
 
-  /* Up to a small laptop, the open card takes the screen: beside it, only a sliver of the board
-     would be left. */
   @media (max-width: 64rem) {
     .ui-board-drawer {
       inline-size: 100vw;
@@ -59,16 +43,12 @@
     }
   }
 
-  /* The columns side by side; on a narrow screen they scroll sideways in their own box, never
-     the page. Every column is as tall as the tallest (its cards align to its start), so a card
-     dragged straight across from a long column lands in a short one, not between them. */
   .ui-board-columns {
     display: grid;
     grid-auto-flow: column;
     grid-auto-columns: minmax(var(--width-board-column), 1fr);
     gap: var(--space-3);
     min-inline-size: 0;
-    /* Its own width never widens the page: the columns scroll inside it. */
     contain: inline-size;
     overflow-x: auto;
     overscroll-behavior-inline: contain;
@@ -86,7 +66,6 @@
     transition: box-shadow var(--duration-fast) var(--ease-out);
   }
 
-  /* A card dragged over the column: where it will land. */
   .ui-board-column[data-drop] {
     box-shadow: inset 0 0 0 var(--line-strong) var(--color-border-strong);
   }
@@ -111,7 +90,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* A status dot in the column's hue; backlog (and an archived card) is a hollow ring. */
   .ui-board-dot {
     display: inline-block;
     flex: none;
@@ -149,7 +127,6 @@
     list-style: none;
   }
 
-  /* An empty column: a quiet place to drop a card. With a filter on, it says nothing matches. */
   .ui-board-empty {
     margin: 0;
     min-block-size: var(--space-16);
@@ -160,7 +137,6 @@
     color: var(--color-text-muted);
   }
 
-  /* A card on the board. */
   .ui-board-card {
     position: relative;
     list-style: none;
@@ -202,13 +178,11 @@
     outline-offset: var(--line-focus-offset);
   }
 
-  /* The card being viewed. */
   .ui-board-card-open[aria-current] {
     border-color: var(--color-text);
     box-shadow: 0 0 0 var(--line-thin) var(--color-text);
   }
 
-  /* A blocked card: tinted in the danger tone all over, never a bar down one side. */
   .ui-board-card[data-blocked] > .ui-board-card-open {
     border-color: color-mix(in srgb, var(--color-danger) 50%, var(--color-surface));
     background: color-mix(in srgb, var(--color-danger-soft) 70%, var(--color-surface));
@@ -241,7 +215,6 @@
     margin-inline-start: auto;
   }
 
-  /* The card's Move menu, at its top corner: shown on hover and focus, always on touch. */
   .ui-board-card-menu {
     position: absolute;
     inset-block-start: var(--space-1);
@@ -268,7 +241,6 @@
     }
   }
 
-  /* A due date that is neither late nor soon: quiet. */
   .ui-board-due {
     display: inline-flex;
     align-items: center;
@@ -300,9 +272,6 @@
     gap: var(--space-3);
   }
 
-  /* The open card's properties: a name and a value per row. */
-  /* The drawer's parts may be narrower than what is in them (a long word, a code block): they
-     wrap, or scroll in their own box, never widen the drawer. */
   .ui-board-props {
     display: grid;
     gap: var(--space-1);
@@ -341,13 +310,10 @@
     min-inline-size: 0;
   }
 
-  /* A menu standing for a value (a property, the space in the path) lines its words up with the
-     words around it: the small button's own padding is taken back. */
   .ui-board-value-button {
     margin-inline-start: calc(-1 * var(--space-3));
   }
 
-  /* In a menu button's words, the dot keeps its distance from the column's name. */
   .ui-board-value-button .ui-board-dot {
     margin-inline-end: var(--space-2);
   }
@@ -368,7 +334,6 @@
     inline-size: auto;
   }
 
-  /* A field that takes the rest of its row (a path, a label, a conversation). */
   .ui-board-grow {
     flex: 1 1 0;
     min-inline-size: calc(var(--space-16) * 2);
@@ -409,14 +374,12 @@
   .ui-board-checks {
     display: grid;
     gap: var(--space-1);
-    /* A fieldset is as wide as its widest line unless told otherwise. */
     min-inline-size: 0;
     margin: 0;
     padding: 0;
     border: 0;
   }
 
-  /* A card's title beside its box, broken anywhere when it is one long word. */
   .ui-board-check-title {
     overflow-wrap: anywhere;
     min-inline-size: 0;
@@ -478,7 +441,6 @@
     min-block-size: var(--control-sm);
   }
 
-  /* What people read: the description, at the reading size. */
   .ui-board-reading {
     min-inline-size: 0;
     font: var(--type-reading);
@@ -545,7 +507,6 @@
   }
 
   @media (max-width: 640px) {
-    /* A column a little narrower than the screen, so the next one shows at the edge. */
     .ui-board-columns {
       grid-auto-columns: 84%;
       scroll-snap-type: inline proximity;

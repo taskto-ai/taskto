@@ -17,15 +17,10 @@ import (
 	"taskto.ai/taskto/internal/paylink"
 )
 
-// ----- an admin's confirmation never contradicts what the server saw -----
-
-// retrieval matches a request that reads one object (its state), and not a list or a link's line items.
 func retrieval(r *http.Request) bool {
 	return r.URL.RawQuery == "" && !strings.HasSuffix(r.URL.Path, "/line_items")
 }
 
-// confirm asks, as the owner (an admin), to confirm that no link exists for the entry, and returns the
-// answer's status and code.
 func (p *pay) confirm(effect int64) (int, string) {
 	p.t.Helper()
 	rec := p.owner.do(http.MethodPost, p.confirmPath(effect, fmt.Sprintf("%d/confirm-no-link", effect)), p.checkedBody(effect))
@@ -37,7 +32,6 @@ func (p *pay) confirm(effect int64) (int, string) {
 	}](p.t, rec).Code
 }
 
-// unresolvedList is the admins' list of what waits for a decision.
 func (p *pay) unresolvedList() []PaymentLinkOutcome {
 	p.t.Helper()
 	rec := p.owner.do(http.MethodGet, p.confirmPath(0, "unresolved"), nil)
@@ -45,14 +39,11 @@ func (p *pay) unresolvedList() []PaymentLinkOutcome {
 	return decode[PaymentLinkOutcomes](p.t, rec).PaymentLinks
 }
 
-// refusedConfirmation checks that an admin's confirmation is refused with integration_link_not_confirmable,
-// is offered by nobody, and changes nothing: no key abandoned, the ref on its key, no audit event.
 func (p *pay) refusedConfirmation(e entry, keySeq int) {
 	p.t.Helper()
 	if status, code := p.confirm(e.id); status != http.StatusConflict || code != string(apierr.CodeIntegrationLinkNotConfirmable) {
 		p.t.Fatalf("confirm = %d %q, want 409 %s", status, code, apierr.CodeIntegrationLinkNotConfirmable)
 	}
-	// Still listed, for an admin to see, and not offered for confirmation.
 	list := p.unresolvedList()
 	if len(list) != 1 || list[0].EffectID != e.id || list[0].CanConfirm {
 		p.t.Fatalf("list = %+v: a ref with something seen is offered for confirmation", list)
@@ -71,10 +62,6 @@ func (p *pay) refusedConfirmation(e entry, keySeq int) {
 	}
 }
 
-// An object a key made was seen, and its state could never be read: the call's answer named it, or a
-// lookup found it by the key's token. Its outcome stays unknown for the whole wait, and an admin who
-// then confirms "no link exists" contradicts what the server saw: the confirmation is refused, no new key
-// is taken, and the object, once it can be read, is the one link.
 func TestAnAdminCannotConfirmNoLinkForAKeyWhoseObjectWasSeen(t *testing.T) {
 	for name, shape := range linkShapes {
 		for _, how := range []string{"an answer named it", "a lookup found it"} {
@@ -93,7 +80,7 @@ func TestAnAdminCannotConfirmNoLinkForAKeyWhoseObjectWasSeen(t *testing.T) {
 				} else {
 					p.unknownOutcome(shape, "op-seen-0002")
 					p.fake.Fail(down)
-					p.appear(shape.path, 0) // the lost call's object turns up, and its state can't be read
+					p.appear(shape.path, 0)
 					p.later(time.Minute)
 					p.waitFor("the lookup finds it and can't read its state", func() bool {
 						for _, r := range p.fake.Requests() {
@@ -115,7 +102,6 @@ func TestAnAdminCannotConfirmNoLinkForAKeyWhoseObjectWasSeen(t *testing.T) {
 					t.Fatalf("calls under %d keys", len(keys))
 				}
 
-				// Once its state can be read, a retry adopts it: one object, the link.
 				p.fake.ClearFaults()
 				expect(t, p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/effects/%d/retry", p.app.ID, e.id)), map[string]any{}), http.StatusOK)
 				p.settled(apps.StateDone)
@@ -130,8 +116,6 @@ func TestAnAdminCannotConfirmNoLinkForAKeyWhoseObjectWasSeen(t *testing.T) {
 	}
 }
 
-// A ref whose first key was resolved (its session seen expired) and whose second key's outcome stayed
-// unknown: a key of it is accounted for already, so an admin's confirmation is refused; no third key.
 func TestAnAdminCannotConfirmNoLinkAfterAKeyOfTheRefWasResolved(t *testing.T) {
 	ctx := context.Background()
 	p := newPay(t, publicURL)
@@ -144,7 +128,6 @@ func TestAnAdminCannotConfirmNoLinkAfterAKeyOfTheRefWasResolved(t *testing.T) {
 	if _, err := p.fake.Expire(p.fake.Sessions()[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	// The lookup sees the first key's session expired, and the second key's call is lost too.
 	p.fake.Fail(testprovider.ServerError().KeptUnderKey().Forever().On(http.MethodPost, "/v1/checkout/sessions"))
 	if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationLinkLookupPending) {
 		t.Fatalf("err = %v", err)
@@ -156,7 +139,6 @@ func TestAnAdminCannotConfirmNoLinkAfterAKeyOfTheRefWasResolved(t *testing.T) {
 	if _, err := p.svc.OpenPaymentLink(ctx, req); !hasCode(err, apierr.CodeIntegrationOutcomeUnknown) {
 		t.Fatalf("err = %v", err)
 	}
-	// What the worker does with that answer.
 	p.exec(`UPDATE app_effects SET state = 'failed', error_code = ?`, string(apierr.CodeIntegrationOutcomeUnknown))
 	e := p.entries()[0]
 	if status, code := p.confirm(e.id); status != http.StatusConflict || code != string(apierr.CodeIntegrationLinkNotConfirmable) {
@@ -176,8 +158,6 @@ func TestAnAdminCannotConfirmNoLinkAfterAKeyOfTheRefWasResolved(t *testing.T) {
 	}
 }
 
-// A key abandoned although an object of it is on record (an admin's "none exists" that something seen
-// contradicts) never lets the ref move on by itself: the try stops for a person, and nothing is asked.
 func TestARefNeverMovesOnFromAnAbandonedKeyWithAnObjectOnRecord(t *testing.T) {
 	for name, shape := range linkShapes {
 		t.Run(name, func(t *testing.T) {
@@ -209,10 +189,6 @@ func hasCode(err error, code apierr.Code) bool {
 	return errors.As(err, &pe) && pe.Code == code
 }
 
-// ----- every failed read stays on the reconciliation's schedule -----
-
-// others makes n objects at Stripe that belong to nobody here (another system of the account), newer
-// than the ref's: a lookup reads past them, onto its next page.
 func (p *pay) others(path string, n int) {
 	p.t.Helper()
 	first := p.fake.RequestsTo(http.MethodPost, path)[0].Form
@@ -231,18 +207,11 @@ func (p *pay) others(path string, n int) {
 	}
 }
 
-// Each read of the reconciliation failing, with the key refused or the provider down: the account read,
-// the lookup's first page and a later one, a Payment Link's line items, and the read of the state of
-// the key's object. None ends the entry early or uses up its tries: it waits on the reconciliation's
-// schedule, ends at its own bound with integration_outcome_unknown, and no other key is asked.
 func TestEveryFailedReadOfTheReconciliationStaysOnItsSchedule(t *testing.T) {
 	type read struct {
-		// setup readies what the read needs, once the key's outcome is unknown.
-		setup func(p *pay, path string)
-		// fault is where the failure strikes; reads counts the requests it strikes.
-		fault func(path string) testprovider.Fault
-		reads func(p *pay, path string) int
-		// hosted only: a Payment Link's own read.
+		setup  func(p *pay, path string)
+		fault  func(path string) testprovider.Fault
+		reads  func(p *pay, path string) int
 		hosted bool
 	}
 	gets := func(p *pay, path string) int { return len(p.fake.RequestsTo(http.MethodGet, path)) }
@@ -349,12 +318,6 @@ func TestEveryFailedReadOfTheReconciliationStaysOnItsSchedule(t *testing.T) {
 	}
 }
 
-// An admin confirms that no link exists for the attempt their screen showed, not for whatever the ref
-// holds by the time the request arrives. Here the person who acted retried the entry between the
-// admin's check at the provider and the admin's answer: a second call went out under the same key, so
-// what the admin checked is no longer what may exist at the provider. The stale confirmation is
-// refused (integration_link_attempt_changed), changes nothing, and one made from the list as it is
-// now is accepted.
 func TestAnAdminsConfirmationIsBoundToTheAttemptTheyChecked(t *testing.T) {
 	shape := linkShapes["a checkout session"]
 	p := newPay(t, shape.public)
@@ -369,7 +332,6 @@ func TestAnAdminsConfirmationIsBoundToTheAttemptTheyChecked(t *testing.T) {
 	}
 	checked := list[0]
 
-	// The entry is retried and sends again under the same key, whose outcome stays unknown.
 	expect(t, p.owner.do(http.MethodPost, p.appsPath(fmt.Sprintf("/%d/effects/%d/retry", p.app.ID, e.id)), map[string]any{}), http.StatusOK)
 	p.waitFor("another call under the key", func() bool {
 		return p.count(`SELECT sends FROM integration_ref_attempts WHERE seq = 0`) > checked.AttemptSends
@@ -419,8 +381,6 @@ func TestAnAdminsConfirmationIsBoundToTheAttemptTheyChecked(t *testing.T) {
 	}
 }
 
-// checkedAttempt is the attempt of the entry's ref that waits for a decision, as the admins' list shows
-// it: what a confirmation names (read from the database, so it is there for a ref the list hides too).
 func (p *pay) checkedAttempt(effect int64) CheckedAttempt {
 	p.t.Helper()
 	var seq, sends int
@@ -435,7 +395,6 @@ func (p *pay) checkedAttempt(effect int64) CheckedAttempt {
 	return CheckedAttempt{Seq: &seq, Sends: &sends}
 }
 
-// checkedBody is a confirmation's body naming the attempt that waits now.
 func (p *pay) checkedBody(effect int64) map[string]any {
 	p.t.Helper()
 	c := p.checkedAttempt(effect)
