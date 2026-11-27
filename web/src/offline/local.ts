@@ -369,6 +369,20 @@ type SeriesDefinition = {
   where?: unknown
 }
 
+const utf8 = new TextEncoder()
+
+function compareBytes(a: string, b: string): number {
+  const x = utf8.encode(a)
+  const y = utf8.encode(b)
+  const shared = Math.min(x.length, y.length)
+  for (let i = 0; i < shared; i++) if (x[i] !== y[i]) return x[i] - y[i]
+  return x.length - y.length
+}
+
+function ownLabel(labels: Record<string, string> | undefined, key: string): string {
+  return labels && Object.hasOwn(labels, key) ? labels[key] : key
+}
+
 function computeSeries(s: SeriesDefinition, def: Definition, rows: Item[], now: Date): unknown {
   const fields = def.collection.fields as Field[]
   const byName = new Map(fields.map((f) => [f.name, f]))
@@ -413,7 +427,7 @@ function computeSeries(s: SeriesDefinition, def: Definition, rows: Item[], now: 
     const last = s.last || 12
     for (let i = last - 1; i >= 0; i--) addGroup(dateKey(shiftDate(current, -i)))
   } else if (groupField.type === 'choice') {
-    for (const key of groupField.options ?? []) addGroup(key, groupField.option_labels?.[key] ?? key)
+    for (const key of groupField.options ?? []) addGroup(key, ownLabel(groupField.option_labels, key))
   } else if (groupField.type === 'boolean') {
     addGroup('false')
     addGroup('true')
@@ -425,7 +439,7 @@ function computeSeries(s: SeriesDefinition, def: Definition, rows: Item[], now: 
     }
     const keys = [...counts.keys()]
       .filter((key) => key !== 'other')
-      .sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || (a < b ? -1 : a > b ? 1 : 0))
+      .sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || compareBytes(a, b))
       .slice(0, 20)
     for (const key of keys) addGroup(key)
     addGroup('other')
@@ -433,14 +447,14 @@ function computeSeries(s: SeriesDefinition, def: Definition, rows: Item[], now: 
   const splitField = s.split_by ? byName.get(s.split_by) : undefined
   const splits =
     splitField?.type === 'choice'
-      ? (splitField.options ?? []).map((key) => ({ key, label: splitField.option_labels?.[key] ?? key }))
+      ? (splitField.options ?? []).map((key) => ({ key, label: ownLabel(splitField.option_labels, key) }))
       : splitField?.type === 'boolean'
         ? [
             { key: 'false', label: 'false' },
             { key: 'true', label: 'true' },
           ]
         : [{ key: '', label: '' }]
-  const totals = splits.map(() => groups.map(() => ({ count: 0, sum: 0 })))
+  const totals = splits.map(() => groups.map(() => ({ count: 0, sum: 0, mean: 0 })))
   for (const row of rows) {
     const raw = row[s.group_by]
     if (!keeps(row)) continue
@@ -467,15 +481,19 @@ function computeSeries(s: SeriesDefinition, def: Definition, rows: Item[], now: 
     }
     const total = totals[split][group]
     total.count++
-    if (s.kind !== 'count') total.sum += amount as number
+    if (s.kind !== 'count') {
+      total.sum += amount as number
+      total.mean += ((amount as number) - total.mean) / total.count
+    }
   }
   return {
     x: groups,
     series: splits.map((split, i) => ({
       ...split,
-      values: totals[i].map((v) =>
-        s.kind === 'count' ? v.count : s.kind === 'sum' ? v.sum : v.count ? v.sum / v.count : null,
-      ),
+      values: totals[i].map((v) => {
+        const value = s.kind === 'count' ? v.count : s.kind === 'sum' ? v.sum : v.count ? v.mean : null
+        return value !== null && Number.isFinite(value) ? value : null
+      }),
     })),
   }
 }

@@ -1,6 +1,7 @@
 package apps
 
 import (
+	"math"
 	"sort"
 	"strconv"
 	"time"
@@ -98,11 +99,11 @@ type seriesGroup struct {
 type seriesTotal struct {
 	count int
 	sum   float64
+	mean  float64
 }
 
 func computeSeries(s Series, c Collection, rows []Row, now time.Time) SeriesData {
 	groupField, _ := c.field(s.GroupBy)
-	valueField, _ := c.field(s.Field)
 	var groups []seriesGroup
 	groupIndex := map[string]int{}
 	switch groupField.Type {
@@ -131,10 +132,11 @@ func computeSeries(s Series, c Collection, rows []Row, now time.Time) SeriesData
 	if groupField.Type == TypeString {
 		textCounts = map[string]int{}
 		for _, row := range rows {
-			if !seriesKeeps(s, c, row) || !ofType(groupField, row.Data[s.GroupBy]) {
+			value, isText := row.Data[s.GroupBy].(string)
+			if !seriesKeeps(s, c, row) || !isText {
 				continue
 			}
-			textCounts[row.Data[s.GroupBy].(string)]++
+			textCounts[value]++
 		}
 		keys := make([]string, 0, len(textCounts))
 		for key := range textCounts {
@@ -177,61 +179,48 @@ func computeSeries(s Series, c Collection, rows []Row, now time.Time) SeriesData
 		totals[i] = make([]seriesTotal, len(groups))
 	}
 	for _, row := range rows {
-		if !seriesKeeps(s, c, row) || !ofType(groupField, row.Data[s.GroupBy]) {
+		if !seriesKeeps(s, c, row) {
 			continue
 		}
-		groupKey := ""
-		if groupField.Type == TypeDate {
-			d, err := time.Parse("2006-01-02", row.Data[s.GroupBy].(string))
-			if err != nil {
-				continue
-			}
-			groupKey = bucketKey(bucketStart(d.UTC(), s.Bucket), s.Bucket)
-		} else if groupField.Type == TypeBoolean {
-			groupKey = "false"
-			if row.Data[s.GroupBy].(bool) {
-				groupKey = "true"
-			}
-		} else {
-			groupKey = row.Data[s.GroupBy].(string)
+		groupKey, ok := seriesKey(groupField, row.Data[s.GroupBy], s.Bucket)
+		if !ok {
+			continue
 		}
 		group, exists := groupIndex[groupKey]
 		if !exists && groupField.Type == TypeString {
-			group = groupIndex["other"]
-			exists = true
+			group, exists = groupIndex["other"], true
 		}
 		if !exists {
 			continue
 		}
-		if s.Kind != "count" && !ofType(valueField, row.Data[s.Field]) {
-			continue
+		var amount float64
+		if s.Kind != "count" {
+			amount, ok = row.Data[s.Field].(float64)
+			if !ok {
+				continue
+			}
 		}
 		split := 0
 		if hasSplit {
-			if !ofType(splitField, row.Data[s.SplitBy]) {
+			splitKey, ok := seriesKey(splitField, row.Data[s.SplitBy], "")
+			if !ok {
 				continue
 			}
-			splitKey := ""
-			if splitField.Type == TypeBoolean {
-				splitKey = "false"
-				if row.Data[s.SplitBy].(bool) {
-					splitKey = "true"
-				}
-			} else {
-				splitKey = row.Data[s.SplitBy].(string)
-			}
+			split = -1
 			for i := range splits {
 				if splits[i].key == splitKey {
 					split = i
 					break
 				}
 			}
+			if split < 0 {
+				continue
+			}
 		}
 		t := &totals[split][group]
 		t.count++
-		if s.Kind != "count" {
-			t.sum += row.Data[s.Field].(float64)
-		}
+		t.sum += amount
+		t.mean += (amount - t.mean) / float64(t.count)
 	}
 	data := SeriesData{}
 	for _, group := range groups {
@@ -250,13 +239,37 @@ func computeSeries(s Series, c Collection, rows []Row, now time.Time) SeriesData
 				if total.count == 0 {
 					continue
 				}
-				value = total.sum / float64(total.count)
+				value = total.mean
+			}
+			if math.IsInf(value, 0) || math.IsNaN(value) {
+				continue
 			}
 			line.Values[j] = &value
 		}
 		data.Series = append(data.Series, line)
 	}
 	return data
+}
+
+func seriesKey(f Field, v any, bucket string) (string, bool) {
+	switch f.Type {
+	case TypeDate:
+		text, ok := v.(string)
+		if !ok {
+			return "", false
+		}
+		d, err := time.Parse("2006-01-02", text)
+		if err != nil {
+			return "", false
+		}
+		return bucketKey(bucketStart(d.UTC(), bucket), bucket), true
+	case TypeBoolean:
+		b, ok := v.(bool)
+		return strconv.FormatBool(b), ok
+	default:
+		text, ok := v.(string)
+		return text, ok
+	}
 }
 
 func seriesKeeps(s Series, c Collection, row Row) bool {

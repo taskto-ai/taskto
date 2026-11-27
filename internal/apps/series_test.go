@@ -1,6 +1,8 @@
 package apps
 
 import (
+	"encoding/json"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -203,4 +205,61 @@ func TestSeriesFixtureSharedWithTheWebApp(t *testing.T) {
 		t.Fatalf("week keys = %v", got)
 	}
 	golden(t, "series.json", fixture)
+}
+
+func TestSeriesToleratesValuesOfAnOlderFieldType(t *testing.T) {
+	c := Collection{Fields: []Field{
+		{Name: "amount", Type: TypeNumber},
+		{Name: "active", Type: TypeBoolean},
+		{Name: "status", Type: TypeChoice, Options: []string{"open"}},
+	}}
+	rows := []Row{
+		{Data: map[string]any{"amount": "4", "active": "true", "status": "open"}},
+		{Data: map[string]any{"amount": float64(2), "active": true, "status": "open"}},
+	}
+	now := time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
+	data := computeSeries(Series{Kind: "sum", Field: "amount", GroupBy: "active", SplitBy: "active"}, c, rows, now)
+	if got := *data.Series[1].Values[1]; got != 2 {
+		t.Fatalf("sum = %v, want only the number counted", got)
+	}
+	counted := computeSeries(Series{Kind: "count", GroupBy: "active"}, c, rows, now)
+	if got := *counted.Series[0].Values[1]; got != 1 {
+		t.Fatalf("count = %v, want only the boolean counted", got)
+	}
+}
+
+func TestSeriesNeverReportsANonFiniteNumber(t *testing.T) {
+	c := Collection{Fields: []Field{{Name: "amount", Type: TypeNumber}, {Name: "status", Type: TypeChoice, Options: []string{"open"}}}}
+	huge := math.MaxFloat64
+	rows := []Row{
+		{Data: map[string]any{"amount": huge, "status": "open"}},
+		{Data: map[string]any{"amount": huge, "status": "open"}},
+	}
+	now := time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
+	avg := computeSeries(Series{Kind: "avg", Field: "amount", GroupBy: "status"}, c, rows, now)
+	if got := avg.Series[0].Values[0]; got == nil || *got != huge {
+		t.Fatalf("average = %v, want %v", got, huge)
+	}
+	sum := computeSeries(Series{Kind: "sum", Field: "amount", GroupBy: "status"}, c, rows, now)
+	if sum.Series[0].Values[0] != nil {
+		t.Fatalf("overflowing sum = %v, want null", *sum.Series[0].Values[0])
+	}
+	if _, err := json.Marshal(sum); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSeriesTextTiesBreakByBytes(t *testing.T) {
+	c := Collection{Fields: []Field{{Name: "name", Type: TypeString}}}
+	var rows []Row
+	for _, name := range []string{"Ａ", "\U0001F600"} {
+		rows = append(rows, Row{Data: map[string]any{"name": name}})
+	}
+	for i := 0; i < 19; i++ {
+		rows = append(rows, Row{Data: map[string]any{"name": "k" + strconv.Itoa(100+i)}})
+	}
+	data := computeSeries(Series{Kind: "count", GroupBy: "name"}, c, rows, time.Now())
+	if got := data.X[19].Key; got != "Ａ" {
+		t.Fatalf("20th group = %q, want the lower byte sequence", got)
+	}
 }
