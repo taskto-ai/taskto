@@ -253,4 +253,49 @@ describe('the limits, and how words are cut and joined', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  test('a NUL in a line is content, never the no-newline marker', () => {
+    const same = diffLines('a', 'a\u0000\n')
+    expect(same.tooLarge).toBe(false)
+    if (same.tooLarge) return
+    expect([same.added, same.removed]).toEqual([1, 1])
+    const shown = diffLines('', 'a\u0000\n')
+    expect(shown.tooLarge).toBe(false)
+    if (shown.tooLarge) return
+    expect(shown.lines.map((l) => ({ text: l.text, noEol: l.noEol }))).toEqual([{ text: 'a\u0000', noEol: false }])
+  })
+
+  test('a 5,000-token line consumes at most 4,001 tokens, with and without a word segmenter', () => {
+    const consumed: number[] = []
+    class CountingSegmenter {
+      segment(text: string) {
+        const parts = text.split(/(?<=\s)|(?=\s)/)
+        const at = consumed.push(0) - 1
+        return {
+          *[Symbol.iterator]() {
+            for (const part of parts) {
+              consumed[at]++
+              yield { segment: part }
+            }
+          },
+        }
+      }
+    }
+    const line = Array.from({ length: 5000 }, (_, i) => `w${i}`).join(' ')
+    vi.stubGlobal('Intl', { ...Intl, Segmenter: CountingSegmenter })
+    try {
+      expect(diffWords(line, 'x')).toBeNull()
+      expect(Math.max(...consumed)).toBeLessThanOrEqual(4001)
+      expect(tokenize(line, 4001)).toHaveLength(4001)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    const intl = new Proxy(Intl, { has: (target, key) => key !== 'Segmenter' && key in target })
+    vi.stubGlobal('Intl', intl)
+    try {
+      expect(tokenize(line, 4001)).toHaveLength(4001)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

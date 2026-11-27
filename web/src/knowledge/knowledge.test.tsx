@@ -945,6 +945,7 @@ test('a version that cannot be read shows why, and one with no text says it cann
   fireEvent.click(within(doc).getAllByRole('button', { name: 'Compare with current' })[1])
   const diff = await within(doc).findByRole('region', { name: /compared with the current version$/ })
   expect(await within(diff).findByRole('alert')).toBeTruthy()
+  expect(within(diff).queryByRole('button', { name: 'Restore this version' })).toBeNull()
   cleanup()
 
   kb('write', versions({ [`GET ${S}/docs/notes/plan.md?at=c1`]: { body: { ...plan, content_base64: 'YSxi' } } }))
@@ -953,6 +954,7 @@ test('a version that cannot be read shows why, and one with no text says it cann
   fireEvent.click(within(again).getAllByRole('button', { name: 'Compare with current' })[1])
   const second = await within(again).findByRole('region', { name: /compared with the current version$/ })
   expect(await within(second).findByText("This document couldn't be loaded.")).toBeTruthy()
+  expect(within(second).queryByRole('button', { name: 'Restore this version' })).toBeNull()
 })
 
 test('a change too large to compare says so, and two equal versions say there are no differences', async () => {
@@ -1183,6 +1185,53 @@ test('Changes waits on the page of older history it needs, shows it is busy, and
   await within(doc).findByRole('region', { name: /^Changes on/ })
   expect(calls.filter((c) => c.path.includes('before='))).toHaveLength(1)
   expect(within(doc).getAllByRole('button', { name: 'Changes' })[1].getAttribute('aria-pressed')).toBe('true')
+})
+
+test('choosing Compare with current or View while Changes waits on older history keeps that choice when the page arrives', async () => {
+  for (const choice of ['Compare with current', 'View']) {
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    kb(
+      'read',
+      versions({
+        [`GET ${S}/history/notes/plan.md`]: {
+          body: { commits: [entry('c3', 3, 'update', V1), entry('c2', 2, 'update', V2)], next: 'c2' },
+        },
+        [`GET ${S}/history/notes/plan.md?before=c2`]: async () => {
+          await held
+          return { body: { commits: [entry('c1', 1, 'create', V3)] } }
+        },
+      }),
+    )
+    render(<KnowledgePage workspace={1} />)
+    const doc = await openPlan()
+    fireEvent.click(await within(doc).findByRole('button', { name: 'History' }))
+    await within(doc).findByText('Edit c2')
+    fireEvent.click(within(doc).getAllByRole('button', { name: 'Changes' })[1])
+    await waitFor(() =>
+      expect(
+        within(doc)
+          .getAllByRole('button', { name: /^Changes/ })[1]
+          .getAttribute('aria-busy'),
+      ).toBe('true'),
+    )
+    fireEvent.click(within(doc).getAllByRole('button', { name: choice })[choice === 'View' ? 1 : 0])
+    const chosen = choice === 'View' ? /^As of/ : /compared with the current version$/
+    await within(doc).findByRole('region', { name: chosen })
+    release()
+    await within(doc).findByText('Edit c1')
+    await act(async () => {})
+    expect(within(doc).getByRole('region', { name: chosen })).toBeTruthy()
+    expect(within(doc).queryByRole('region', { name: /^Changes on/ })).toBeNull()
+    expect(
+      within(doc)
+        .getAllByRole('button', { name: /^Changes/ })[1]
+        .getAttribute('aria-busy'),
+    ).not.toBe('true')
+    cleanup()
+  }
 })
 
 test('choosing View clears the note about a removed earlier version', async () => {

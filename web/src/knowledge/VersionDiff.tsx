@@ -99,7 +99,7 @@ export function VersionDiff({
       )}
       {diff?.tooLarge && <Notice tone="neutral">{t('knowledge.history.tooLarge')}</Notice>}
       {diff && !diff.tooLarge && <DiffBody diff={diff} />}
-      {onRestore && !loading && (
+      {onRestore && !loading && diff && (
         <div className="kb-actions">
           <Button size="sm" disabled={restoring} onClick={onRestore}>
             {t('knowledge.history.restore')}

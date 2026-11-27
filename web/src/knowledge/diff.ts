@@ -3,7 +3,6 @@ export const MAX_EDITS = 5000
 const MAX_WORD_TOKENS = 4000
 const MAX_WORD_EDITS = 1000
 const CONTEXT = 3
-const NO_EOL = '\u0000'
 
 export type LineKind = 'same' | 'add' | 'del'
 
@@ -37,15 +36,14 @@ export function splitLines(text: string): string[] {
   const normal = text.replace(/\r\n/g, '\n')
   if (normal === '') return []
   const parts = normal.split('\n')
-  if (normal.endsWith('\n')) {
-    parts.pop()
-    return parts
-  }
-  parts[parts.length - 1] += NO_EOL
+  if (normal.endsWith('\n')) parts.pop()
   return parts
 }
 
-const textOf = (key: string) => (key.endsWith(NO_EOL) ? key.slice(0, -1) : key)
+const lacksFinalNewline = (text: string) => text !== '' && !text.replace(/\r\n/g, '\n').endsWith('\n')
+
+const keysOf = (lines: string[], unterminated: boolean) =>
+  lines.map((line, i) => (unterminated && i === lines.length - 1 ? 'n' : 'e') + line)
 
 function myers(a: string[], b: string[], limit: number): Op[] | null {
   const n = a.length
@@ -145,20 +143,24 @@ export function diffLines(oldText: string, newText: string): LineDiff {
   const a = splitLines(oldText)
   const b = splitLines(newText)
   if (a.length > MAX_LINES || b.length > MAX_LINES) return { tooLarge: true }
-  const ops = diffKeys(a, b, MAX_EDITS)
+  const aOpen = lacksFinalNewline(oldText)
+  const bOpen = lacksFinalNewline(newText)
+  const ops = diffKeys(keysOf(a, aOpen), keysOf(b, bOpen), MAX_EDITS)
   if (!ops) return { tooLarge: true }
   let added = 0
   let removed = 0
   const lines: Line[] = ops.map((op) => {
     if (op.kind === 'add') added++
     if (op.kind === 'del') removed++
-    const key = op.kind === 'add' ? b[op.b] : a[op.a]
+    const fromNew = op.kind === 'add'
+    const index = fromNew ? op.b : op.a
+    const lines = fromNew ? b : a
     return {
       kind: op.kind,
-      text: textOf(key),
+      text: lines[index],
       aLine: op.kind === 'add' ? undefined : op.a + 1,
       bLine: op.kind === 'del' ? undefined : op.b + 1,
-      noEol: key.endsWith(NO_EOL),
+      noEol: (fromNew ? bOpen : aOpen) && index === lines.length - 1,
     }
   })
   return { tooLarge: false, added, removed, lines, hunks: hunksOf(lines) }
@@ -193,12 +195,21 @@ function hunksOf(lines: Line[]): Hunk[] {
 
 const WORD_FALLBACK = /\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu
 
-export function tokenize(text: string): string[] {
+function* segments(text: string): Generator<string> {
   if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
-    const segmenter = new Intl.Segmenter(undefined, { granularity: 'word' })
-    return Array.from(segmenter.segment(text), (s) => s.segment)
+    for (const part of new Intl.Segmenter(undefined, { granularity: 'word' }).segment(text)) yield part.segment
+  } else {
+    for (const match of text.matchAll(WORD_FALLBACK)) yield match[0]
   }
-  return text.match(WORD_FALLBACK) ?? []
+}
+
+export function tokenize(text: string, limit = Number.POSITIVE_INFINITY): string[] {
+  const out: string[] = []
+  for (const token of segments(text)) {
+    out.push(token)
+    if (out.length >= limit) break
+  }
+  return out
 }
 
 function mergeParts(parts: WordPart[]): WordPart[] {
@@ -212,8 +223,8 @@ function mergeParts(parts: WordPart[]): WordPart[] {
 }
 
 export function diffWords(oldText: string, newText: string): { old: WordPart[]; new: WordPart[] } | null {
-  const a = tokenize(oldText)
-  const b = tokenize(newText)
+  const a = tokenize(oldText, MAX_WORD_TOKENS + 1)
+  const b = tokenize(newText, MAX_WORD_TOKENS + 1)
   if (a.length > MAX_WORD_TOKENS || b.length > MAX_WORD_TOKENS) return null
   const ops = diffKeys(a, b, MAX_WORD_EDITS)
   if (!ops) return null

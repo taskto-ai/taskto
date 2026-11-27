@@ -75,6 +75,7 @@ export function History({
   const loadingOlder = useRef<AbortController | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const now = useLatest(generation)
+  const choice = useRef(0)
   useEffect(() => () => loadingOlder.current?.abort(), [])
   const fetchOlder = async (token: string): Promise<Page | null> => {
     if (loadingOlder.current) return null
@@ -120,6 +121,7 @@ export function History({
     }
   }
   const showChanges = async (c: Commit) => {
+    const mine = ++choice.current
     if (open?.commit === c && open.mode === 'diff' && open.against.kind === 'previous') {
       setOpen(null)
       return
@@ -128,7 +130,7 @@ export function History({
     setFinding(c.commit)
     const made = generation
     const previous = c.change === 'create' ? null : await previousOf(c)
-    if (now.current !== made) return
+    if (now.current !== made || choice.current !== mine) return
     setFinding(null)
     if (previous === 'failed') return
     if (previous === 'removed') {
@@ -139,11 +141,15 @@ export function History({
     setOpen({ commit: c, mode: 'diff', against: { kind: 'previous', commit: previous } })
   }
   const toggleCompare = (c: Commit) => {
+    choice.current++
+    setFinding(null)
     setNotice(null)
     const same = open?.commit === c && open.mode === 'diff' && open.against.kind === 'current'
     setOpen(same ? null : { commit: c, mode: 'diff', against: { kind: 'current' } })
   }
   const toggleView = (c: Commit) => {
+    choice.current++
+    setFinding(null)
     setNotice(null)
     setOpen(open?.commit === c && open.mode === 'view' ? null : { commit: c, mode: 'view' })
   }

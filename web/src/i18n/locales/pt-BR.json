@@ -2676,7 +2676,7 @@
       "added": "{count} adicionadas",
       "removed": "{count} removidas",
       "unchanged_one": "Mostrar {count} linha sem alteração",
-      "unchanged_many": "Mostrar {count} de linhas sem alteração",
+      "unchanged_many": "Mostrar {count} linhas sem alteração",
       "unchanged_other": "Mostrar {count} linhas sem alteração",
       "noChanges": "Não há diferenças.",
       "tooLarge": "Esta alteração é grande demais para ser mostrada.",
