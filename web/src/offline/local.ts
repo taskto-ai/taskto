@@ -1,5 +1,6 @@
 import { ApiError, type OfflineApp } from '../api'
 import { holds, type Rule } from '../apps/rules'
+import { isCalendarDate, isInMonth } from './dates'
 import { type ChangeKind, type Download, kindOf, type OutboxItem } from './store'
 
 type Definition = OfflineApp['definition']
@@ -107,9 +108,7 @@ export function parseField(f: Field, raw: unknown): unknown {
       if (v === false || v === 'false') return false
       throw refused('bad_request', { field: f.name })
     case 'date':
-      if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(`${v}T00:00:00Z`))) {
-        throw refused('app_field_not_date', { field: f.name })
-      }
+      if (!isCalendarDate(v)) throw refused('app_field_not_date', { field: f.name })
       return v
     case 'time':
       if (typeof v !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) {
@@ -237,11 +236,11 @@ export function itemsOf(download: Download, queue: OutboxItem[]): Item[] {
     if (q.operation in (download.operations ?? {})) continue
     const kind = kindOf(q)
     if (kind === 'insert') {
-      let values: Record<string, unknown> = {}
+      let values: Record<string, unknown>
       try {
         values = parseInsert(download.definition, q.action.context)
       } catch {
-        values = {}
+        continue
       }
       created.push({ id: q.record.id, ...values })
     } else {
@@ -340,12 +339,7 @@ function dataModelOf(messages: unknown[]): Record<string, unknown> | undefined {
 
 function summarize(s: { kind: string; field?: string; where?: unknown; month_of?: string }, rows: Item[]): string {
   const month = new Date().toISOString().slice(0, 7)
-  const dated = s.month_of
-    ? rows.filter(
-        (r) =>
-          typeof r[s.month_of as string] === 'string' && (r[s.month_of as string] as string).startsWith(`${month}-`),
-      )
-    : rows
+  const dated = s.month_of ? rows.filter((r) => isInMonth(r[s.month_of as string], month)) : rows
   const kept = s.where ? dated.filter((r) => holds(s.where as Rule, r)) : dated
   if (s.kind === 'count') return String(kept.length)
   if (s.kind === 'sum') {

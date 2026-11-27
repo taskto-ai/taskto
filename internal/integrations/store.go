@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"reflect"
 	"slices"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 
 	"modernc.org/sqlite"
 
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/serverkey"
@@ -72,9 +74,10 @@ type record struct {
 }
 
 type Store struct {
-	db  *sql.DB
-	key *serverkey.Key
-	now func() time.Time
+	db                  *sql.DB
+	key                 *serverkey.Key
+	now                 func() time.Time
+	modeSwitchUnchecked bool
 }
 
 func NewStore(sqlDB *sql.DB, key *serverkey.Key) *Store {
@@ -511,6 +514,18 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 		if mode := p.Mode(n.Settings, c.secrets[SecretAPIKey]); mode != "" {
 			n.Mode = mode
 		}
+		if n.Mode != old.Mode && old.Mode != "" && !s.modeSwitchUnchecked {
+			var payable int
+			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM integration_refs r
+				WHERE r.integration_id = ? AND r.account_mode = ? AND `+payableRef, id, old.Mode).Scan(&payable); err != nil {
+				return err
+			}
+			if payable > 0 {
+				return apierr.New(http.StatusConflict, apierr.CodeIntegrationModeChangeRefused,
+					"payment links made in the integration's current mode may still be paid: the key can't switch modes yet",
+					apierr.Params{"count": payable})
+			}
+		}
 
 		now := s.now()
 		ref := old.sealRef(workspace)
@@ -781,8 +796,12 @@ func (s *Store) setSpaces(ctx context.Context, workspace, user, id int64, spaces
 }
 
 func (s *Store) usable(ctx context.Context, workspace, integration, space int64) (bool, error) {
+	return s.usableIn(ctx, s.db, workspace, integration, space)
+}
+
+func (s *Store) usableIn(ctx context.Context, q querier, workspace, integration, space int64) (bool, error) {
 	var ok bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integrations i
+	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integrations i
 		JOIN integration_spaces s ON s.integration_id = i.id
 		WHERE i.id = ? AND i.workspace_id = ? AND i.disabled_at IS NULL AND s.space_id = ?)`, integration, workspace, space).Scan(&ok)
 	return ok, err

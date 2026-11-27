@@ -11,6 +11,7 @@
     "component.Icon",
     "component.List",
     "component.LocationInput",
+    "component.Markdown",
     "component.Modal",
     "component.PhotoInput",
     "component.Photos",
@@ -128,6 +129,11 @@
       "label",
       "readOnly",
       "value"
+    ],
+    "Markdown": [
+      "accessibility",
+      "text",
+      "weight"
     ],
     "Modal": [
       "accessibility",

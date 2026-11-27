@@ -68,6 +68,8 @@ const link = (over: Partial<PaymentLinkOutcome> = {}): PaymentLinkOutcome => ({
   waiting: false,
   can_confirm: true,
   object_id: '',
+  attempt_seq: 0,
+  attempt_sends: 3,
   attempts: [],
   ...over,
 })
@@ -468,7 +470,9 @@ test('confirming sends the decision once, says it, and reads the list again', as
   fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm no link exists' }))
   const queued = await screen.findByText(/^Another attempt to make a payment link for €120\.00 is queued, once\./)
   expect(queued.textContent).toContain('the payer could end up with two links and pay twice')
-  expect(sent(calls, 'POST', `${base}/payment-links/31/confirm-no-link`)).toEqual([{}])
+  expect(sent(calls, 'POST', `${base}/payment-links/31/confirm-no-link`)).toEqual([
+    { attempt_seq: 0, attempt_sends: 3 },
+  ])
   expect(await screen.findByText('No payment link is waiting for a decision.')).toBeTruthy()
 })
 

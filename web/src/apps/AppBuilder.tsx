@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useEffectEvent, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { ApiError, type App, api, type Conversation, type Space, ws } from '../api'
 import { ConversationView } from '../conversations/ConversationView'
 import type { History } from '../conversations/history'
@@ -6,9 +6,9 @@ import type { AppRef } from '../conversations/transcript'
 import type { EventSourceFactory } from '../conversations/useConversationStream'
 import { browserLocale, useT } from '../i18n'
 import { useLoad } from '../load'
-import { NARROW, useMediaQuery } from '../media'
+import { usePageNarrow } from '../media'
 import { useMounted } from '../mounted'
-import { Link, navigate, routePath } from '../router'
+import { Link, routePath, useNavigate, usePlaceTitle } from '../router'
 import { steps } from '../session'
 import { spaceLabel } from '../spaces'
 import { Badge } from '../ui/Badge'
@@ -50,6 +50,7 @@ export function AppBuilder({
   route: BuilderRoute
   streams?: EventSourceFactory
 }) {
+  const go = useNavigate()
   const conversation = route.kind === 'conversation' ? route.conversation : null
   const [started, setStarted] = useState<Record<number, Session>>({})
   const session = conversation
@@ -74,7 +75,7 @@ export function AppBuilder({
       onStarted={(id, next) => {
         setStarted((all) => ({ ...all, [id]: next }))
         if (!(route.kind === 'conversation' && route.conversation === id)) {
-          navigate(builderPath(workspace, { kind: 'conversation', conversation: id }))
+          go(builderPath(workspace, { kind: 'conversation', conversation: id }))
         }
       }}
     />
@@ -238,7 +239,9 @@ function BuilderSession({
   streams?: EventSourceFactory
 }) {
   const t = useT()
-  const narrow = useMediaQuery(NARROW)
+  usePlaceTitle(t('apps.builder.title'))
+  const root = useRef<HTMLDivElement>(null)
+  const narrow = usePageNarrow(root)
   const [session, setSession] = useState<Session>(initial)
   const [pane, setPane] = useState<Pane>(() =>
     readDraft(paneKey(workspace, conversation)) === 'preview' ? 'preview' : 'build',
@@ -284,7 +287,7 @@ function BuilderSession({
   )
 
   return (
-    <div className="apps-builder" data-narrow={narrow || undefined} data-pane={pane}>
+    <div ref={root} className="apps-builder" data-narrow={narrow || undefined} data-pane={pane}>
       <header className="apps-builder-bar">
         <span className="apps-builder-back">
           <BackToApps workspace={workspace} />

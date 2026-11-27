@@ -7,10 +7,12 @@ import { Dialog } from '../ui/Dialog'
 
 export function ForeignGuard({
   count,
+  failed = false,
   onDiscard,
   onSignOut,
 }: {
   count: number
+  failed?: boolean
   onDiscard: () => void
   onSignOut: () => void
 }) {
@@ -37,6 +39,7 @@ export function ForeignGuard({
         }
       >
         <p>{t('offline.foreign.body', { count })}</p>
+        {failed && <p role="alert">{t('offline.foreign.failed')}</p>}
       </Dialog>
       <ConfirmDialog
         open={discarding}

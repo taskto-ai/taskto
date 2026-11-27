@@ -64,7 +64,8 @@ var components = map[string]map[string]prop{
 		"text":    req(kDynString),
 		"variant": enum("h1", "h2", "h3", "h4", "h5", "caption", "body"),
 	}),
-	"Icon": props(map[string]prop{"name": req(kIconName)}),
+	"Markdown": props(map[string]prop{"text": req(kDynString)}),
+	"Icon":     props(map[string]prop{"name": req(kIconName)}),
 	"Row": props(map[string]prop{
 		"children": req(kChildList),
 		"justify":  enum("center", "end", "spaceAround", "spaceBetween", "spaceEvenly", "start", "stretch"),

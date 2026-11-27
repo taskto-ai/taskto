@@ -199,6 +199,9 @@ there every night, retries a failed night, and keeps the outcome where admins se
 `taskto conversations check` finds conversations the server and the agent runtime disagree
 about, and `taskto conversations -lost -orphans clean` removes them. See
 [docs/install.md](docs/install.md#conversations-out-of-step-with-the-agent-runtime).
+`taskto agent-compact` compacts the agent runtime's database by hand, with the server
+stopped, when it is too large for the runtime to compact at its start. See
+[docs/install.md](docs/install.md#privacy-and-account-deletion).
 
 ## Licence
 

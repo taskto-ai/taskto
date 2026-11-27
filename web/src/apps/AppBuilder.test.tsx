@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
-import { parseRoute, usePath } from '../router'
+import { navigate, type Place, PlaceContext, parseRoute, usePath } from '../router'
 import { beginSession, endSession } from '../session'
 import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
 import { claimDrafts } from '../uiState'
@@ -214,6 +214,30 @@ test('a new app starts in the private space unless a shared one is chosen, and t
   expect(content).toMatch(/Don’t publish it/)
   expect(JSON.parse(window.localStorage.getItem(SESSION) ?? '{}')).toEqual({ space: 2, since: 0 })
   await screen.findByRole('radiogroup', SWITCH)
+})
+
+test('starting a build keeps the place’s title: the start screen hands it to the session', async () => {
+  window.history.replaceState(null, '', '/w/1/apps/build')
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'POST /api/workspaces/1/conversations': { status: 201, body: conversation(9) },
+    'POST /api/workspaces/1/conversations/9/messages': { status: 202, body: { submission_id: 1 } },
+    'PATCH /api/workspaces/1/conversations/9': { body: conversation(9) },
+    'GET /api/workspaces/1/conversations/9': { body: conversation(9) },
+  })
+  const titles: (string | null)[] = []
+  const at: Place = { id: 'a', path: '/w/1/apps/build', navigate, setTitle: (title) => titles.push(title) }
+  render(
+    <PlaceContext.Provider value={at}>
+      <Routed />
+    </PlaceContext.Provider>,
+  )
+  fireEvent.change(await screen.findByLabelText('What should the app do?'), { target: { value: 'An expense tracker' } })
+  expect(titles.at(-1)).toBe('Build an app')
+  fireEvent.click(screen.getByRole('button', { name: 'Start building' }))
+  await screen.findByRole('region', { name: 'Build' })
+  expect(window.location.pathname).toBe('/w/1/apps/build-9')
+  expect(titles.at(-1)).toBe('Build an app')
 })
 
 test('a shared space is chosen explicitly', async () => {

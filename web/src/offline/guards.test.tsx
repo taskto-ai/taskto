@@ -200,3 +200,9 @@ test('a guard that goes away while this tab asks for the right to send sends not
   })
   expect(retry).not.toHaveBeenCalled()
 })
+
+test('another account’s records: a discard that failed is said, and discarding stays on offer', () => {
+  render(<ForeignGuard count={1} failed onDiscard={() => undefined} onSignOut={() => undefined} />)
+  expect(screen.getByRole('alert').textContent).toMatch(/couldn’t be discarded/)
+  expect(screen.getByRole('button', { name: 'Discard them' })).toBeTruthy()
+})
