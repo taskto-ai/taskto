@@ -371,3 +371,11 @@ func TestAFailedQueryEmbeddingLogsOnlyThatItFailed(t *testing.T) {
 		}
 	}
 }
+
+func TestPaletteRefusesAQueryOverTheLengthTheDocsName(t *testing.T) {
+	w := newWorld(t)
+	base := fmt.Sprintf("/api/workspaces/%d/search/palette?q=", w.ws)
+	expect(t, w.alice.do(http.MethodGet, base+strings.Repeat("a", MaxQueryLen), nil), http.StatusOK)
+	expectCode(t, w.alice.do(http.MethodGet, base+strings.Repeat("a", MaxQueryLen+1), nil), http.StatusBadRequest, "search_query_too_long", map[string]any{"max": float64(MaxQueryLen)})
+	expectCode(t, w.alice.do(http.MethodGet, base+"%20%20", nil), http.StatusBadRequest, "search_query_required", nil)
+}
