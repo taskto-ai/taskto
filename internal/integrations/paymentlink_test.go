@@ -1617,6 +1617,15 @@ func TestALookupSeesObjectsThatAreNoLongerOpen(t *testing.T) {
 
 // ----- a ref belongs to its key's mode and its integration -----
 
+// setKeyUnchecked is setKey for a key of the other mode while links of the current one may still be
+// paid, which a server allowed before it refused the switch: the data such a server could leave.
+func (p *pay) setKeyUnchecked(key string) {
+	p.t.Helper()
+	p.svc.store.modeSwitchUnchecked = true
+	defer func() { p.svc.store.modeSwitchUnchecked = false }()
+	p.setKey(key)
+}
+
 // setKey replaces the integration's key, and the one the fake accepts, as an admin does.
 func (p *pay) setKey(key string) {
 	p.t.Helper()
@@ -1650,7 +1659,7 @@ func TestAKeyOfTheOtherModeOfTheSameAccountNeverMovesAnUnfinishedRefThere(t *tes
 				before := p.refs()
 				requests := len(p.fake.Requests())
 
-				p.setKey(swap.to) // the same account, the other mode
+				p.setKeyUnchecked(swap.to) // the same account, the other mode (as a server before the refusal let it)
 				p.exec(`UPDATE integration_refs SET created_at = ?`, p.svc.store.stamp(time.Now().Add(-25*time.Hour)))
 				_, err := p.svc.OpenPaymentLink(context.Background(), req)
 				var pe *paylink.Error

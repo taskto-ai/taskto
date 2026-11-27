@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"reflect"
 	"slices"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 
 	"modernc.org/sqlite"
 
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/serverkey"
@@ -96,6 +98,10 @@ type Store struct {
 	db  *sql.DB
 	key *serverkey.Key
 	now func() time.Time
+	// modeSwitchUnchecked is for tests: a key of the other mode is taken whatever links of the current
+	// mode may still be paid, as a server did before it checked, so the defences that remain for such
+	// data (the ref's own mode on every read, event and write) can be shown.
+	modeSwitchUnchecked bool
 }
 
 // NewStore returns the store backed by sqlDB, which must be migrated, sealing secrets with key.
@@ -577,6 +583,22 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 		}
 		if mode := p.Mode(n.Settings, c.secrets[SecretAPIKey]); mode != "" {
 			n.Mode = mode
+		}
+		// A key (or settings) of the other mode would strand the payment links made in this one: their
+		// events and their polling are of this mode's account, and a payment on one could no longer be
+		// checked. So the switch waits while any of them may still be paid; a new key of the same mode
+		// (a rotation) is always allowed.
+		if n.Mode != old.Mode && old.Mode != "" && !s.modeSwitchUnchecked {
+			var payable int
+			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM integration_refs r
+				WHERE r.integration_id = ? AND r.account_mode = ? AND `+payableRef, id, old.Mode).Scan(&payable); err != nil {
+				return err
+			}
+			if payable > 0 {
+				return apierr.New(http.StatusConflict, apierr.CodeIntegrationModeChangeRefused,
+					"payment links made in the integration's current mode may still be paid: the key can't switch modes yet",
+					apierr.Params{"count": payable})
+			}
 		}
 
 		now := s.now()

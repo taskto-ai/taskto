@@ -231,6 +231,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_condition_changed_link_kept` | — | A failed `create_payment_link` entry: the record was changed while the provider was making the link, so that it no longer meets the `when` condition of the action's link. The link exists at the provider and stays with the entry (a payment on it is still recorded, and the admins are told when the app's rule leaves the record unchanged), but it isn't written to the record. Retry the entry once the record meets the condition again to write that same link; running the action again would ask for another. |
 | `app_effect_space_changed` | — | A failed `create_payment_link` entry: the app moved to another space after the payment was queued (a move clears the app's approvals, so what was queued was never approved there). Start the payment again. |
 | `integration_nothing_to_confirm` | 409 | The payment link entry isn't one whose unknown outcome ended in `integration_outcome_unknown` (or it was confirmed already). |
+| `integration_mode_change_refused` | 409 | A change of an integration's key or settings refused because it would switch the integration to the other mode (test or live) while `count` payment links made in its current mode may still be paid. Wait until they are paid or expire (or, for one whose outcome is unknown, confirm that none exists), then change the key. A new key of the same mode is always accepted. |
 | `integration_link_attempt_changed` | 409 | An admin's confirmation that no payment link exists, refused because it names another attempt than the one that waits now, or another call went out under that attempt since the list showed it (the entry was retried): what the admin checked at the provider may not be all there is. They read the list again and check the provider again. |
 | `integration_link_not_confirmable` | 409 | An admin's confirmation that no payment link exists, refused because the server itself saw something of the reference at the provider (a call's answer named an object, or a lookup found one carrying the reference's token, whose state could not be read) or one of the reference's keys was already resolved (an earlier key's object was seen expired, or an earlier confirmation): a new key could make a second payable link. A person reconciles the payment in the provider's account. |
 | `integration_link_already_paid` | — | A failed `create_payment_link` entry whose earlier try's payment link was found paid (a completed Checkout Session), or no longer able to take payment for a reason that doesn't say it wasn't paid (a Payment Link deactivated or at its limit): nothing is made. An admin reconciles that payment in the provider's account before running the action again. |
@@ -4442,7 +4443,12 @@ Admin only. Any of `display_name`, `settings` and `currencies` (each replaces th
 value), `secrets` (replaces the ones named), `max_amount_minor` and `disabled`; the rest stay.
 `disabled: true` switches the integration off (nothing sends or receives through it, and its
 approvals and events are kept) and `false` back on. `200` with the integration; `400` for an
-invalid field or an attempt to change the name or provider; `404`.
+invalid field or an attempt to change the name or provider; `404`; `409
+integration_mode_change_refused` (`params.count`) when the new key or settings would switch the
+integration to the other mode (test or live) while payment links made in its current mode may still be
+paid: their payments could no longer be checked or recorded. Nothing changes; the admin waits until those
+links are paid or expire (or, for one whose outcome is unknown, confirms that none exists), then sets
+the key. A new key of the same mode can be set at any time.
 
 ### `PUT /api/workspaces/{workspace}/integrations/{integration}/spaces`
 

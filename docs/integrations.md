@@ -96,10 +96,14 @@ money**.
   its own endpoints and signing secrets: register the address in each one you use.
 - **Make live a second integration**, with its own live key and its own endpoint. To move an app
   from one to the other, revoke its approval, ask again and approve it with the live integration.
-  Don't swap a test key for a live one in the same integration: an invoice whose link was still
-  being made stops with an error, because the link can't be followed into the other mode, and a
-  payment event of the other mode than a link's is ignored on purpose (money of one mode never marks
-  a record of the other). A payment on a link made before the swap is still recorded against it.
+  Don't swap a test key for a live one in the same integration. The server refuses such a swap
+  (`integration_mode_change_refused`, which says how many) while any payment link made in the current
+  mode may still be paid: that link's events and its polling are of the current mode, and its payment
+  could no longer be checked or recorded, above all on a server without a public address, which learns
+  of payments by polling alone. Once those links are paid or expired (or, for one whose outcome is
+  unknown, an admin has confirmed that none exists), the swap is accepted, and a payment event of the
+  other mode than a link's is ignored on purpose (money of one mode never marks a record of the other).
+  A new key of the same mode (a rotation) is accepted at any time.
 - Never paste a live key anywhere but here, and never use one to try the software out.
 
 ### 4. Install the invoicing app and approve it
