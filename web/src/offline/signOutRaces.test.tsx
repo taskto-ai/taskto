@@ -1054,3 +1054,24 @@ test("a start that another person's sign-in overtakes while its time zone is rep
   expect(await screen.findByText('The account changed')).toBeTruthy()
   expect(localStorage.getItem('taskto.locale')).toBe('en')
 })
+
+test('a start that takes a sign-out up signs in instead when another tab went back from it while its language was set', async () => {
+  // This login's sign-out, left by a tab that closed.
+  recordSignOut(7, 's1', false, new Map())
+  const calls = fakeFetch({ ...signedIn, 'GET /api/me': { body: me } })
+  let release: () => void = () => {}
+  hold.reached = false
+  hold.preferences = new Promise((done) => {
+    release = () => {
+      hold.preferences = null
+      done()
+    }
+  })
+  render(<App />)
+  await waitFor(() => expect(hold.reached).toBe(true))
+  // Another tab of this login goes back from the sign-out meanwhile.
+  backFromSignOut(7, 's1')
+  await act(async () => release())
+  await screen.findByRole('navigation', { name: 'Sections' })
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+})

@@ -582,9 +582,11 @@ export function App() {
       }
       // Asked again after that wait: another tab may have gone back from it meanwhile (the person is
       // in the app again), and then this start signs in as any other does.
+      if (!signOutToResume(me)) return false
+      await setPreferences({ user: me.user.locale ?? null })
+      // And after the language's wait, from the record as it is then.
       const still = signOutToResume(me)
       if (!still) return false
-      await setPreferences({ user: me.user.locale ?? null })
       const tail: Tail = { user: still.user, session: still.session, next, ...decisionOf(still) }
       setSession({ state: 'leaving', tail })
       void finish(tail)
