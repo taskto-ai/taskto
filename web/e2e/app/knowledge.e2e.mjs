@@ -117,3 +117,45 @@ scenario('a Word file is previewed in its sandboxed frame, and so is an older ve
     [],
   )
 })
+
+scenario('a Word preview stays inside the page at phone widths and in both writing directions', async (s) => {
+  const { page, context } = s
+  await setUp(s)
+  const { spaces } = await api(context, 'GET', '/api/workspaces/1/spaces')
+  const space = spaces.find((x) => x.kind === 'private')
+  const url = `/api/workspaces/1/spaces/${space.id}/docs/contract.docx`
+  const res = await context.request.fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    data: await wordFile('Master agreement', 'Globex'),
+  })
+  assert.ok(res.ok(), `PUT ${url}: ${res.status()}`)
+  await page.getByRole('link', { name: 'Knowledge base' }).click()
+  await page
+    .getByRole('list', { name: 'Documents' })
+    .getByRole('button', { name: /^contract\.docx/ })
+    .click()
+  const inside = page.frameLocator('iframe[title="Preview of contract.docx"]')
+  await inside.getByText('Master agreement').waitFor()
+  for (const dir of ['ltr', 'rtl']) {
+    await page.evaluate((value) => document.documentElement.setAttribute('dir', value), dir)
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 800 })
+      const box = await page.getByTitle('Preview of contract.docx').boundingBox()
+      assert.ok(box, `the frame has no box at ${width} (${dir})`)
+      assert.ok(
+        box.x >= 0 && box.x + box.width <= width + 0.5,
+        `the frame leaves the page at ${width} (${dir}): ${JSON.stringify(box)}`,
+      )
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+      assert.ok(overflow <= 0, `the page scrolls sideways by ${overflow}px at ${width} (${dir})`)
+      const download = page.getByRole('link', { name: 'Download' })
+      await download.scrollIntoViewIfNeeded()
+      const link = await download.boundingBox()
+      assert.ok(
+        link && link.x >= 0 && link.x + link.width <= width + 0.5,
+        `Download is out of reach at ${width} (${dir})`,
+      )
+    }
+  }
+})

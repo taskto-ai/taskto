@@ -60,3 +60,39 @@ test('a download of bytes returns them, and a refusal is an ApiError that ends t
   window.removeEventListener(SESSION_LOST, listen)
   expect(ended).toBe(1)
 })
+
+test('a download that meets another account is reported like any other request', async () => {
+  fakeFetch({ 'GET /api/file': { status: 409, body: { error: 'another account', code: 'session_account_changed' } } })
+  let heard = 0
+  const listen = () => {
+    heard++
+  }
+  window.addEventListener('taskto:account-changed', listen)
+  await expect(apiBytes('/api/file')).rejects.toMatchObject({ status: 409, code: 'session_account_changed' })
+  window.removeEventListener('taskto:account-changed', listen)
+  expect(heard).toBe(1)
+})
+
+test('a download whose answer is not JSON still fails with its status', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response('<html>', { status: 502, statusText: 'Bad Gateway' })),
+  )
+  await expect(apiBytes('/api/file')).rejects.toMatchObject({ status: 502, message: '502 Bad Gateway' })
+})
+
+test('a download that is aborted while its refusal is read ends with the abort, not an ApiError', async () => {
+  const controller = new AbortController()
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => {
+      const res = new Response('{}', { status: 500 })
+      res.json = async () => {
+        controller.abort()
+        throw new DOMException('aborted', 'AbortError')
+      }
+      return res
+    }),
+  )
+  await expect(apiBytes('/api/file', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' })
+})
