@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,24 +23,30 @@ import (
 
 type liveStack struct {
 	*stack
-	checker  *access.Checker
-	hub      *live.Hub
-	base     string
-	rechecks chan time.Time
+	checker *access.Checker
+	hub     *live.Hub
+	base    string
+
+	mu       sync.Mutex
+	rechecks []chan time.Time
 }
 
 func newLiveStack(t *testing.T) *liveStack {
 	t.Helper()
-	l := &liveStack{rechecks: make(chan time.Time)}
+	l := &liveStack{}
 	var accounts *auth.Service
 	var sqlDB *sql.DB
 	l.hub = live.New(live.Config{
 		Heartbeat: time.Hour, Recheck: 2 * time.Hour,
 		Ticker: func(every time.Duration) (<-chan time.Time, func()) {
-			if every == 2*time.Hour {
-				return l.rechecks, func() {}
+			if every != 2*time.Hour {
+				return nil, func() {}
 			}
-			return nil, func() {}
+			tick := make(chan time.Time)
+			l.mu.Lock()
+			l.rechecks = append(l.rechecks, tick)
+			l.mu.Unlock()
+			return tick, func() {}
 		},
 	})
 	mount := func(inner http.Handler) http.Handler {
@@ -51,7 +58,11 @@ func newLiveStack(t *testing.T) *liveStack {
 			sp, _ := access.SpaceFrom(r.Context())
 			u, _ := auth.UserFrom(r.Context())
 			n, _ := strconv.ParseInt(r.PathValue("room"), 10, 64)
-			l.hub.Serve(w, r, live.Topic{Kind: "room", SpaceID: sp.ID, Generation: sp.Generation, ResourceID: n}, u.ID, live.RecheckSpace(checker, u.ID, sp))
+			recheck := live.RecheckSpace(checker, u.ID, sp)
+			if r.URL.Query().Get("lenient") != "" {
+				recheck = func(context.Context) error { return nil }
+			}
+			l.hub.Serve(w, r, live.Topic{Kind: "room", SpaceID: sp.ID, Generation: sp.Generation, ResourceID: n}, u.ID, recheck)
 		})))
 		mux.Handle("POST "+room+"/events", auth.CSRF(checker.RequireSpace(access.Write, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			sp, _ := access.SpaceFrom(r.Context())
@@ -103,9 +114,32 @@ type liveStream struct {
 	r *bufio.Reader
 }
 
+func (l *liveStack) tick(i int) {
+	l.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		l.mu.Lock()
+		have := len(l.rechecks)
+		l.mu.Unlock()
+		if have > i {
+			break
+		}
+		if time.Now().After(deadline) {
+			l.t.Fatalf("stream %d never started its access check clock", i)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	l.rechecks[i] <- time.Now()
+}
+
 func (l *liveStack) connect(cookie string, space int64) *liveStream {
 	l.t.Helper()
-	res, err := l.request(cookie, l.path(space, "live"))
+	return l.connectTo(cookie, l.path(space, "live"))
+}
+
+func (l *liveStack) connectTo(cookie, url string) *liveStream {
+	l.t.Helper()
+	res, err := l.request(cookie, url)
 	if err != nil {
 		l.t.Fatal(err)
 	}
@@ -153,6 +187,32 @@ func (s *liveStream) ended() {
 	case err := <-done:
 		if !errors.Is(err, io.EOF) {
 			s.t.Fatalf("the stream ended with %v, want EOF", err)
+		}
+	case <-time.After(5 * time.Second):
+		s.t.Fatal("the stream is still open")
+	}
+}
+
+func (s *liveStream) endedWithoutData() {
+	s.t.Helper()
+	done := make(chan []string, 1)
+	go func() {
+		var data []string
+		for {
+			line, err := s.r.ReadString('\n')
+			if strings.HasPrefix(line, "data: ") {
+				data = append(data, line)
+			}
+			if err != nil {
+				done <- data
+				return
+			}
+		}
+	}()
+	select {
+	case data := <-done:
+		if len(data) != 0 {
+			s.t.Fatalf("the stream wrote %q after its access ended", data)
 		}
 	case <-time.After(5 * time.Second):
 		s.t.Fatal("the stream is still open")
@@ -238,7 +298,7 @@ func TestARemovedMemberStopsReceivingAtOnceAndOthersKeepTheirStream(t *testing.T
 
 func TestAFailedRemovalEndsNothing(t *testing.T) {
 	l := newLiveStack(t)
-	s := l.connect(l.bob.cookie, l.team)
+	s := l.connectTo(l.bob.cookie, l.path(l.team, "live")+"?lenient=1")
 	l.exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, l.team, l.bob.id)
 	if code, _ := l.browser(l.alice.cookie, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", l.one, l.team, l.bob.id), nil); code != http.StatusNotFound {
 		t.Fatalf("removing a non-member = %d, want 404", code)
@@ -253,36 +313,77 @@ func TestAStreamWhoseAccessWasLostBehindTheHubsBackEndsAtTheNextCheck(t *testing
 	l := newLiveStack(t)
 	s := l.connect(l.bob.cookie, l.team)
 	l.exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, l.team, l.bob.id)
-	l.rechecks <- time.Now()
+	l.tick(0)
 	s.ended()
 }
 
 func TestAStreamThatStillHasAccessSurvivesTheCheck(t *testing.T) {
 	l := newLiveStack(t)
 	s := l.connect(l.bob.cookie, l.team)
-	l.rechecks <- time.Now()
+	l.tick(0)
 	l.post(l.bob.cookie, l.team)
 	if ev := s.next(); ev.Seq != 1 {
 		t.Fatalf("got %+v", ev)
 	}
 }
 
-func TestASpaceThatTookTheOldSpacesIDGetsNoneOfItsEvents(t *testing.T) {
-	l := newLiveStack(t)
-	old := l.connect(l.bob.cookie, l.team)
+func (l *liveStack) replaceTeam() {
+	l.t.Helper()
 	l.exec(`DELETE FROM spaces WHERE id = ?`, l.team)
 	l.exec(`INSERT INTO spaces (id, workspace_id, kind, name) VALUES (?, ?, 'shared', 'Team again')`, l.team, l.one)
 	l.exec(`INSERT INTO space_members (space_id, user_id, role) VALUES (?, ?, 'editor')`, l.team, l.bob.id)
 	if l.scalar(`SELECT generation FROM spaces WHERE id = ?`, l.team) == 0 {
-		t.Fatal("the new space has no generation")
+		l.t.Fatal("the new space has no generation")
 	}
+}
+
+func TestASpaceThatTookTheOldSpacesIDGetsNoneOfItsEvents(t *testing.T) {
+	l := newLiveStack(t)
+	old := l.connect(l.bob.cookie, l.team)
+	l.replaceTeam()
 	fresh := l.connect(l.bob.cookie, l.team)
 	l.post(l.bob.cookie, l.team)
 	if ev := fresh.next(); ev.Seq != 1 {
 		t.Fatalf("the new space's stream got %+v", ev)
 	}
-	l.rechecks <- time.Now()
-	old.ended()
+	l.tick(0)
+	old.endedWithoutData()
+}
+
+func TestTheHubKeepsTheReplacementSpacesTopicApartFromTheOldOne(t *testing.T) {
+	l := newLiveStack(t)
+	lenient := func(space int64) string { return l.path(space, "live") + "?lenient=1" }
+	oldGeneration := l.scalar(`SELECT generation FROM spaces WHERE id = ?`, l.team)
+	old := l.connectTo(l.bob.cookie, lenient(l.team))
+	l.replaceTeam()
+	fresh := l.connectTo(l.bob.cookie, lenient(l.team))
+	l.post(l.bob.cookie, l.team)
+	if ev := fresh.next(); ev.Seq != 1 || ev.Type != "stroke" {
+		t.Fatalf("the new space's stream got %+v", ev)
+	}
+	oldTopic := live.Topic{Kind: "room", SpaceID: l.team, Generation: oldGeneration, ResourceID: 7}
+	if seq, err := l.hub.Publish(oldTopic, "mark", json.RawMessage(`{}`)); err != nil || seq != 1 {
+		t.Fatalf("publishing to the old topic = %d %v, want its own first event", seq, err)
+	}
+	if ev := old.next(); ev.Type != "mark" || ev.Seq != 1 {
+		t.Fatalf("the old stream's first event is %+v: the new space's event reached it", ev)
+	}
+}
+
+func TestARemovedWorkspaceMemberGetsNoEventBeforeTheNextCheck(t *testing.T) {
+	l := newLiveStack(t)
+	removed := l.connect(l.bob.cookie, l.team)
+	stays := l.connect(l.alice.cookie, l.team)
+	if code, body := l.browser(l.alice.cookie, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", l.one, l.bob.id), nil); code != http.StatusNoContent {
+		t.Fatalf("remove from the workspace = %d %v", code, body)
+	}
+	if got := l.post(l.alice.cookie, l.team); got != http.StatusNoContent {
+		t.Fatalf("post = %d", got)
+	}
+	if ev := stays.next(); ev.Seq != 1 {
+		t.Fatalf("the member who stayed got %+v", ev)
+	}
+	removed.endedWithoutData()
 }
 
 func TestSigningOutEndsTheStream(t *testing.T) {
