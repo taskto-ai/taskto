@@ -415,7 +415,9 @@ The UI shows what the command prints.
     (`.worker/accounts/<identity>.json`, with the user number for logs and the boot). The counter
     is moved on, and the record written, each as a new file synced and renamed into a synced
     directory, before anything of the account's is made: a crash in between skips a number,
-    never gives one twice.
+    never gives one twice. A record whose directory sync failed may already be visible, and the
+    worker doesn't use it until a sync of that directory succeeds: every use of the account
+    retries the sync first and fails with its error while it still fails.
   - The home is `h<home>` under the layout's root; with isolation its Unix user is `-uid-base`
     plus the home number. So everything an account leaves behind (files, temporary files,
     sockets, processes) belongs to a home and a uid no other account is ever given, and a request

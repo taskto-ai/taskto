@@ -311,3 +311,30 @@ func TestAPurgeStoppedAfterTheMoveIsFinishedBeforeTheNextOneSucceeds(t *testing.
 		t.Errorf("the retry reported the purge done with the account's files still in %v %v", left, kept)
 	}
 }
+
+func TestAPurgeRetryFindsWhatItLeftInARootWithGlobCharacters(t *testing.T) {
+	h := newHarness(t, func(c *cliworker.Config) {
+		c.Layout.Root = c.Layout.Root + "[worker]"
+	})
+	ctx := context.Background()
+	h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+	h.w.SetDetachHookForTest(func() error { return errors.New("the worker stopped here") })
+	if err := h.w.Forget(ctx, acct(1)); err == nil || !strings.Contains(err.Error(), "the worker stopped here") {
+		t.Fatalf("fixture: the purge didn't stop where the test stops it: %v", err)
+	}
+	h.w.SetDetachHookForTest(nil)
+	if err := h.w.Forget(ctx, acct(1)); err != nil {
+		t.Fatalf("the purge's retry: %v", err)
+	}
+	for _, dir := range []string{h.layout.Root, filepath.Join(h.layout.Root, ".worker", "trash")} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".detached-") || strings.HasPrefix(e.Name(), "h") {
+				t.Errorf("the retry reported the purge done with %s still in %s", e.Name(), dir)
+			}
+		}
+	}
+}

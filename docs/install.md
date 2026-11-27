@@ -1528,7 +1528,7 @@ never emptied after its copy failed. If v0.1.0 is from before
 worker must start on a new, empty `cli-homes` volume: an older worker reads directories by user
 number and must never see the homes. Set `HOMES=1` for that (in container mode only): the script
 then takes a backup of the upgraded server (`after-v0.2.0.tar.gz`, checked with `gzip -t`: the
-script stops if it is empty or damaged) while it still runs, stops the whole deployment, the CLI
+script stops if it is empty or damaged; it writes to a temporary name beside the final one and renames it only once checked, and a backup that already exists is never written over: a rerun writes `after-v0.2.0-<time>.tar.gz` beside it) while it still runs, stops the whole deployment, the CLI
 worker container too (`--profile cli`, whether or not `COMPOSE_PROFILES` names it), with the
 upgraded version's own `compose.yaml`, and only then checks out the old one. It keeps the
 upgraded volume aside, in a new volume named for the time (`taskto_cli-homes_kept_<time>`,
@@ -1541,9 +1541,12 @@ HOMES=0   # 1: back to a version from before account homes, in container mode
 bash -euo pipefail -s "$HOMES" <<'EOF'
 if [ "$1" = 1 ]; then PROFILE="--profile cli"; else PROFILE=""; fi
 if [ "$1" = 1 ]; then
-  docker compose exec -T taskto taskto backup - > after-v0.2.0.tar.gz </dev/null
-  test -s after-v0.2.0.tar.gz
-  gzip -t after-v0.2.0.tar.gz
+  AFTER=after-v0.2.0.tar.gz
+  if [ -e "$AFTER" ]; then AFTER="after-v0.2.0-$(date +%Y%m%d%H%M%S).tar.gz"; fi
+  docker compose exec -T taskto taskto backup - > "$AFTER.partial" </dev/null
+  test -s "$AFTER.partial"
+  gzip -t "$AFTER.partial"
+  mv -n "$AFTER.partial" "$AFTER"
 fi
 docker compose $PROFILE down </dev/null
 git checkout v0.1.0
@@ -1554,7 +1557,7 @@ if [ "$1" = 1 ]; then
   KEPT="taskto_cli-homes_kept_$(date +%Y%m%d%H%M%S)"
   docker run --rm </dev/null -v taskto_cli-homes:/from -v "$KEPT":/to alpine cp -a /from/. /to/
   docker run --rm </dev/null -v taskto_cli-homes:/homes alpine find /homes -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-  echo "the upgraded worker's volume is kept in $KEPT; its server's backup is after-v0.2.0.tar.gz"
+  echo "the upgraded worker's volume is kept in $KEPT; its server's backup is $AFTER"
 fi
 docker compose $PROFILE up -d </dev/null
 EOF

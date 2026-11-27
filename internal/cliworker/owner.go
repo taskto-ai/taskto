@@ -55,13 +55,13 @@ func (w *Worker) removeAccount(ctx context.Context, acct account) error {
 }
 
 func (w *Worker) removeLeft(name string) error {
-	for _, pattern := range []string{
-		filepath.Join(w.cfg.Layout.Root, detachedPrefix+name+"-*"),
-		filepath.Join(w.trashDir(), name+"-*"),
+	for _, where := range []struct{ dir, prefix string }{
+		{w.cfg.Layout.Root, detachedPrefix + name + "-"},
+		{w.trashDir(), name + "-"},
 	} {
-		left, err := filepath.Glob(pattern)
+		left, err := entriesWithPrefix(where.dir, where.prefix)
 		if err != nil {
-			return err
+			return fmt.Errorf("looking for what an earlier removal left: %w", err)
 		}
 		for _, p := range left {
 			if err := removeTree(p, w.cfg.Isolation != nil); err != nil {
@@ -70,6 +70,23 @@ func (w *Worker) removeLeft(name string) error {
 		}
 	}
 	return nil
+}
+
+func entriesWithPrefix(dir, prefix string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), prefix) {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out, nil
 }
 
 const uidWait = 5 * time.Second

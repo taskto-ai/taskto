@@ -52,6 +52,13 @@ func (w *Worker) accountFile(identity string) string {
 func (w *Worker) counterFile() string { return filepath.Join(w.stateDir(), "next-home") }
 
 func (w *Worker) record(identity string) (accountRecord, bool, error) {
+	if w.unsyncedRecords[identity] {
+		if err := syncDir(w.accountsDir()); err != nil {
+			return accountRecord{}, false, err
+		}
+		delete(w.unsyncedRecords, identity)
+		delete(w.accounts, identity)
+	}
 	if r, ok := w.accounts[identity]; ok {
 		return r, true, nil
 	}
@@ -77,6 +84,14 @@ func (w *Worker) putRecord(identity string, r accountRecord) error {
 		return err
 	}
 	if err := writeDurably(w.accountsDir(), w.accountFile(identity), b); err != nil {
+		var unsynced unsyncedError
+		if errors.As(err, &unsynced) {
+			if w.unsyncedRecords == nil {
+				w.unsyncedRecords = map[string]bool{}
+			}
+			w.unsyncedRecords[identity] = true
+			delete(w.accounts, identity)
+		}
 		return err
 	}
 	w.accounts[identity] = r
@@ -106,8 +121,15 @@ func writeDurably(dir, path string, b []byte) error {
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return err
 	}
-	return syncDir(dir)
+	if err := syncDir(dir); err != nil {
+		return unsyncedError{err}
+	}
+	return nil
 }
+
+type unsyncedError struct{ error }
+
+func (e unsyncedError) Unwrap() error { return e.error }
 
 var faultForTest func(op, path string) error
 

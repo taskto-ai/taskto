@@ -294,3 +294,38 @@ func TestAnAdoptionSyncsTheMoveBeforeItClearsItsMarkerEvenWhenItWasVisibleAlread
 		t.Errorf("the marker after the retry = %d", r.Adopting)
 	}
 }
+
+func TestAnAccountRecordWhoseSyncFailedIsNotUsedUntilASyncSucceeds(t *testing.T) {
+	w := newLegacyWorker(t)
+	a := AccountForTest(1)
+	broken := errors.New("input/output error")
+	failOn(t, "sync", w.accountsDir(), broken)
+	if _, err := w.resolve(a, true); !errors.Is(err, broken) {
+		t.Fatalf("fixture: the first resolve = %v, want the sync's error", err)
+	}
+	if _, err := os.Stat(w.accountFile(a.Identity)); err != nil {
+		t.Fatalf("fixture: the record isn't visible after the failed sync: %v", err)
+	}
+	if got, err := w.resolve(a, true); err == nil {
+		t.Fatalf("the retry used home %d though no sync of the record's directory succeeded", got.home)
+	} else if !errors.Is(err, broken) {
+		t.Errorf("the retry = %v, want the sync's error", err)
+	}
+	if _, _, err := w.find(a.Identity); !errors.Is(err, broken) {
+		t.Errorf("a lookup of the record = %v, want the sync's error", err)
+	}
+	faultForTest = nil
+	var synced []string
+	syncedForTest = func(p string) { synced = append(synced, filepath.Clean(p)) }
+	t.Cleanup(func() { syncedForTest = nil })
+	got, err := w.resolve(a, true)
+	if err != nil {
+		t.Fatalf("the resolve once the sync works: %v", err)
+	}
+	if !slices.Contains(synced, filepath.Clean(w.accountsDir())) {
+		t.Errorf("the record was admitted without a sync of %s (synced %v)", w.accountsDir(), synced)
+	}
+	if got.home < firstHome {
+		t.Errorf("home = %d", got.home)
+	}
+}

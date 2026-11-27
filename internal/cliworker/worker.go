@@ -80,6 +80,7 @@ type Worker struct {
 	usedHomes            map[int64]bool
 	censusMu             sync.Mutex
 	accounts             map[string]accountRecord
+	unsyncedRecords      map[string]bool
 	allocateHookForTest  func() error
 	adoptHookForTest     func() error
 	browsers             Browsers

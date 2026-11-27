@@ -843,7 +843,7 @@ func TestTheInstallGuidesRollbackStopsWhenTheCopyFails(t *testing.T) {
 				t.Fatal(err)
 			}
 			log := filepath.Join(dir, "calls")
-			fake := "#!/bin/sh\necho \"$*\" >> " + log + "\n"
+			fake := "#!/bin/sh\necho \"$*\" >> " + log + "\ncase \"$*\" in *'taskto backup -'*) echo data | gzip -c ;; esac\n"
 			if failCopy {
 				fake += "case \"$*\" in *'cp -a'*) exit 1 ;; esac\n"
 			}
@@ -861,7 +861,7 @@ func TestTheInstallGuidesRollbackStopsWhenTheCopyFails(t *testing.T) {
 			out, err := cmd.CombinedOutput()
 			calls, _ := os.ReadFile(log)
 			emptied := strings.Contains(string(calls), "find /homes")
-			started := strings.Contains(string(calls), "compose up")
+			started := strings.Contains(string(calls), " up -d")
 			if failCopy {
 				if err == nil || emptied || started {
 					t.Errorf("after a failed copy: err %v, emptied %v, started %v\n%s%s", err, emptied, started, calls, out)
