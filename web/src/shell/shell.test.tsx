@@ -1684,7 +1684,7 @@ test('an app opened by its run address is the whole page: no sidebar, its name i
   expect(screen.queryByRole('link', { name: 'All apps' })).toBeNull()
   expect(screen.getByRole('main')).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Skip to the content' })).toBeTruthy()
-  expect(document.title).toBe('Expenses · taskto.ai')
+  await waitFor(() => expect(document.title).toBe('Expenses · taskto.ai'))
   expect(window.location.pathname).toBe('/w/1/run/3-7')
   expect(calls.some((c) => c.path.startsWith('/api/workspaces/1/conversations'))).toBe(false)
 })
