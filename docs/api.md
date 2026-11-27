@@ -324,7 +324,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `agent_off` | 503 | The agent runtime is off: the server runs without `-agent`. |
 | `agent_not_ready` | 503 | The agent runtime is starting or restarting; `Retry-After` says when to try again. |
 | `model_unknown` | 400 | The caller may not use that model, or it isn't configured. |
-| `too_many_streams` | 429 | The caller has `max` event streams open: close one first. |
+| `too_many_streams` | 429 | The caller has `max` event streams open (conversations and live resources count separately): close one first. |
+| `live_closed` | 503 | A live stream was asked for while the server is shutting down. |
 | `cli_permission_not_found` | 404 | The CLI's question isn't waiting: answered already, timed out, or its turn is over. |
 | `browser_off` | 409 | The agent browser is off: the server runs without `-browser`. |
 | `browser_cli_workers_off` | 409 | The CLI workers the browser runs with are off. |

@@ -169,6 +169,19 @@ definition has no place for a URL, a header or a key. The guide for admins and a
 - **Not here:** card data (hosted checkout only), raw webhook bodies, refunds made from TaskTo,
   and any call a model composes.
 
+## Live updates
+
+`internal/live` is the building block for anything several people see change together (a whiteboard, cursors, presence). It has no routes of its own: a feature mounts them.
+
+- **SSE down, JSON POST up.** A feature's `GET …/spaces/{space}/<resource>/{id}/live` is wrapped in `access.Checker.RequireSpace(access.Read, …)` and calls `Hub.Serve`; its writes are ordinary `POST`s wrapped in `RequireSpace(access.Write, …)`, so the CSRF guard and the access checks apply to them as to every other state change, and call `Hub.Publish`. The GET only reads. A WebSocket is reconsidered only if cursor traffic proves too heavy over POST.
+- **One process.** The hub is in memory: exactly one server process uses a data directory, so there is no fan-out across processes.
+- **Topics by space generation.** A `Topic` is a kind, a space, the space's `Generation` and a resource. A space that is removed and later takes the same ID has another generation, so it never receives the old topic's events, and a stream opened for the old one fails its next check.
+- **Order and gaps.** Each topic numbers its events (`seq`, from 1 while someone is subscribed). A stream starts with a `ready` event carrying the topic's current number, so a client knows where it joined and sees a gap as a missing number.
+- **A slow reader is dropped, not waited for.** Each subscriber has a bounded buffer. When it overflows, the hub puts a `resync` event in its place and ends that stream; the client reloads its state and reconnects. Nobody else waits.
+- **Access is checked on connect and again while connected.** `Serve` runs the feature's `recheck` after the subscription is registered and every 30 seconds (`live.RecheckSpace` for the space; a feature adds its own resource check), and ends the stream on any failure. A removed space member's streams end at once (`access.Checker.OnMemberRemoved`, `Hub.EndUserIn`); the periodic check is the bound for any other way of losing access. Signing out, disabling the account or an expired session ends the stream through `auth.Service.WatchSession`.
+- **Caps and shutdown.** A person has at most 16 live streams across topics (`too_many_streams`, counted apart from the conversations' own). On shutdown `Hub.EndStreams` ends every stream and refuses new ones (`live_closed`), so the drain finishes.
+- **An event** is a type, no more than 64 characters and never `ready` or `resync`, and JSON data of at most 64 KiB. Anything else is refused by `Publish`.
+
 ## Scheduled work
 
 Timed work for people (a card's due-date reminder, an app's scheduled

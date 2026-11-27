@@ -35,6 +35,7 @@ import (
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/live"
 	"taskto.ai/taskto/internal/lockfile"
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/privcheck"
@@ -302,6 +303,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		}
 	}
 	convs := conversations.New(sqlDB, convAgent)
+	liveHub := live.New(live.Config{})
 	convs.SetCapabilities(tools.Capability)
 	if cfg.Agent {
 		index.SetConversations(convs)
@@ -362,6 +364,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		Providers:        providerAPI(store, agent.feed, egressOf(cfg)),
 		Search:           index,
 		Conversations:    convs,
+		Live:             liveHub,
 		Tools:            tools,
 		CLIAccounts:      cliAccounts,
 		Browser:          browsers,
@@ -400,6 +403,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		IdleTimeout:       2 * time.Minute,
 	}
 	srv.RegisterOnShutdown(convs.EndStreams)
+	srv.RegisterOnShutdown(liveHub.EndStreams)
 	ln, err := listen(ctx, cfg.Addr)
 	if err != nil {
 		return err
