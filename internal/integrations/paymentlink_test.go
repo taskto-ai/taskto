@@ -1089,9 +1089,13 @@ func TestAProviderThatNeverAnswersExhaustsTheEntry(t *testing.T) {
 	p.startWorker()
 	p.send(record, "op-down-0001")
 	for i := 0; i < 6; i++ {
-		p.waitFor("a try", func() bool { return len(p.posts()) >= i+1 || p.entries()[0].state == "failed" })
+		// The try is over once the entry waits again: its next attempt is then set from the
+		// clock, so moving the clock only now never lands between the call and that.
+		p.waitFor("a try", func() bool {
+			es := p.entries()
+			return len(es) == 1 && (es[0].state == "failed" || es[0].state == "pending" && len(p.posts()) == i+1)
+		})
 		p.later(10 * time.Minute)
-		time.Sleep(50 * time.Millisecond)
 	}
 	e := p.settled(apps.StateFailed)
 	if e.code != string(apierr.CodeIntegrationProviderUnreachable) || e.attempts != 5 {
