@@ -252,15 +252,20 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req paylink.Request) (pay
 		// (or anything between) that ran past the time the provider keeps the key must not send under a
 		// key it may have forgotten, and a call that hasn't left by then never does. The send written
 		// ahead stays on record, so the outcome stays unknown.
+		// The deadline is absolute, from a time taken before the window is read, so no pause after
+		// the check lengthens it.
 		callCtx, cancel := ctx, context.CancelFunc(func() {})
 		if a.unknown() {
+			start := time.Now()
 			left := s.keyLeft(a, provider)
 			if left <= 0 {
 				return paylink.Link{}, s.stillUnknown(ctx, a)
 			}
-			callCtx, cancel = context.WithTimeout(ctx, left)
-		}
-		if s.beforeCall != nil {
+			if s.beforeCall != nil {
+				s.beforeCall()
+			}
+			callCtx, cancel = context.WithDeadline(ctx, start.Add(left))
+		} else if s.beforeCall != nil {
 			s.beforeCall()
 		}
 		made, err := provider.CreatePaymentLink(callCtx, creds, client, ref.newLink(a, req.Description))

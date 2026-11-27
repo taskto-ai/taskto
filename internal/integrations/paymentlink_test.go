@@ -2841,8 +2841,8 @@ func TestAKeyPastItsWindowAfterTheWriteAheadIsNotSent(t *testing.T) {
 	}
 }
 
-// The key's window bounds the call itself: a call that is about to leave as the window closes and is
-// delayed past it never reaches the provider.
+// The key's window bounds the call itself, from when it was read: a call that is about to leave as the
+// window closes and is delayed past it (even before its deadline is made) never reaches the provider.
 func TestAKeyWhoseWindowClosesAsTheCallLeavesIsNotSent(t *testing.T) {
 	ctx := context.Background()
 	shape := linkShapes["a checkout session"]
