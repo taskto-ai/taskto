@@ -17,7 +17,7 @@ share nothing and can run in any order and in parallel.
 | File | Scenario |
 |---|---|
 | `auth.e2e.mjs` | First-run setup with the setup token from the server's log (a wrong token is refused), the owner's session across a reload, logging out, a wrong password refused, logging back in; and setup closed once the owner exists |
-| `knowledge.e2e.mjs` | Create a document, edit it, see both changes (and the creation) in its history, restore the first version |
+| `knowledge.e2e.mjs` | Create a document, edit it, see both changes (and the creation) in its history, open a change as a highlighted diff and compare the first version with the current one, restore the first version |
 | `boards.e2e.mjs` | On the private space's personal board: add a card, move it from *To do* to *Doing* to *Done*, comment on it, and see it in place after a reload |
 | `apps.e2e.mjs` | Install the Expense tracker template as a draft, publish it, add a record to the live app, and check the server stored it as the owner's; and install every bundled template that needs no board through the API: one whose draft declares an integration slot is refused publishing (`app_integration_unapproved`), every other one publishes (the rule the screens seed relies on) |
 | `offline.e2e.mjs` | Download that app for offline use, load the page with no connection (the service worker serves the app, which opens the offline view), add a record there, see it kept on the device, then go back online and check that it reached the server |
