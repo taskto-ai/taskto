@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, type AppField, type AppRecord, api, errorText, type RecordVersion } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -74,7 +74,7 @@ export function RecordDetail({
   tell.current = onUnsaved
   useEffect(() => tell.current?.(unsaved), [unsaved])
   useEffect(() => () => tell.current?.(false), [])
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!unsaved) return
     const unload = (e: BeforeUnloadEvent) => {
       e.preventDefault()

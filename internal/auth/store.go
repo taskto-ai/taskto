@@ -420,6 +420,18 @@ func IsMember(ctx context.Context, q interface {
 	return err == nil, err
 }
 
+func MemberRole(ctx context.Context, q interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}, workspaceID, userID int64) (Role, bool, error) {
+	var role Role
+	err := q.QueryRowContext(ctx, `SELECT m.role FROM memberships m JOIN users u ON u.id = m.user_id AND u.disabled_at IS NULL
+		WHERE m.workspace_id = ? AND m.user_id = ?`, workspaceID, userID).Scan(&role)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return role, err == nil, err
+}
+
 func roleIn(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) (Role, error) {
 	var role Role
 	err := tx.QueryRowContext(ctx, `SELECT role FROM memberships WHERE workspace_id = ? AND user_id = ?`,

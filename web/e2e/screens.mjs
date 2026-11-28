@@ -34,7 +34,7 @@ const COMPONENTS_APP = {
       root: 'main-root',
       components: [
         C('main-root', 'Column', {
-          children: ['title', 'intro', 'stats', 'form-card', 'tabs', 'divider', 'list', 'more', 'actions'],
+          children: ['title', 'intro', 'stats', 'chart', 'form-card', 'tabs', 'divider', 'list', 'more', 'actions'],
         }),
         C('title', 'Text', { text: 'Field visit', variant: 'h2' }),
         C('intro', 'Text', { text: 'Every control an app can draw, as the library draws it.', variant: 'caption' }),
@@ -42,6 +42,12 @@ const COMPONENTS_APP = {
         C('stat-count', 'Stat', { label: 'Visits', value: { path: '/count' } }),
         C('stat-total', 'Stat', { label: 'Hours logged', value: { path: '/total_hours' } }),
         C('stat-latest', 'Stat', { label: 'Status', value: 'On track' }),
+        C('chart', 'Chart', {
+          data: { path: '/hours_by_site' },
+          variant: 'bar',
+          label: 'Hours by site',
+          unit: 'h',
+        }),
         C('form-card', 'Card', { child: 'form' }),
         C('form', 'Column', {
           children: ['f-site', 'f-hours', 'f-notes', 'f-code', 'f-dates', 'f-kind', 'f-tools', 'f-urgent', 'f-effort'],
@@ -131,6 +137,7 @@ const COMPONENTS_APP = {
     noop: { kind: 'navigate', screen: 'main' },
   },
   summaries: { count: { kind: 'count' }, total_hours: { kind: 'sum', field: 'hours' } },
+  series: { hours_by_site: { kind: 'sum', field: 'hours', group_by: 'site' } },
 }
 
 const CAPTURE_APP_NAME = 'Every capture field'

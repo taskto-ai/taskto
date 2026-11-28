@@ -3,6 +3,7 @@
     "component.BarcodeInput",
     "component.Button",
     "component.Card",
+    "component.Chart",
     "component.CheckBox",
     "component.ChoicePicker",
     "component.Column",
@@ -71,6 +72,15 @@
     "Card": [
       "accessibility",
       "child",
+      "weight"
+    ],
+    "Chart": [
+      "accessibility",
+      "data",
+      "label",
+      "stacked",
+      "unit",
+      "variant",
       "weight"
     ],
     "CheckBox": [

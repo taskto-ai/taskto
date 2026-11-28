@@ -27,6 +27,7 @@ const THEMED_BY: Record<string, string[]> = {
 }
 const OWN = [
   'BarcodeInput',
+  'Chart',
   'LocationInput',
   'Markdown',
   'MarkdownInput',

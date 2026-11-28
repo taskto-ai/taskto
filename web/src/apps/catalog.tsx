@@ -3,6 +3,7 @@ import { basicCatalog, Catalog, CommonSchemas } from '@a2ui/web_core/v0_9'
 import { z } from 'zod'
 import { Markdown as MarkdownText } from '../markdown'
 import { BarcodeField } from './BarcodeInput'
+import { ChartComponent } from './Chart'
 import { type CaptureInfo, isLocation } from './capture'
 import { iconPath, iconsShowingTheirName, type SurfaceComponent } from './iconPath'
 import { LocationField } from './LocationInput'
@@ -289,6 +290,7 @@ export const appsCatalog = new Catalog(
     ...(TextField ? [TextField] : []),
     Icon,
     Stat,
+    ChartComponent,
     TableComponent,
     Markdown,
     Show,

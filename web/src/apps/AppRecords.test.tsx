@@ -901,6 +901,23 @@ test('closing or reloading the tab over a record not saved gets the browser’s 
   expect(after.defaultPrevented).toBe(false)
 })
 
+test('the browser’s question goes in the same commit as the drawer, before anything else can run', async () => {
+  await editing()
+  const asked = new Promise<boolean>((resolve) => {
+    const watch = new MutationObserver(() => {
+      if (screen.queryByRole('region', { name: 'Record 4' })) return
+      watch.disconnect()
+      const unload = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(unload)
+      resolve(unload.defaultPrevented)
+    })
+    watch.observe(document.body, { childList: true, subtree: true })
+  })
+  fireEvent.click(within(drawer()).getByRole('button', { name: 'Close' }))
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Discard my changes' }))
+  expect(await asked).toBe(false)
+})
+
 test('a sign-out’s question about a record not saved only asks: the drawer keeps the change until the sign-out is certain', async () => {
   await editing()
   let mayGo = false

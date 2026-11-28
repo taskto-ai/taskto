@@ -76,6 +76,10 @@ const (
 	AppIntegrationApproved  = "app_integration_approved"
 	AppIntegrationRejected  = "app_integration_rejected"
 	AppIntegrationRevoked   = "app_integration_revoked"
+
+	SkillCreated = "skill_created"
+	SkillUpdated = "skill_updated"
+	SkillRemoved = "skill_removed"
 )
 
 const (
@@ -88,4 +92,5 @@ const (
 	TargetSharedAccount  = "shared_cli_account"
 	TargetIntegration    = "integration"
 	TargetAppIntegration = "app_integration_approval"
+	TargetSkill          = "skill"
 )

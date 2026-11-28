@@ -12,6 +12,7 @@ export const COMPONENTS = [
   'BarcodeInput',
   'Button',
   'Card',
+  'Chart',
   'CheckBox',
   'ChoicePicker',
   'Column',

@@ -52,6 +52,8 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   naming their conversation with a capability the server issued for it; the server acts
   for the conversation's owner, checking their access on every call
   ([agent-tools.md](agent-tools.md)).
+  The server can also start a person's conversation without a browser request. Those turns
+  carry a private origin key so retries from at-least-once callers reuse the same turn.
 - **Agent usage:** `internal/usage` records each person's daily input and output token totals by
   workspace, source and engine. CLI turns are recorded by the Go turn handler; sidecar turns are
   read from the assistant message usage stored in Pi Durable. Each turn and each durable entry is
