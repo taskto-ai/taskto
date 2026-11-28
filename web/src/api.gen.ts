@@ -920,6 +920,23 @@ export type SendReply = {
   model?: ConversationsModelRef
 }
 
+export type Skill = {
+  id: number
+  scope: string
+  space_id?: number
+  name: string
+  title: string
+  description: string
+  body: string
+  enabled: boolean
+  origin: string
+  updated_at: string
+}
+
+export type SkillList = {
+  skills: Skill[]
+}
+
 export type Space = {
   id: number
   workspace_id: number

@@ -13,9 +13,10 @@ type kind struct {
 }
 
 var (
-	tagRe   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,34}$`)
-	hostRe  = regexp.MustCompile(`^[A-Za-z0-9._:\[\]-]{1,255}$`)
-	emailRe = regexp.MustCompile(`^[A-Za-z0-9.!#$%&'*+/=?^_{|}~-]{1,64}@[A-Za-z0-9.-]{1,253}$`)
+	tagRe       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,34}$`)
+	hostRe      = regexp.MustCompile(`^[A-Za-z0-9._:\[\]-]{1,255}$`)
+	skillNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{1,39}$`)
+	emailRe     = regexp.MustCompile(`^[A-Za-z0-9.!#$%&'*+/=?^_{|}~-]{1,64}@[A-Za-z0-9.-]{1,253}$`)
 )
 
 func typed[T any](name string, ok func(T) bool) kind {
@@ -65,9 +66,10 @@ var (
 		}
 		return nil, fmt.Errorf("a %T isn't a whole number", v)
 	}}
-	tag   = matching("tag", tagRe, 35)
-	host  = matching("host", hostRe, 255)
-	email = matching("email address", emailRe, 254)
+	skillName = matching("skill name", skillNameRe, 40)
+	tag       = matching("tag", tagRe, 35)
+	host      = matching("host", hostRe, 255)
+	email     = matching("email address", emailRe, 254)
 
 	roles                = oneOf("admin", "member")
 	spaceRoles           = oneOf("editor", "viewer")
@@ -77,6 +79,7 @@ var (
 	integrationKinds     = oneOf("payments")
 	integrationModes     = oneOf("test", "live")
 	cascadeFlag          = boolean
+	skillScopes          = oneOf("space", "workspace")
 )
 
 var schemas = map[string]map[string]kind{
@@ -178,4 +181,8 @@ var schemas = map[string]map[string]kind{
 	},
 	AppIntegrationRejected: {"kind": integrationKinds, "app_id": number},
 	AppIntegrationRevoked:  {"kind": integrationKinds, "app_id": number, "integration_id": number},
+
+	SkillCreated: {"scope": skillScopes, "space_id": number, "name": skillName},
+	SkillUpdated: {"scope": skillScopes, "space_id": number, "name": skillName, "fields": someOf("name", "title", "description", "body", "enabled")},
+	SkillRemoved: {"scope": skillScopes, "space_id": number, "name": skillName},
 }

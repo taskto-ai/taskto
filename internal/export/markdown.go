@@ -1,11 +1,13 @@
 package export
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 
 	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/skills"
 )
 
 func writeBoardHeading(w io.Writer, b boards.Board) error {
@@ -55,4 +57,18 @@ func writeCardMarkdown(w io.Writer, c boards.Thread) error {
 
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+func yamlText(s string) string {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func writeSkillMarkdown(w io.Writer, s skills.Skill) error {
+	_, err := fmt.Fprintf(w, "---\nname: %s\ntitle: %s\ndescription: %s\nenabled: %t\n---\n\n%s",
+		yamlText(s.Name), yamlText(s.Title), yamlText(s.Description), s.Enabled, s.Body)
+	return err
 }
