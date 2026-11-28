@@ -37,12 +37,14 @@ export type ChatMessage = {
   tools: ToolUse[]
   author?: number
   error?: string
+  failed?: boolean
   pending?: boolean
   attached?: { conversation: number; title: string }[]
 }
 
 export type Transcript = {
   messages: ChatMessage[]
+  lastEntry?: number
   running: boolean
   truncated: boolean
 }
@@ -139,6 +141,7 @@ function toMessage(key: string, message: unknown, kept: Kept, pending = false): 
       : undefined
   const out: ChatMessage = { key, role: m.role, text: textOf(m.content), tools: toolsOf(m.content, key, kept) }
   if (error) out.error = error
+  if (m.role === 'assistant' && m.stopReason === 'error') out.failed = true
   if (pending) out.pending = true
   if (!out.text && out.tools.length === 0 && !out.error && !pending) return null
   return out
@@ -248,7 +251,13 @@ export function transcript(view: ConversationView | null | undefined): Transcrip
     if (m) messages.push(m)
   }
   liveOutput(messages, live?.tools)
-  return { messages, running: Boolean(live?.run), truncated: view?.before !== undefined }
+  const lastEntry = view?.entries?.findLast((e) => e?.kind !== NOTE_KIND)?.id
+  return {
+    messages,
+    ...(lastEntry === undefined ? {} : { lastEntry }),
+    running: Boolean(live?.run),
+    truncated: view?.before !== undefined,
+  }
 }
 
 export function pendingHelp(messages: ChatMessage[]): ToolUse['help'] | null {

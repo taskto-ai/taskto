@@ -1,4 +1,4 @@
-import { type RefObject, useEffect, useLayoutEffect, useRef } from 'react'
+import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef } from 'react'
 import { useT } from '../i18n'
 import { AgentDot } from '../ui/AgentDot'
 import { Button } from '../ui/Button'
@@ -20,6 +20,7 @@ export function ChatTranscript({
   onLoadEarlier,
   loadingEarlier,
   earlierError,
+  footer,
 }: {
   workspace: number
   messages: ChatMessage[]
@@ -30,6 +31,7 @@ export function ChatTranscript({
   onLoadEarlier: () => void
   loadingEarlier: boolean
   earlierError: string | null
+  footer?: ReactNode
 }) {
   const t = useT()
 
@@ -75,8 +77,14 @@ export function ChatTranscript({
         {messages.map((m) => (
           <Message key={m.key} message={m} workspace={workspace} apps={apps} changes={changes.get(m.key)} />
         ))}
+        {footer}
         <FollowNewest
-          key={JSON.stringify([last?.key ?? null, last?.text ?? null, (last && changes.get(last.key)?.length) ?? 0])}
+          key={JSON.stringify([
+            last?.key ?? null,
+            last?.text ?? null,
+            Boolean(footer),
+            (last && changes.get(last.key)?.length) ?? 0,
+          ])}
           scroller={scroller}
           atBottom={atBottom}
         />

@@ -15,6 +15,7 @@ import (
 type Runtime interface {
 	CreateConversationOn(ctx context.Context, model agentrt.ModelRef) (int64, error)
 	Submit(ctx context.Context, conversation int64, in agentrt.Input) (int64, error)
+	Continue(ctx context.Context, conversation int64, model agentrt.ModelRef, afterEntry int64) (int64, agentrt.ModelRef, error)
 	Note(ctx context.Context, conversation int64, n agentrt.NoteInput) (int64, error)
 	Wait(ctx context.Context, submission int64) (agentrt.Settled, error)
 	Messages(ctx context.Context, conversation int64) ([]agentrt.Message, error)
@@ -49,6 +50,7 @@ type Service struct {
 	agent        Agent
 	capability   func(conversation, agentConversation int64) string
 	questions    CLIQuestions
+	models       Models
 	language     func(r *http.Request, browser string) string
 	userLanguage func(ctx context.Context, user int64) string
 	watchSession func(r *http.Request, every time.Duration) (context.Context, context.CancelFunc)
@@ -56,10 +58,15 @@ type Service struct {
 	closing    context.Context
 	endStreams context.CancelFunc
 
-	mu      sync.Mutex
-	streams map[int64]int
+	mu         sync.Mutex
+	streams    map[int64]int
+	modelHolds map[int64]*modelHold
+	guards     map[int64]*guard
 
 	readyWait     time.Duration
+	modelWait     time.Duration
+	holdLimit     time.Duration
+	putBackLimit  time.Duration
 	exportTimeout time.Duration
 	heartbeat     time.Duration
 	writeTimeout  time.Duration
@@ -71,8 +78,8 @@ type Service struct {
 func New(sqlDB *sql.DB, agent Agent) *Service {
 	closing, end := context.WithCancel(context.Background())
 	return &Service{
-		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{},
-		readyWait: 5 * time.Second, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
+		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{}, modelHolds: map[int64]*modelHold{}, guards: map[int64]*guard{},
+		readyWait: 5 * time.Second, modelWait: modelWait, holdLimit: holdLimit, putBackLimit: putBackLimit, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
 		maxStreams: 16,
 	}
 }
@@ -90,6 +97,39 @@ func (s *Service) openStream(user int64) (func(), bool) {
 		if s.streams[user]--; s.streams[user] <= 0 {
 			delete(s.streams, user)
 		}
+	}, true
+}
+
+type guard struct {
+	held  chan struct{}
+	users int
+}
+
+func (s *Service) lock(ctx context.Context, id int64) (func(), bool) {
+	s.mu.Lock()
+	g := s.guards[id]
+	if g == nil {
+		g = &guard{held: make(chan struct{}, 1)}
+		s.guards[id] = g
+	}
+	g.users++
+	s.mu.Unlock()
+	release := func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if g.users--; g.users == 0 {
+			delete(s.guards, id)
+		}
+	}
+	select {
+	case g.held <- struct{}{}:
+	case <-ctx.Done():
+		release()
+		return nil, false
+	}
+	return func() {
+		<-g.held
+		release()
 	}, true
 }
 
@@ -189,4 +229,44 @@ func (s *Service) update(ctx context.Context, workspace, user, id int64, title *
 func (s *Service) touch(ctx context.Context, id, agentID int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND agent_id = ?`, id, agentID)
 	return err
+}
+
+const (
+	modelWait    = 3 * time.Second
+	holdLimit    = 20 * time.Second
+	putBackLimit = 5 * time.Second
+)
+
+type modelHold struct {
+	turn  chan struct{}
+	users int
+}
+
+func (s *Service) holdModel(ctx context.Context, conversation int64) (func(), error) {
+	s.mu.Lock()
+	h := s.modelHolds[conversation]
+	if h == nil {
+		h = &modelHold{turn: make(chan struct{}, 1)}
+		s.modelHolds[conversation] = h
+	}
+	h.users++
+	s.mu.Unlock()
+	leave := func() {
+		s.mu.Lock()
+		h.users--
+		if h.users == 0 {
+			delete(s.modelHolds, conversation)
+		}
+		s.mu.Unlock()
+	}
+	select {
+	case h.turn <- struct{}{}:
+		return func() {
+			<-h.turn
+			leave()
+		}, nil
+	case <-ctx.Done():
+		leave()
+		return nil, ctx.Err()
+	}
 }

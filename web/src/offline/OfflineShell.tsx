@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { AppAvatar } from '../apps/AppAvatar'
 import { AppView } from '../apps/AppView'
 import type { AppTransport } from '../apps/transport'
 import { useFormat, useT } from '../i18n'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
-import { Icon } from '../ui/Icon'
+import { Heading } from '../ui/Heading'
 import { Notice } from '../ui/Notice'
 import { Page } from '../ui/Page'
 import { PageHeader } from '../ui/PageHeader'
@@ -72,7 +73,7 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
                   {data.downloads.map((d) => (
                     <Row
                       key={d.key}
-                      leading={<Icon name="apps" />}
+                      leading={<AppAvatar name={d.name} icon={d.icon} size="md" decorative />}
                       title={d.name}
                       actions={
                         <Button
@@ -156,6 +157,10 @@ export function OfflineApp({
 
   return (
     <div className="ui-offline-app">
+      <div className="ui-offline-app-head">
+        <AppAvatar name={download.name} icon={download.icon} size="lg" decorative />
+        <Heading level={2}>{download.name}</Heading>
+      </div>
       <p className="ui-offline-app-note" role="note">
         {t('offline.localCopy', {
           when: f.dateTime(download.capturedAt),

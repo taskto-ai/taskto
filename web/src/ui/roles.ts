@@ -52,6 +52,12 @@ export const COLOR_ROLES = [
   'column-doing',
   'column-review',
   'column-done',
+  'diff-add',
+  'diff-add-soft',
+  'diff-add-text',
+  'diff-del',
+  'diff-del-soft',
+  'diff-del-text',
 ] as const
 
 export const LABEL_HUES = ['green', 'blue', 'violet', 'pink', 'amber', 'teal'] as const

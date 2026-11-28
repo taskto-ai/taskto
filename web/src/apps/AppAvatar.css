@@ -1,0 +1,21 @@
+@layer screens {
+  .ui-avatar.apps-avatar-icon {
+    background: var(--color-neutral-soft);
+    color: var(--color-text);
+    font-size: var(--text-lg);
+    font-weight: 400;
+    overflow: hidden;
+  }
+
+  .ui-avatar-sm.apps-avatar-icon {
+    font-size: var(--text-md);
+  }
+
+  .ui-avatar-lg.apps-avatar-icon {
+    font-size: var(--text-xl);
+  }
+
+  .apps-avatar-title {
+    margin-inline-end: var(--space-2);
+  }
+}

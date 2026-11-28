@@ -245,21 +245,31 @@ func (s *Service) handleDelete(ownerOf func(*http.Request) owner) http.HandlerFu
 }
 
 func (s *Service) handleModels(w http.ResponseWriter, r *http.Request) {
+	u, _ := auth.UserFrom(r.Context())
+	m, _ := auth.MembershipFrom(r.Context())
+	choices, err := s.Choices(r.Context(), m.WorkspaceID, u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]Choice{"providers": choices})
+}
+
+func (s *Service) Choices(ctx context.Context, workspace, user int64) ([]Choice, error) {
 	choices := []Choice{}
 	if s.feed != nil {
 		choices = append(choices, s.feed.Instance()...)
 	}
-	for _, o := range []owner{workspaceOwner(r), userOwner(r)} {
-		recs, err := s.store.list(r.Context(), o)
+	for _, o := range []owner{{workspace: workspace}, {user: user}} {
+		recs, err := s.store.list(ctx, o)
 		if err != nil {
-			serverError(w, r, err)
-			return
+			return nil, err
 		}
 		for _, rec := range recs {
 			choices = append(choices, choiceOf(rec))
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string][]Choice{"providers": choices})
+	return choices, nil
 }
 
 func (s *Service) changed(r *http.Request) {

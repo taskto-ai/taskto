@@ -177,6 +177,19 @@ func (c *Client) Submit(ctx context.Context, conversation int64, in Input) (int6
 	return out.SubmissionID, err
 }
 
+func (c *Client) Continue(ctx context.Context, conversation int64, model ModelRef, afterEntry int64) (int64, ModelRef, error) {
+	var out struct {
+		SubmissionID int64    `json:"submissionId"`
+		Model        ModelRef `json:"model"`
+	}
+	in := struct {
+		Model      ModelRef `json:"model"`
+		AfterEntry int64    `json:"afterEntry"`
+	}{model, afterEntry}
+	err := c.do(ctx, http.MethodPost, "/conversations/"+itoa(conversation)+"/continue", in, &out)
+	return out.SubmissionID, out.Model, err
+}
+
 type NoteInput struct {
 	Text      string `json:"text"`
 	Author    int64  `json:"author"`

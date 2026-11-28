@@ -62,7 +62,20 @@ test('shows tool calls, failures, and that earlier entries are left out', () => 
   expect(t.truncated).toBe(true)
   expect(t.messages).toEqual([
     { key: '4.0', role: 'assistant', text: '', tools: [{ id: 'c1', key: '4.0.0', name: 'search_docs' }] },
-    { key: '5.0', role: 'assistant', text: '', tools: [], error: 'rate limited' },
+    { key: '5.0', role: 'assistant', text: '', tools: [], error: 'rate limited', failed: true },
+  ])
+})
+
+test('a reply that failed is marked, and one the person stopped is not', () => {
+  const t = transcript({
+    entries: [
+      { id: 1, kind: 'pi.assistant', model: [{ role: 'assistant', content: [], stopReason: 'error' }] },
+      { id: 2, kind: 'pi.assistant', model: [{ role: 'assistant', content: [], stopReason: 'aborted' }] },
+    ],
+  })
+  expect(t.messages.map((m) => [m.error, m.failed])).toEqual([
+    ['The reply failed.', true],
+    ['The reply was stopped.', undefined],
   ])
 })
 

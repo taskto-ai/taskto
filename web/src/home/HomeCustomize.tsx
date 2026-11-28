@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef } from 'react'
 import { type AvailableApp, api, type HomeView, ws } from '../api'
+import { AppAvatar } from '../apps/AppAvatar'
 import { type Key, useT } from '../i18n'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
@@ -120,6 +121,7 @@ export function HomeCustomize({
                 return (
                   <Row
                     key={itemKey(p)}
+                    leading={<AppAvatar name={p.app_name} icon={p.app_icon} size="sm" decorative />}
                     title={name}
                     status={
                       <>
@@ -226,6 +228,7 @@ export function HomeCustomize({
           return (
             <div key={`${a.space_id}:${a.app_id}`} className="ui-home-group">
               <Heading level={3} size="subsection">
+                <AppAvatar name={a.name} icon={a.icon} size="sm" className="apps-avatar-title" decorative />
                 {a.name} <span className="ui-home-group-space">{space(a)}</span>
               </Heading>
               <Panel>
