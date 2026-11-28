@@ -160,8 +160,32 @@ describe('drawing', () => {
 
   test('a stacked area closes each layer over the one below', async () => {
     await drawn({ variant: 'area', stacked: true }, { by_stage: split })
-    expect(count('svg path.ui-chart-fill')).toBe(2)
-    expect(document.querySelector('svg path.ui-chart-fill.ui-chart-s2')?.getAttribute('d')).toMatch(/Z$/)
+    expect(count('svg path.ui-chart-fill')).toBe(1)
+    expect(document.querySelector('svg path.ui-chart-fill.ui-chart-s1')?.getAttribute('d')).toMatch(/Z$/)
+  })
+
+  test('a stacked area does not connect across a missing value', async () => {
+    const x = Array.from({ length: 5 }, (_, i) => ({ key: `k${i}`, label: `P${i}` }))
+    const gap = {
+      x,
+      series: [
+        { key: 'a', label: 'A', values: [10, 20, 30, 40, 50] },
+        { key: 'b', label: 'B', values: [5, 6, null, 7, 8] },
+      ],
+    }
+    await drawn({ variant: 'area', stacked: true }, { by_stage: gap })
+    const second = (kind: string) => document.querySelector(`svg path.${kind}.ui-chart-s2`)?.getAttribute('d') ?? ''
+    expect(second('ui-chart-line').match(/M/g)).toHaveLength(2)
+    expect(second('ui-chart-fill').match(/M/g)).toHaveLength(2)
+    expect(second('ui-chart-fill').match(/Z/g)).toHaveLength(2)
+    expect(document.querySelector('svg path.ui-chart-fill.ui-chart-s1')?.getAttribute('d')?.match(/M/g)).toHaveLength(1)
+    expect(count('svg circle')).toBe(0)
+  })
+
+  test('a stacked area keeps a lone value as a dot', async () => {
+    await drawn({ variant: 'area', stacked: true }, { by_stage: split })
+    expect(count('svg path.ui-chart-fill.ui-chart-s2')).toBe(0)
+    expect(count('svg circle.ui-chart-s2')).toBe(2)
   })
 
   test('a legend names every drawn series only when there are several', async () => {

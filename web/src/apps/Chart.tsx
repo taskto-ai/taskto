@@ -14,6 +14,7 @@ import {
   MAX_SERIES_DRAWN,
   plotted,
   readChart,
+  type Run,
   runs,
   stackLayers,
 } from './chartData'
@@ -131,15 +132,41 @@ function marks(data: ChartData, p: Plot): ReactNode[] {
     const at = (i: number, v: number) => `${num(xOf(i, p.count, false))} ${num(y(v))}`
     if (layers) {
       const ys = layers[s]
-      const top = ys.map((l, i) => `${i === 0 ? 'M' : 'L'}${at(i, l.to)}`).join('')
-      if (p.variant === 'area') {
-        const back = ys
-          .map((l, i) => `L${at(i, l.from)}`)
-          .reverse()
+      const stretches = runs(ys.map((l) => (l.has ? l.to : null)))
+      const top = (r: Run) =>
+        ys
+          .slice(r.start, r.end + 1)
+          .map((l, k) => `${k === 0 ? 'M' : 'L'}${at(r.start + k, l.to)}`)
           .join('')
-        out.push(<path key={`mark-${out.length}`} className={`ui-chart-fill ${cls}`} d={`${top}${back}Z`} />)
+      if (p.variant === 'area') {
+        const fill = stretches
+          .filter((r) => r.end > r.start)
+          .map((r) => {
+            const back = ys
+              .slice(r.start, r.end + 1)
+              .map((l, k) => `L${at(r.start + k, l.from)}`)
+              .reverse()
+              .join('')
+            return `${top(r)}${back}Z`
+          })
+          .join('')
+        if (fill) out.push(<path key={`mark-${out.length}`} className={`ui-chart-fill ${cls}`} d={fill} />)
       }
-      out.push(<path key={`mark-${out.length}`} className={`ui-chart-line ${cls}`} d={top} />)
+      out.push(
+        <path key={`mark-${out.length}`} className={`ui-chart-line ${cls}`} d={stretches.map(top).join('')} />,
+      )
+      for (const r of stretches) {
+        if (r.start !== r.end) continue
+        out.push(
+          <circle
+            key={`mark-${out.length}`}
+            className={`ui-chart-dot ${cls}`}
+            cx={num(xOf(r.start, p.count, false))}
+            cy={num(y(ys[r.start].to))}
+            r="2.5"
+          />,
+        )
+      }
       return
     }
     const parts = runs(line.values)
