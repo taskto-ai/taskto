@@ -29,14 +29,14 @@ func uncertain(err error) bool {
 
 func (s *Service) reconcile(ctx context.Context, p conversations.Principal, e queueEntry) hopStep {
 	if s.readModel == nil {
-		return hopAbandoned
+		return hopUnsure
 	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), modelReadTimeout)
 	defer cancel()
 	provider, model, err := s.readModel(rctx, p.AgentConversation)
 	if err != nil || provider != e.provider || model != e.model {
 		slog.WarnContext(ctx, "cli turn: the model write is not confirmed, no other model is tried", "conversation", p.Conversation, "err", err)
-		return hopAbandoned
+		return hopUnsure
 	}
 	return hopWritten
 }
@@ -58,6 +58,7 @@ const (
 	hopWritten hopStep = iota
 	hopSkipped
 	hopAbandoned
+	hopUnsure
 )
 
 func (s *Service) claimHop(turn string) (*hopClaim, bool) {
@@ -124,17 +125,17 @@ func (s *Service) hopOnce(ctx context.Context, p conversations.Principal, turn, 
 			}
 			return c.hop
 		}
-		hop := s.hopToModel(ctx, p, stopped, note)
-		s.settleHop(turn, c, hop, hop == nil && ctx.Err() != nil)
+		hop, unsure := s.hopToModel(ctx, p, stopped, note)
+		s.settleHop(turn, c, hop, hop == nil && !unsure && ctx.Err() != nil)
 		return hop
 	}
 }
 
-func (s *Service) hopToModel(ctx context.Context, p conversations.Principal, stopped, note string) *modelHop {
+func (s *Service) hopToModel(ctx context.Context, p conversations.Principal, stopped, note string) (*modelHop, bool) {
 	q, err := s.queue(ctx, p.User)
 	if err != nil {
 		slog.ErrorContext(ctx, "cli turn: choosing the next model", "conversation", p.Conversation, "err", err)
-		return nil
+		return nil, false
 	}
 	for _, e := range q {
 		if !e.isModel() {
@@ -142,12 +143,14 @@ func (s *Service) hopToModel(ctx context.Context, p conversations.Principal, sto
 		}
 		switch s.writeModel(ctx, p, e) {
 		case hopWritten:
-			return &modelHop{notice: fmt.Sprintf("%s: continuing on %s", stopped, e.model), note: note}
+			return &modelHop{notice: fmt.Sprintf("%s: continuing on %s", stopped, e.model), note: note}, false
 		case hopAbandoned:
-			return nil
+			return nil, false
+		case hopUnsure:
+			return nil, true
 		}
 	}
-	return nil
+	return nil, false
 }
 
 func (s *Service) writeModel(ctx context.Context, p conversations.Principal, e queueEntry) hopStep {

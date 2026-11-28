@@ -223,8 +223,8 @@ turns on. The turn ends with the limit's message, as before.
   or none could be) and records it for an hour, and a request that re-attaches to the same turn,
   also while the first is still writing, waits for that decision (it leaves when its own caller
   does) and answers with the same notice and final event at the same sequence numbers, whatever
-  was changed meanwhile, and the model is not set a second time. A hop that ended because its
-  caller left is no decision: the next request makes it. Requests for other turns, of the same
+  was changed meanwhile, and the model is not set a second time. A hop whose caller left before
+  any write was sent is no decision: the next request makes it. Requests for other turns, of the same
   or another person, never wait for it.
 - **The write is bounded by its caller.** The server's request to the agent runtime ends when the
   caller of the turn is gone and after 15 seconds. That bounds how long the server waits; it does
@@ -235,6 +235,10 @@ turns on. The turn ends with the limit's message, as before.
   caller). If the model read is the entry's, the write landed and is the hop. If it is another
   model, or the read fails, the hop ends with no more tries, so a second model is never written
   beside a first that may still land, and the turn ends as it would without a model in the queue.
+  That decision stays for the turn even when the caller is gone: a reconnect to the same turn
+  (whatever the queue or the setting is by then) announces no model and ends the turn as it would
+  without one, since the earlier write may still be committed and would replace a second model.
+  Only a hop that ended before any write was sent is no decision, and the next request makes it.
   Only an answer that says no (an unknown model, a retired conversation) skips the entry for the
   next one.
 - **A continued reply keeps the model the person chose.** When the agent runtime answers that the

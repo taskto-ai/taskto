@@ -18,6 +18,7 @@ import (
 
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/cliworker/clitest"
+	"taskto.ai/taskto/internal/conversations"
 )
 
 func (e *turnEnv) turnWith(ctx context.Context, conversation int64, b turnBody) []cliworker.Event {
@@ -103,6 +104,11 @@ func TestEveryModelWriteChecksTheOwnerAndTheCatalogAgain(t *testing.T) {
 	losses := map[string]func(e *turnEnv, second string){
 		"the owner left the workspace": func(e *turnEnv, _ string) {
 			if _, err := e.db.Exec(`DELETE FROM memberships WHERE user_id = ?`, e.owner.id); err != nil {
+				e.t.Fatal(err)
+			}
+		},
+		"switching was turned off": func(e *turnEnv, _ string) {
+			if _, err := e.db.Exec(`UPDATE cli_switching SET enabled = 0 WHERE user_id = ?`, e.owner.id); err != nil {
 				e.t.Fatal(err)
 			}
 		},
@@ -195,20 +201,52 @@ func TestAWaitingReattachLeavesWhenItsCallerDoes(t *testing.T) {
 	}
 }
 
-func TestAHopThatEndedWithItsCallerIsNoDecisionForTheNextRequest(t *testing.T) {
+func TestAHopThatEndedBeforeAnyWriteIsNoDecisionForTheNextRequest(t *testing.T) {
 	e, conv, models := limitedClaudeEnv(t, true)
 	e.provide(mine(e, "api"), "big")
 	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
-	reached := make(chan struct{})
-	var calls atomic.Int32
+	var writes atomic.Int32
 	e.svc.SetModelSetter(func(ctx context.Context, agent int64, provider, model string) error {
-		if calls.Add(1) == 1 {
-			close(reached)
-			<-ctx.Done()
-			return ctx.Err()
-		}
+		writes.Add(1)
 		return models.set(ctx, agent, provider, model)
 	})
+	p, err := conversations.PrincipalOf(context.Background(), e.db, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	if hop := e.svc.hopOnce(gone, p, "turn-x", "stopped", "note"); hop != nil || writes.Load() != 0 {
+		t.Fatalf("a hop whose caller was gone wrote %d models and returned %+v", writes.Load(), hop)
+	}
+	if hop := e.svc.hopOnce(context.Background(), p, "turn-x", "stopped", "note"); hop == nil || len(models.refs) != 1 {
+		t.Fatalf("the next request got %+v, model changes %v", hop, models.refs)
+	}
+}
+
+func TestAReconnectAnnouncesNoModelWhileAnEarlierWriteMayStillLand(t *testing.T) {
+	e, conv, models := limitedClaudeEnv(t, true)
+	first, second := mine(e, "first"), mine(e, "second")
+	e.provide(first, "a")
+	e.provide(second, "b")
+	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(first, "a"), modelEntry(second, "b")}})
+	reached, land := make(chan struct{}), make(chan struct{})
+	landed := make(chan struct{})
+	var calls atomic.Int32
+	e.svc.SetModelSetter(func(ctx context.Context, agent int64, provider, model string) error {
+		if calls.Add(1) > 1 {
+			return models.set(ctx, agent, provider, model)
+		}
+		close(reached)
+		<-ctx.Done()
+		go func() {
+			defer close(landed)
+			<-land
+			_ = models.set(context.WithoutCancel(ctx), agent, provider, model)
+		}()
+		return ctx.Err()
+	})
+	e.svc.SetModelReader(func(context.Context, int64) (string, string, error) { return "cli-claude", "default", nil })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	left := make(chan struct{})
@@ -219,9 +257,20 @@ func TestAHopThatEndedWithItsCallerIsNoDecisionForTheNextRequest(t *testing.T) {
 	<-reached
 	cancel()
 	<-left
-	d := done(e.turn(conv, limitedBody))
-	if !d.Continue || len(models.refs) != 1 {
-		t.Fatalf("the next request got %+v, model changes %v", d, models.refs)
+	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(second, "b")}})
+	events := e.turn(conv, limitedBody)
+	close(land)
+	<-landed
+	if d := lastDone(events); d.Continue || d.Note != "" {
+		t.Fatalf("the reconnect announced %+v while the first write could still land", d)
+	}
+	for _, ev := range events {
+		if ev.Type == cliworker.EventNotice {
+			t.Fatalf("the reconnect announced a model: %+v", ev)
+		}
+	}
+	if len(models.refs) != 1 || models.refs[0] != first+"/a" {
+		t.Fatalf("model changes = %v, want only the first write that landed late", models.refs)
 	}
 }
 

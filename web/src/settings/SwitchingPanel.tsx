@@ -48,7 +48,10 @@ function modelEntries(providers: ModelProvider[]): QueueModel[] {
 function queueTitle(t: T, a: QueueAccount, models: QueueModel[] = [], providers: ModelProvider[] = []): string {
   if (a.kind === 'model') {
     const known = models.find((m) => key(m) === key(a))
-    const provider = providers.find((p) => p.provider === a.id)?.name || a.id
+    const found = providers.find((p) => p.provider === a.id)
+    const same = providers.filter((p) => p.scope !== 'cli' && (p.name || p.provider) === (found?.name || a.id))
+    const name = found?.name || a.id
+    const provider = same.length > 1 ? `${name} · ${a.id}` : name
     return t('settings.switching.model', { name: known?.title ?? a.model_id, provider })
   }
   const name = CLI_PRODUCTS[a.cli] ?? a.cli

@@ -707,3 +707,32 @@ test('automatic switching: two providers that offer a model of the same name are
   expect(within(panel).getByRole('option', { name: 'Model: Big model (Team)' })).toBeTruthy()
   expect(within(panel).queryByRole('option', { name: 'Model: Big model (Mine)' })).toBeNull()
 })
+
+test('automatic switching: two providers with the same display name are told apart by their account', async () => {
+  fakeFetch({
+    'GET /api/me/cli-accounts': list(account('claude', 'Claude Code', { state: 'connected' })),
+    'GET /api/workspaces/1/cli-accounts': {
+      body: { enabled: true, mode: 'own_else_shared', default_mode: 'own_else_shared', accounts: [] },
+    },
+    'GET /api/workspaces/1/models': {
+      body: {
+        providers: [
+          { provider: 'ws1-team', name: 'Gateway', scope: 'workspace', models: [{ id: 'big', name: 'Big model' }] },
+          { provider: 'u2-mine', name: 'Gateway', scope: 'user', models: [{ id: 'big', name: 'Big model' }] },
+        ],
+      },
+    },
+    'GET /api/me/cli-switching': {
+      body: {
+        enabled: true,
+        queue: [{ kind: 'model', id: 'u2-mine', model_id: 'big', cli: '', title: 'big', limited: false }],
+        available: [],
+      },
+    },
+  })
+  render(<CliAccountsTab workspace={1} />)
+  const panel = await screen.findByRole('region', { name: 'Automatic switching' })
+  expect(await within(panel).findByText('1. Model: Big model (Gateway · u2-mine)')).toBeTruthy()
+  expect(within(panel).getByRole('option', { name: 'Model: Big model (Gateway · ws1-team)' })).toBeTruthy()
+  expect(within(panel).queryByRole('option', { name: 'Model: Big model (Gateway)' })).toBeNull()
+})
