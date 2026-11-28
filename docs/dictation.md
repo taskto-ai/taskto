@@ -19,7 +19,7 @@ send it. Nothing is sent to the agent until you press Send.
 - The server transcribes it with the workspace's **engine** and answers the text. The
   text is inserted at the cursor in the chat box.
 - The knowledge base's **glossary** (see below) improves the result.
-- **In apps.** Free-text fields on an app's screen get a microphone beside them: the same recorder and the same route, for the workspace the app is in,
+- **In apps.** Free-text fields on an app's screen, `MarkdownInput` too, get a microphone beside them: the same recorder and the same route, for the workspace the app is in,
   so the workspace's settings and the person's membership decide. It needs a connection, since the speech
   goes to the server, and says so: offline, or with the engine off, the button is disabled with the reason, and
   the keyboard's own dictation (the microphone key of a phone's keyboard) still works in the field and is named

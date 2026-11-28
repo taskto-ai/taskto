@@ -516,6 +516,24 @@
         "upc_e": "UPC-E"
       }
     },
+    "markdownInput": {
+      "label": "Text",
+      "modes": "Write or preview",
+      "write": "Write",
+      "preview": "Preview",
+      "toolbar": "Formatting",
+      "bold": "Bold",
+      "italic": "Italic",
+      "heading": "Heading",
+      "list": "Bulleted list",
+      "checklist": "Checklist",
+      "link": "Link",
+      "count": "{used} of {max}",
+      "empty": "Nothing to preview",
+      "boldSample": "bold text",
+      "italicSample": "italic text",
+      "linkSample": "link text"
+    },
     "dictation": {
       "dictate": "Dictate into {field}",
       "title": "Dictate: speak, then edit the text. Your speech is sent to this server to be turned into text, so this needs a connection.",

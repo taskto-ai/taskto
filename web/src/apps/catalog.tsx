@@ -7,6 +7,7 @@ import { ChartComponent } from './Chart'
 import { type CaptureInfo, isLocation } from './capture'
 import { iconPath, iconsShowingTheirName, type SurfaceComponent } from './iconPath'
 import { LocationField } from './LocationInput'
+import { MarkdownField } from './MarkdownInput'
 import { PhotoField, PhotoStrip, useAppFiles } from './PhotoInput'
 import { type PhotoLimits, photoIds, signatureId } from './photos'
 import { holds, type Rule, type Values } from './rules'
@@ -171,6 +172,38 @@ const BarcodeInput = createComponentImplementation(BarcodeInputApi, ({ props, co
   )
 })
 
+const MarkdownInputApi = {
+  name: 'MarkdownInput',
+  schema: z
+    .object({
+      field: z.string(),
+      label: CommonSchemas.DynamicString.optional(),
+      value: CommonSchemas.DynamicString,
+      checks: z.array(CommonSchemas.CheckRule).optional(),
+      accessibility: CommonSchemas.AccessibilityAttributes.optional(),
+      weight: z.number().optional(),
+    })
+    .strict(),
+}
+
+const MarkdownInput = createComponentImplementation(MarkdownInputApi, ({ props, context }) => {
+  const info = useSignalValue(context.dataContext.dataModel.getSignal<CaptureInfo>(`/_fields/${props.field}`))
+  const { setValue, isValid, validationErrors } = props as {
+    setValue?: (value: string) => void
+    isValid?: boolean
+    validationErrors?: string[]
+  }
+  return (
+    <MarkdownField
+      label={props.label}
+      value={typeof props.value === 'string' ? props.value : ''}
+      onChange={(text) => setValue?.(text)}
+      maxLength={info?.max_length}
+      error={isValid === false ? validationErrors?.[0] : undefined}
+    />
+  )
+})
+
 const PhotosApi = {
   name: 'Photos',
   schema: z
@@ -266,6 +299,7 @@ export const appsCatalog = new Catalog(
     LocationInput,
     SignatureInput,
     BarcodeInput,
+    MarkdownInput,
     Screens,
   ],
   [...basicCatalog.functions.values()].filter((f) => !LEFT_OUT.has(f.name)),

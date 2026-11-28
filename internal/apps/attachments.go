@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -817,8 +818,29 @@ func (d Definition) filesModel() map[string]any {
 	return out
 }
 
+func (d Definition) markdownInputFields() map[string]bool {
+	used := map[string]bool{}
+	add := func(raw []json.RawMessage) {
+		for _, r := range raw {
+			var c struct {
+				Component string `json:"component"`
+				Field     string `json:"field"`
+			}
+			if json.Unmarshal(r, &c) == nil && c.Component == "MarkdownInput" {
+				used[c.Field] = true
+			}
+		}
+	}
+	add(d.Components)
+	for _, s := range d.Screens {
+		add(s.Components)
+	}
+	return used
+}
+
 func (d Definition) fieldsModel() map[string]any {
 	var out map[string]any
+	markdown := d.markdownInputFields()
 	for _, f := range d.Collection.Fields {
 		var info map[string]any
 		switch f.Type {
@@ -827,6 +849,11 @@ func (d Definition) fieldsModel() map[string]any {
 		case TypeBarcode:
 			info = map[string]any{"format": f.Format}
 		case TypeSignature:
+		case TypeString:
+			if !markdown[f.Name] {
+				continue
+			}
+			info = map[string]any{"max_length": cmpOr(f.MaxLength, DefaultMaxLength)}
 		default:
 			continue
 		}

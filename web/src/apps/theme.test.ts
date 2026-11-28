@@ -30,6 +30,7 @@ const OWN = [
   'Chart',
   'LocationInput',
   'Markdown',
+  'MarkdownInput',
   'PhotoInput',
   'Photos',
   'Screens',

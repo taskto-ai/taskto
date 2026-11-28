@@ -11,6 +11,7 @@ export type Location = {
 export type CaptureInfo = {
   capture?: 'button' | 'submit'
   format?: string
+  max_length?: number
   required?: boolean
   editable?: boolean
 }

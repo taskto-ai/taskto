@@ -3178,7 +3178,14 @@ saying what is wrong) unless:
   address), plus `Stat` (a labelled value), `Chart` (a line, bar or area chart of a declared series, below), `Table` (a sortable table of the records, below), `Markdown` (formatted text from a literal or a
   binding, drawn by the web app's own renderer, which never makes HTML: links show as text
   and are never followed, and images show as links, so an app opens nothing outside),
-  `Show` (draws its child while a rule holds,
+  `MarkdownInput` (long text written as Markdown into a string field: `{"field": a string field of the collection,
+  "label"?, "value": {"path": "/draft/<field>"} (or `/record/<field>` on a screen that shows a record; any other value,
+  a literal, another field's path or a function call, is refused, because the editor writes where it is bound and counts
+  against the declared field's limit), "checks"?}`, with a toolbar for bold, italic, a heading, a list, a
+  checklist and a link, shortcuts for bold and italic, and a Preview tab drawn like `Markdown`; the field's `max_length`,
+  up to 10000, is the limit the server enforces with `app_field_too_long`, and the surface's data model tells the web
+  app the limit of such a field as `/_fields/<field>/max_length` so it can count; a field that is not a string field
+  is refused), `Show` (draws its child while a rule holds,
   [below](#fields-and-rules)), and `PhotoInput` and `Photos` (a photo input and the thumbnails of
   attachments, which upload to and draw from this server's own authenticated routes, never an
   outside address: [Photo attachments](#photo-attachments)), and `LocationInput`, `SignatureInput` and

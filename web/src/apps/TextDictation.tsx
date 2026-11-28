@@ -6,7 +6,7 @@ type Target = { id: number; host: HTMLElement; input: HTMLInputElement | HTMLTex
 
 let ids = 0
 
-const FIELDS = 'a2ui-basic-textfield'
+const FIELDS = 'a2ui-basic-textfield, .ui-app-markdown-input'
 
 export function workspaceOf(base: string | undefined): number | null {
   const m = base ? /\/workspaces\/(\d+)\//.exec(base) : null
@@ -18,7 +18,10 @@ export function insertText(input: HTMLInputElement | HTMLTextAreaElement, text: 
   const end = input.selectionEnd ?? at
   const before = input.value.slice(0, at)
   const space = before && !/\s$/.test(before) ? ' ' : ''
-  input.value = before + space + text + input.value.slice(end)
+  const next = before + space + text + input.value.slice(end)
+  const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value')?.set
+  if (set) set.call(input, next)
+  else input.value = next
   const cursor = (before + space + text).length
   input.setSelectionRange?.(cursor, cursor)
   input.dispatchEvent(new Event('input', { bubbles: true }))
