@@ -121,7 +121,7 @@ test('splice finds the one range an edit changes', () => {
 test('Windows line breaks are one break, and an edit leaves the others as they were', () => {
   expect(normalizeBreaks('a\r\nb\rc\nd')).toBe('a\nb\nc\nd')
   expect(keepBreaks('one\r\ntwo\r\nthree', 'one\n**two**\nthree')).toBe('one\r\n**two**\r\nthree')
-  expect(keepBreaks('one\r\ntwo', 'one\r\ntwo'.replace('\r', ''))).toBe('one\r\ntwo')
+  expect(keepBreaks('one\r\ntwo', 'one\ntwo')).toBe('one\r\ntwo')
   expect(keepBreaks('one\r\ntwo', 'onetwo')).toBe('onetwo')
   expect(keepBreaks('one\r\ntwo', 'one\ntwo\nmore')).toBe('one\r\ntwo\nmore')
   expect(keepBreaks('one\ntwo', 'one\ntwo!')).toBe('one\ntwo!')
