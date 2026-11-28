@@ -1,4 +1,4 @@
-import { configure } from '@testing-library/react'
+import { act, configure } from '@testing-library/react'
 import { afterEach, beforeEach } from 'vitest'
 import { resetSession } from '../session'
 import { closeQueued, resetCloses } from './dialogEvents'
@@ -82,3 +82,6 @@ if (typeof HTMLElement !== 'undefined' && !HTMLElement.prototype.showPopover) {
 }
 
 beforeEach(() => resetSession())
+afterEach(() => {
+  act(() => resetSession())
+})

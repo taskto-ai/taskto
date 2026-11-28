@@ -972,3 +972,23 @@ test('the pages a payer returns to say so, call nothing and show nothing of the 
   expect(screen.getByText(/Nothing was charged/)).toBeTruthy()
   expect(calls).toHaveLength(0)
 })
+
+test('the notice is waiting for the page to be seen from the commit that shows it', async () => {
+  sessionStorage.clear()
+  rememberDeletion('2026-12-08T10:00:00.000Z')
+  let state: DocumentVisibilityState = 'hidden'
+  vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => state)
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  const seen = new Promise<string | null>((resolve) => {
+    const watch = new MutationObserver(() => {
+      if (!screen.queryByText(/will be erased for good on .*2026/)) return
+      watch.disconnect()
+      state = 'visible'
+      document.dispatchEvent(new Event('visibilitychange'))
+      resolve(peekDeletion())
+    })
+    watch.observe(document.body, { childList: true, subtree: true })
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  expect(await seen).toBeNull()
+})

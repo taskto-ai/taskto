@@ -290,6 +290,7 @@ function formats(locale: string) {
   const dateTime = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' })
   const date = new Intl.DateTimeFormat(locale, { dateStyle: 'medium' })
   const calendarDate = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: 'UTC' })
+  const calendarMonth = new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', timeZone: 'UTC' })
   const time = new Intl.DateTimeFormat(locale, { timeStyle: 'short' })
   const number = new Intl.NumberFormat(locale)
   const relative = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
@@ -309,6 +310,12 @@ function formats(locale: string) {
       const day = new Date(0)
       day.setUTCFullYear(y, m - 1, d)
       return calendarDate.format(day)
+    },
+    calendarMonth: (ym: string) => {
+      const [y, m] = ym.split('-').map(Number)
+      const day = new Date(0)
+      day.setUTCFullYear(y, m - 1, 1)
+      return calendarMonth.format(day)
     },
     time: (d: Date | string | number) => time.format(toDate(d)),
     dateTime: (d: Date | string | number) => dateTime.format(toDate(d)),

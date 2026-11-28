@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, api, codeText, errorText, type Me } from '../api'
 import { t, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -366,7 +366,7 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   const methods = loaded.state.kind === 'ready' ? loaded.state.methods : null
   const forgotShown = forgot && methods?.password && methods.resetByEmail
   const showing = methods !== null && !challenge && !forgotShown ? deleted : null
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!showing) return
     const ack = () => {
       if (document.visibilityState === 'hidden') return
