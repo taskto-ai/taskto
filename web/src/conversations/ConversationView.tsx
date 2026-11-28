@@ -105,15 +105,6 @@ export function ConversationView({
   const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
   const [picked, setPicked] = useState<ModelRef | null>(null)
   const choices = useRef(0)
-  const readModel = () => {
-    const began = choices.current
-    api<ModelRef>(`${base}/model`).then(setPicked, () => {
-      if (choices.current !== began) return
-      setPicked(null)
-      loadedModel.reload()
-    })
-  }
-  const [continuing, setContinuing] = useState(false)
   const modelWrites = useRef(0)
   const claimModel = () => {
     const mine = ++modelWrites.current
@@ -123,6 +114,16 @@ export function ConversationView({
       setPicked(m)
     }
   }
+  const readModel = () => {
+    const began = choices.current
+    const choose = claimModel()
+    api<ModelRef>(`${base}/model`).then(choose, () => {
+      if (choices.current !== began) return
+      setPicked(null)
+      loadedModel.reload()
+    })
+  }
+  const [continuing, setContinuing] = useState(false)
   const model = picked ?? loadedModel.data
   const agents = useMemo(
     () =>

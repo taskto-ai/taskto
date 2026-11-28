@@ -28,31 +28,32 @@ import (
 const password = "a-long-enough-password"
 
 type fakeRuntime struct {
-	mu           sync.Mutex
-	next         int64
-	models       map[int64]agentrt.ModelRef
-	created      []agentrt.ModelRef
-	inputs       map[int64][]agentrt.Input
-	notes        map[int64][]agentrt.NoteInput
-	calls        []string
-	watches      []*fakeWatch
-	aborts       map[int64]int
-	resumes      map[int64]int
-	resumed      []continueCall
-	sets         int
-	err          error
-	onAbort      func(ctx context.Context)
-	replies      map[int64][]agentrt.Message
-	rawEntries   map[int64][]json.RawMessage
-	settle       chan struct{}
-	waited       atomic.Int64
-	waitErr      error
-	submitErr    error
-	onSubmit     func()
-	stallSend    bool
-	stallPutBack bool
-	onEntries    func()
-	onContinue   func()
+	mu            sync.Mutex
+	next          int64
+	models        map[int64]agentrt.ModelRef
+	created       []agentrt.ModelRef
+	inputs        map[int64][]agentrt.Input
+	notes         map[int64][]agentrt.NoteInput
+	calls         []string
+	watches       []*fakeWatch
+	aborts        map[int64]int
+	resumes       map[int64]int
+	resumed       []continueCall
+	sets          int
+	err           error
+	onAbort       func(ctx context.Context)
+	replies       map[int64][]agentrt.Message
+	rawEntries    map[int64][]json.RawMessage
+	settle        chan struct{}
+	waited        atomic.Int64
+	waitErr       error
+	submitErr     error
+	onSubmit      func()
+	stallSend     bool
+	stallPutBack  bool
+	onEntries     func()
+	onContinue    func()
+	stallContinue bool
 }
 
 var setupToken = auth.NewSetupToken()
@@ -108,9 +109,13 @@ type continueCall struct {
 	after int64
 }
 
-func (f *fakeRuntime) Continue(_ context.Context, conv int64, model agentrt.ModelRef, after int64) (int64, agentrt.ModelRef, error) {
+func (f *fakeRuntime) Continue(ctx context.Context, conv int64, model agentrt.ModelRef, after int64) (int64, agentrt.ModelRef, error) {
 	if f.onContinue != nil {
 		f.onContinue()
+	}
+	if f.stallContinue {
+		<-ctx.Done()
+		return 0, agentrt.ModelRef{}, ctx.Err()
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

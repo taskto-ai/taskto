@@ -490,15 +490,30 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	if !s.runnable(w, r, p, model) {
 		return
 	}
-	unlock, ok := s.lock(r.Context(), c.ID)
+	waitCtx, stopWaiting := context.WithTimeout(r.Context(), s.modelWait)
+	done, err := s.holdModel(waitCtx, c.ID)
+	stopWaiting()
+	if err != nil {
+		if r.Context().Err() == nil {
+			writeError(w, http.StatusConflict, apierr.CodeConversationBusy, "the conversation's model is being changed: try again in a moment")
+		}
+		return
+	}
+	defer done()
+	ctx, cancel := context.WithTimeout(r.Context(), s.holdLimit)
+	defer cancel()
+	unlock, ok := s.lock(ctx, c.ID)
 	if !ok {
+		if r.Context().Err() == nil {
+			unavailable(w)
+		}
 		return
 	}
 	defer unlock()
 	if !s.stillWritable(w, r) {
 		return
 	}
-	sub, admitted, err := rt.Continue(r.Context(), c.agentID, model, req.AfterEntry)
+	sub, admitted, err := rt.Continue(ctx, c.agentID, model, req.AfterEntry)
 	if err != nil {
 		conversationError(w, r, c, err)
 		return
