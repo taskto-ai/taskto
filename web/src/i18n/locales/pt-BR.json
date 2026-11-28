@@ -2044,7 +2044,7 @@
     },
     "switching": {
       "title": "Troca automática",
-      "intro": "Quando a conta em que uma execução roda para (atinge um limite de uso ou precisa que você entre de novo), a execução continua na próxima conta abaixo que puder rodar, começando com a conversa até ali. A fila também ordena suas contas enquanto a troca está desligada.",
+      "intro": "Quando a conta em que uma execução roda para (atinge um limite de uso ou precisa que você entre de novo), a execução continua na próxima conta abaixo que puder rodar, começando com a conversa até ali. Quando nenhuma puder, um modelo seu ou do seu espaço de trabalho na fila assume e a conversa segue por lá. A fila também ordena suas contas enquanto a troca está desligada.",
       "toggle": "Trocar automaticamente quando uma conta parar",
       "warning": "Cada conta precisa ser um login seu ou do seu espaço de trabalho. Os planos dos provedores pressupõem uso individual: alternar entre assinaturas extras para driblar os limites de um plano pode violar os termos dele.",
       "termsLabel": "Os termos dos provedores",
@@ -2061,6 +2061,8 @@
       "ownLabelled": "{name} ({label})",
       "ownNumbered": "{name} (conta {number})",
       "shared": "{name} ({label}, {workspace})",
+      "model": "Modelo: {name} ({provider})",
+      "modelsFailed": "Não foi possível carregar os modelos que você pode adicionar: {error}",
       "limitedBadge": "No limite"
     },
     "dictation": {

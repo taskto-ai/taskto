@@ -1,4 +1,15 @@
-import { api, CLI_PRODUCTS, CLI_SWITCHING, type CliName, type CliSwitching, type QueueAccount } from '../api'
+import {
+  api,
+  CLI_PRODUCTS,
+  CLI_SWITCHING,
+  type CliName,
+  type CliSwitching,
+  type QueueAccount,
+  type QueueCli,
+  type QueueModel,
+  ws,
+} from '../api'
+import type { ModelProvider } from '../conversations/ModelPicker'
 import { type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Badge } from '../ui/Badge'
@@ -13,10 +24,29 @@ import { CLI_TERMS } from './CliAccountsTab'
 import { Alert, Loading, Section, useAction } from './parts'
 import { SHARED_TERMS } from './SharedCliAccounts'
 
-const entry = (a: QueueAccount) => (a.kind === 'own' ? { account: a.id } : { shared: Number(a.id) })
-const key = (a: QueueAccount) => `${a.kind}:${a.id}`
+const entry = (a: QueueAccount) => {
+  if (a.kind === 'model') return { provider: a.id, model_id: a.model_id }
+  return a.kind === 'own' ? { account: a.id } : { shared: Number(a.id) }
+}
+const key = (a: QueueAccount) =>
+  a.kind === 'model' ? `model:${JSON.stringify([a.id, a.model_id])}` : `${a.kind}:${a.id}`
 
-function queueTitle(t: T, a: QueueAccount): string {
+function modelEntries(providers: ModelProvider[]): QueueModel[] {
+  return providers
+    .filter((p) => p.scope !== 'cli')
+    .flatMap((p) =>
+      p.models.map((m) => ({
+        kind: 'model' as const,
+        id: p.provider,
+        cli: '' as const,
+        model_id: m.id,
+        title: m.name || m.id,
+        limited: false,
+      })),
+    )
+}
+
+function accountTitle(t: T, a: QueueCli): string {
   const name = CLI_PRODUCTS[a.cli] ?? a.cli
   if (a.kind === 'shared') {
     return a.label && a.workspace_name
@@ -28,8 +58,58 @@ function queueTitle(t: T, a: QueueAccount): string {
   return a.number > 1 ? t('settings.switching.ownNumbered', { name, number: a.number }) : name
 }
 
-export function SwitchingPanel() {
+function modelTitle(t: T, a: QueueModel, level: number, models: QueueModel[], providers: ModelProvider[]): string {
+  const title = models.find((m) => key(m) === key(a))?.title ?? a.model_id
+  const provider = providers.find((p) => p.provider === a.id)?.name || a.id
+  if (level === 0) return t('settings.switching.model', { name: title, provider })
+  if (level === 1) return t('settings.switching.model', { name: title, provider: `${provider} · ${a.id}` })
+  return t('settings.switching.model', {
+    name: JSON.stringify([title, a.model_id]),
+    provider: JSON.stringify([provider, a.id]),
+  })
+}
+
+const LAST_LEVEL = 2
+
+function titlesOf(
+  t: T,
+  entries: QueueAccount[],
+  models: QueueModel[],
+  providers: ModelProvider[],
+): Map<string, string> {
+  const levels = new Map<string, number>()
+  const titleOf = (a: QueueAccount) =>
+    a.kind === 'model' ? modelTitle(t, a, levels.get(key(a)) ?? 0, models, providers) : accountTitle(t, a)
+  for (let round = 0; round <= LAST_LEVEL; round++) {
+    const byTitle = new Map<string, Map<string, QueueAccount>>()
+    for (const a of entries) {
+      const title = titleOf(a)
+      byTitle.set(title, (byTitle.get(title) ?? new Map()).set(key(a), a))
+    }
+    let changed = false
+    for (const same of byTitle.values()) {
+      if (same.size < 2) continue
+      for (const a of same.values()) {
+        const level = levels.get(key(a)) ?? 0
+        if (a.kind !== 'model' || level >= LAST_LEVEL) continue
+        levels.set(key(a), level + 1)
+        changed = true
+      }
+    }
+    if (!changed) break
+  }
+  return new Map(entries.map((a) => [key(a), titleOf(a)]))
+}
+
+export function SwitchingPanel({ workspace }: { workspace?: number }) {
   const state = useLoad(() => api<CliSwitching>(CLI_SWITCHING), [])
+  const providers = useLoad(
+    () =>
+      workspace === undefined
+        ? Promise.resolve<ModelProvider[]>([])
+        : api<{ providers: ModelProvider[] }>(`${ws(workspace)}/models`).then((r) => r.providers),
+    [workspace],
+  )
   const action = useAction()
   const t = useT()
   const f = useFormat()
@@ -52,7 +132,10 @@ export function SwitchingPanel() {
   }
   const { enabled, queue, available } = state.data
   const queued = new Set(queue.map(key))
-  const rest = available.filter((a) => !queued.has(key(a)))
+  const models = modelEntries(providers.data ?? [])
+  const rest: QueueAccount[] = [...available, ...models].filter((a) => !queued.has(key(a)))
+  const titles = titlesOf(t, [...queue, ...rest], models, providers.data ?? [])
+  const titleOf = (a: QueueAccount) => titles.get(key(a)) ?? a.title
   const move = (i: number, by: number) => {
     const next = [...queue]
     const [a] = next.splice(i, 1)
@@ -94,13 +177,21 @@ export function SwitchingPanel() {
         </Notice>
       </Panel>
       <Alert error={action.error} />
+      {providers.error && (
+        <Notice tone="danger">
+          {t('settings.switching.modelsFailed', { error: providers.error })}{' '}
+          <Button size="sm" variant="ghost" onClick={() => providers.reload()}>
+            {t('app.tryAgain')}
+          </Button>
+        </Notice>
+      )}
       {queue.length === 0 ? (
         <p className="settings-muted">{t('settings.switching.empty')}</p>
       ) : (
         <Panel>
           <ol className="settings-queue" aria-label={t('settings.switching.queue')}>
             {queue.map((a, i) => {
-              const title = queueTitle(t, a)
+              const title = titleOf(a)
               return (
                 <li key={key(a)} className="settings-queue-item" aria-label={title}>
                   <span className="settings-person-text">
@@ -160,7 +251,7 @@ export function SwitchingPanel() {
             <option value="">{t('settings.switching.choose')}</option>
             {rest.map((a) => (
               <option key={key(a)} value={key(a)}>
-                {queueTitle(t, a)}
+                {titleOf(a)}
               </option>
             ))}
           </Select>

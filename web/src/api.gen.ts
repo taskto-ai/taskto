@@ -533,6 +533,20 @@ export type CardThread = {
   comments: Comment[]
 }
 
+export type CliaccountsQueueAccount = {
+  kind: string
+  id: string
+  cli: string
+  title: string
+  label?: string
+  number?: number
+  workspace?: number
+  workspace_name?: string
+  model_id?: string
+  limited: boolean
+  limited_until?: string
+}
+
 export type Comment = {
   id: number
   card_id: number
@@ -960,6 +974,12 @@ export type SpaceIntegration = {
 export type SubmissionReply = {
   submission_id: number
   model: ConversationsModelRef
+}
+
+export type SwitchingState = {
+  enabled: boolean
+  queue: CliaccountsQueueAccount[]
+  available: CliaccountsQueueAccount[]
 }
 
 export type Token = {

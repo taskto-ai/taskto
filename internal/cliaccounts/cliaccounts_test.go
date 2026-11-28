@@ -22,6 +22,7 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/cliworker/clitest"
 	"taskto.ai/taskto/internal/db"
+	"taskto.ai/taskto/internal/providers"
 	"taskto.ai/taskto/internal/serverkey"
 )
 
@@ -83,6 +84,12 @@ func newEnv(t *testing.T, mode Mode, tune func(*cliworker.Config)) *env {
 	e.proxy = httptest.NewServer(e.svc.ProxyHandler())
 	t.Cleanup(e.proxy.Close)
 	e.svc.SetShared(Shared{Key: key, ProxyURL: e.proxy.URL})
+	store := providers.NewStore(sqlDB, key)
+	feed, err := providers.NewFeed(store, providers.FeedConfig{Dir: filepath.Join(dir, "agent")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.svc.SetModelCatalog(providers.New(store, feed))
 	mux := http.NewServeMux()
 	a := auth.New(sqlDB, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
 	a.Routes(mux)
@@ -552,4 +559,24 @@ func (e *env) accountID(user int64, cli cliworker.CLI) int64 {
 		e.t.Fatal(err)
 	}
 	return id
+}
+
+func (e *env) provide(provider string, models ...string) {
+	e.t.Helper()
+	var name string
+	var owner int64
+	insert := `INSERT INTO provider_accounts (user_id, name, display_name, kind, base_url, models) VALUES (?, ?, ?, 'openai-compatible', 'https://models.example.com/v1', ?)`
+	if _, err := fmt.Sscanf(provider, "ws%d-%s", &owner, &name); err == nil {
+		insert = `INSERT INTO provider_accounts (workspace_id, name, display_name, kind, base_url, models) VALUES (?, ?, ?, 'openai-compatible', 'https://models.example.com/v1', ?)`
+	} else if _, err := fmt.Sscanf(provider, "u%d-%s", &owner, &name); err != nil {
+		e.t.Fatalf("not a provider account: %s", provider)
+	}
+	list := []map[string]any{}
+	for _, m := range models {
+		list = append(list, map[string]any{"id": m, "name": m, "reasoning": false})
+	}
+	raw, _ := json.Marshal(list)
+	if _, err := e.db.Exec(insert, owner, name, name, string(raw)); err != nil {
+		e.t.Fatal(err)
+	}
 }

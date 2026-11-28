@@ -182,7 +182,11 @@ type Service struct {
 	ended      map[string]time.Time
 	tools      atomic.Pointer[Tools]
 	setModel   ModelSetter
+	readModel  ModelReader
 	switches   map[string]string
+	hops       map[string]*hopClaim
+	modelWait  time.Duration
+	catalog    ModelCatalog
 	stops      map[string]time.Time
 }
 
@@ -238,7 +242,7 @@ func New(sqlDB *sql.DB, mode Mode, worker Worker) *Service {
 	if mode == Off {
 		worker = nil
 	}
-	s := &Service{db: sqlDB, mode: mode, boot: newBoot(), identities: map[int64]string{}, watching: map[watchKey]bool{}, started: map[watchKey]time.Time{}, settled: map[watchKey]time.Time{}, locks: map[watchKey]*sync.Mutex{}, changed: make(chan struct{}), closing: make(chan struct{}), poll: time.Second, ended: map[string]time.Time{}, tokens: map[string]string{}, switches: map[string]string{}, stops: map[string]time.Time{}}
+	s := &Service{db: sqlDB, mode: mode, boot: newBoot(), identities: map[int64]string{}, watching: map[watchKey]bool{}, started: map[watchKey]time.Time{}, settled: map[watchKey]time.Time{}, locks: map[watchKey]*sync.Mutex{}, changed: make(chan struct{}), closing: make(chan struct{}), poll: time.Second, ended: map[string]time.Time{}, tokens: map[string]string{}, switches: map[string]string{}, hops: map[string]*hopClaim{}, modelWait: modelWriteTimeout, stops: map[string]time.Time{}}
 	if worker != nil {
 		s.worker = accountWorker{w: worker, s: s}
 	}

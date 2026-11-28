@@ -289,12 +289,20 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 			}
 			return c, nil
 		})
-		cliAccounts.SetModelSetter(func(ctx context.Context, conversation int64, cli cliworker.CLI) error {
+		cliAccounts.SetModelSetter(func(ctx context.Context, conversation int64, provider, modelID string) error {
 			c, err := agent.ready(ctx)
 			if err != nil {
 				return err
 			}
-			return c.SetModel(ctx, conversation, agentrt.ModelRef{Provider: "cli-" + string(cli), ModelID: "default"})
+			return modelOutcome(c.SetModel(ctx, conversation, agentrt.ModelRef{Provider: provider, ModelID: modelID}))
+		})
+		cliAccounts.SetModelReader(func(ctx context.Context, conversation int64) (string, string, error) {
+			c, err := agent.ready(ctx)
+			if err != nil {
+				return "", "", err
+			}
+			m, err := c.Model(ctx, conversation)
+			return m.Provider, m.ModelID, err
 		})
 		convAgent = func(ctx context.Context) (conversations.Runtime, error) {
 			c, err := agent.ready(ctx)
@@ -312,6 +320,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	}
 	convs.SetCLIQuestions(cliAccounts)
 	providerSvc := providerAPI(store, agent.feed, egressOf(cfg))
+	cliAccounts.SetModelCatalog(providerSvc)
 	convs.SetContinueModels(runnableModels(providerSvc, cliAccounts))
 
 	if cfg.InsecureCookies {

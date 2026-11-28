@@ -912,7 +912,7 @@ export type CliMemberModes = {
   members: { user_id: number; name: string; email: string; mode: CliAccountMode | null }[]
 }
 
-export type QueueAccount = {
+export type QueueCli = {
   kind: 'own' | 'shared'
   id: string
   cli: CliName
@@ -925,7 +925,19 @@ export type QueueAccount = {
   limited_until?: string
 }
 
-export type CliSwitching = { enabled: boolean; queue: QueueAccount[]; available: QueueAccount[] }
+export type QueueModel = {
+  kind: 'model'
+  id: string
+  cli: ''
+  model_id: string
+  title: string
+  limited: boolean
+  limited_until?: string
+}
+
+export type QueueAccount = QueueCli | QueueModel
+
+export type CliSwitching = { enabled: boolean; queue: QueueAccount[]; available: QueueCli[] }
 
 export const CLI_SWITCHING = '/api/me/cli-switching'
 

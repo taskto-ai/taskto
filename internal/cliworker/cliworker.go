@@ -84,6 +84,8 @@ type Event struct {
 	Limits     []Limit     `json:"limits,omitempty"`
 	Status     Status      `json:"status,omitempty"`
 	Exit       *int        `json:"exit,omitempty"`
+	Continue   bool        `json:"continue,omitempty"`
+	Note       string      `json:"note,omitempty"`
 }
 
 type Tool struct {

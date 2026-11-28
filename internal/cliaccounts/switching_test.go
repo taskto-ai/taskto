@@ -17,11 +17,11 @@ import (
 
 const switchingPath = "/api/me/cli-switching"
 
-func (c *client) setSwitching(body any) switchingState {
+func (c *client) setSwitching(body any) SwitchingState {
 	c.e.t.Helper()
 	rec := c.do(http.MethodPut, switchingPath, body)
 	expect(c.e.t, rec, http.StatusOK)
-	return decode[switchingState](c.e.t, rec)
+	return decode[SwitchingState](c.e.t, rec)
 }
 
 func TestSwitchingAPI(t *testing.T) {
@@ -35,7 +35,7 @@ func TestSwitchingAPI(t *testing.T) {
 
 	rec := owner.do(http.MethodGet, switchingPath, nil)
 	expect(t, rec, http.StatusOK)
-	st := decode[switchingState](t, rec)
+	st := decode[SwitchingState](t, rec)
 	if st.Enabled || len(st.Queue) != 0 || len(st.Available) != 3 {
 		t.Fatalf("state = %+v", st)
 	}
@@ -56,7 +56,7 @@ func TestSwitchingAPI(t *testing.T) {
 	expect(t, other.do(http.MethodPut, switchingPath, map[string]any{"queue": []map[string]any{{"account": "claude-2"}}}), http.StatusNotFound)
 	expect(t, owner.do(http.MethodPut, switchingPath, map[string]any{"queue": []map[string]any{{"account": "claude"}, {"account": "claude"}}}), http.StatusBadRequest)
 	expect(t, owner.do(http.MethodPut, switchingPath, map[string]any{"queue": []map[string]any{{"account": "claude", "shared": shared.ID}}}), http.StatusBadRequest)
-	if st := decode[switchingState](t, other.do(http.MethodGet, switchingPath, nil)); st.Enabled || len(st.Queue) != 0 {
+	if st := decode[SwitchingState](t, other.do(http.MethodGet, switchingPath, nil)); st.Enabled || len(st.Queue) != 0 {
 		t.Fatalf("another user's state = %+v", st)
 	}
 	outsider := e.invite(owner, ws, "outsider@example.com")
@@ -66,7 +66,7 @@ func TestSwitchingAPI(t *testing.T) {
 	expect(t, outsider.do(http.MethodPut, switchingPath, map[string]any{"queue": []map[string]any{{"shared": shared.ID}}}), http.StatusNotFound)
 
 	expect(t, owner.do(http.MethodDelete, base+"/claude-2", nil), http.StatusNoContent)
-	st = decode[switchingState](t, owner.do(http.MethodGet, switchingPath, nil))
+	st = decode[SwitchingState](t, owner.do(http.MethodGet, switchingPath, nil))
 	if len(st.Queue) != 2 || st.Queue[0].Kind != "shared" {
 		t.Fatalf("after a disconnect: %+v", st.Queue)
 	}
@@ -102,14 +102,22 @@ func TestLimitedUntil(t *testing.T) {
 }
 
 type modelCalls struct {
-	mu   sync.Mutex
-	clis []cliworker.CLI
+	mu     sync.Mutex
+	clis   []cliworker.CLI
+	refs   []string
+	refuse map[string]bool
 }
 
-func (m *modelCalls) set(_ context.Context, _ int64, cli cliworker.CLI) error {
+func (m *modelCalls) set(_ context.Context, _ int64, provider, model string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.clis = append(m.clis, cli)
+	if m.refuse[provider] {
+		return fmt.Errorf("unknown model")
+	}
+	m.refs = append(m.refs, provider+"/"+model)
+	if cli, ok := strings.CutPrefix(provider, cliProviderPrefix); ok {
+		m.clis = append(m.clis, cliworker.CLI(cli))
+	}
 	return nil
 }
 

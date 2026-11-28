@@ -14,6 +14,9 @@ var kept = map[string]struct {
 	"taskto.ai/taskto/internal/access": {"access/nonnull_test.go", []string{"TestAppAccessRolesAreNeverNil"}},
 	"taskto.ai/taskto/internal/auth":   {"auth/nonnull_test.go", []string{"TestMeWorkspacesAreNeverNil"}},
 	"taskto.ai/taskto/internal/boards": {"boards/nonnull_test.go", []string{"TestCardListsAreNeverNil"}},
+	"taskto.ai/taskto/internal/cliaccounts": {
+		"cliaccounts/nonnull_test.go", []string{"TestSwitchingListsAreNeverNil"},
+	},
 	"taskto.ai/taskto/internal/notifications": {
 		"notifications/nonnull_test.go", []string{"TestEmptyInboxIsNeverNil"},
 	},

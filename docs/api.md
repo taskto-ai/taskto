@@ -5544,18 +5544,30 @@ switching is off: a turn runs on the first connected one in it.
  "queue": [{"kind": "own", "id": "claude", "cli": "claude", "title": "Claude Code (Personal)", "label": "Personal",
             "number": 1, "limited": false},
            {"kind": "shared", "id": "4", "cli": "codex", "title": "Codex (Company key, Home)", "label": "Company key",
-            "workspace": 1, "workspace_name": "Home", "limited": true, "limited_until": "2026-11-19T18:00:00Z"}],
+            "workspace": 1, "workspace_name": "Home", "limited": true, "limited_until": "2026-11-19T18:00:00Z"},
+           {"kind": "model", "id": "u3-api", "model_id": "big", "cli": "", "title": "big", "limited": false}],
  "available": [ … every account that can go in the queue, in the same shape … ]}
 ```
+
+A queue entry with `"kind": "model"` is a model: `id` is its provider and `model_id` its model.
+`available` lists accounts only; the models a person can queue are the ones of
+[`GET /api/workspaces/{workspace}/models`](#model-providers) that aren't a CLI's.
 
 `title` names the account in English; `label` (if any), `number` (an own account's, for its
 CLI) and `workspace_name` are there for a client to name it in its user's language.
 
 ### `PUT /api/me/cli-switching`
 
-`{"enabled"?: true, "queue"?: [{"account": "claude-2"}, {"shared": 4}]}`. A queue replaces the
-one before. `200` with the state. An account that isn't the caller's, or a shared account of a
-workspace they aren't a member of, is a `404`. An account twice is a `400`. An account that is
+`{"enabled"?: true, "queue"?: [{"account": "claude-2"}, {"shared": 4}, {"provider": "u3-api", "model_id": "big"}]}`.
+A queue replaces the one before. `200` with the state. An account that isn't the caller's, or a
+shared account of a workspace they aren't a member of, is a `404`; so is a model of another
+person's provider, of a workspace they aren't a member of, of a CLI's provider (`cli-…`), or one
+the provider doesn't list. `GET` leaves out a model entry that is no longer one of those, so what
+it shows can be saved back. An
+entry that is more than one of the three, or a model with only one of `provider` and `model_id`,
+is a `400`, and so is an account or a model twice. When every account of the queue is at its
+limit, a turn goes on with the first model of it that the conversation's workspace allows
+([account-switching.md](account-switching.md)). An account that is
 disconnected or removed leaves the queue.
 
 ## Shared CLI accounts

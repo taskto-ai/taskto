@@ -58,6 +58,7 @@ func Roots() []Root {
 		root[conversations.SubmissionReply]("SubmissionReply"),
 		root[conversations.ContinueModels]("ContinueModels"),
 		root[conversations.NoteReply]("NoteReply"),
+		root[cliaccounts.SwitchingState]("SwitchingState"),
 		root[notifications.Item]("NotificationItem"),
 		root[notifications.List]("NotificationList"),
 

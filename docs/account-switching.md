@@ -172,10 +172,12 @@ These are the same settings the CLI workers' gateway tests use, with the server 
 The user's queue (Settings → CLI accounts): an ordered list of accounts, their own and the
 shared accounts of their workspaces, with a switch that is **off by default**.
 
-- Table `cli_switching` (user, enabled) and `cli_switch_queue` (user, position, own account or
-  shared account).
-- The queue can only hold the user's own accounts and shared accounts of workspaces they are a
-  member of. At a turn, entries the conversation's workspace doesn't allow are skipped: a shared
+- Table `cli_switching` (user, enabled) and `cli_switch_queue` (user, position, and exactly one
+  of an own account, a shared account, or a model: a provider and a model id).
+- The queue can only hold the user's own accounts, shared accounts of workspaces they are a
+  member of, and models that a provider the user may use lists now: the instance's, their own,
+  and those of a workspace they are in. Entries that stopped being so (the person left the
+  workspace, the provider or the model was removed) are not shown and drop out at the next save. A CLI's own provider (`cli-…`) is refused: those are accounts. At a turn, entries the conversation's workspace doesn't allow are skipped: a shared
   account of another workspace, or what the member's mode rules out.
 
 **When switching is off**, a turn runs on the account the mode picks, as above: the first own
@@ -207,6 +209,58 @@ turns on. The turn ends with the limit's message, as before.
 - **One worker turn per account.** Each run is a worker turn of its own (`c<conversation>-<turn>`,
   then `…-s1`, `…-s2`). The server numbers their events in one sequence, so a sidecar that
   re-attaches reads the whole chain once.
+- **A model at the end**: when no account can run (also after the last switch the cap allows),
+  the first model of the queue (in queue order, so accounts always come before models) that the
+  conversation's workspace allows takes over. Every attempt, one model after another, asks again,
+  right before its own write to the agent runtime: whether the conversation is still its owner's
+  (not archived, owner still a member and not disabled), whether switching is still on, and the
+  provider and its model list in the database, which is the truth before the agent runtime has
+  reloaded. A model of another workspace's provider, of a provider that was removed, or one the
+  provider no longer lists is skipped, and so is one the agent runtime refuses; the owner losing
+  access, or switching going off, ends the hop with no further write.
+- **One decision per turn.** The hop is a claim of the stopped worker turn, not a lock of the
+  service: of two requests that both start the same new turn, the first to reach the end of the
+  chain makes the decision (a model was set, or none could be), and the other waits for it (it
+  leaves when its own caller does) and answers with the same notice and final event, so the model
+  is not set twice. Requests for other turns, of the same or another person, never wait for it.
+- **A re-attach never sets or announces a model.** A request for a turn that already exists (the
+  sidecar reconnecting) ends with the turn's recorded outcome, as it would without a model in the
+  queue: no notice, no `continue`, and no write to the agent runtime, whatever the queue or the
+  setting is by then. A reconnect after the hop therefore ends with the limit's message. A re-attach
+  may still move a turn to the next account, as before, but it does not change the conversation's
+  model when that account is another CLI's: the model stays what the conversation had, and only
+  the first request of a turn writes one.
+- **The write is bounded by its caller.** The server's request to the agent runtime ends when the
+  caller of the turn is gone and after 15 seconds. That bounds how long the server waits; it does
+  not take the write back, because the agent runtime commits a write it has already admitted
+  whether or not the server still waits for the answer. So a write whose answer is lost (the
+  deadline, a dropped connection, a `5xx`) is uncertain, and the server never treats it as
+  refused: it reads the conversation's model back (`GET /model`, 5 seconds, not tied to the
+  caller). If the model read is the entry's, the write landed and is the hop. If it is another
+  model, or the read fails, the hop ends with no more tries, so a second model is never written
+  beside a first that may still land, and the turn ends as it would without a model in the queue.
+  Only an answer that says no (an unknown model, a retired conversation) skips the entry for the
+  next one.
+- **A continued reply keeps the model the person chose.** When the agent runtime answers that the
+  conversation is busy with a reply continued on a model the person chose (`409`, reason `busy`),
+  the hop ends with no more tries. The runtime also refuses (the same `409`) a model write it
+  admitted before a continuation committed, whenever that write reaches its commit, also once the
+  continued reply has ended, so a held write cannot undo the person's choice later. A continued
+  turn (`pinned`) never takes a hop, nor an account switch.
+- **A stop wins.** A stop that lands while the model is looked up or written leaves the model as
+  it is (the write is not taken back) and the turn ends as the failure the person stopped, with no
+  continuation.
+- **What the person sees.** The server sets the conversation's model, then
+  ends the CLI turn with a notice ("Claude Code reached its usage limit: continuing on Big
+  model") and a final event with `continue: true` and the same hand-off note the next account
+  would get. The sidecar (`agent/src/cli.ts`) hands that note to the agent as the turn's result
+  instead of the failure. The agent runtime reads the conversation's model for each request, so
+  the next request of the same run goes to the model, with the whole conversation so far (the
+  CLI's answers are already in its context) and the note, and the model's tools are the
+  conversation's usual ones. A submission to continue is not used: the runtime refuses one while
+  the conversation is running, which it is during the CLI's turn. The chat shows the notice; the
+  model picker of an open conversation is not refreshed at that moment and shows the new model on
+  its next normal read (the next turn, or a reload).
 - **Nothing left**: if no other entry can run, the turn ends as it would without switching (the
   limit's message, or the Reconnect wait).
 - `/cli/wait` answers once the account the conversation would use is connected, so the
@@ -265,8 +319,10 @@ Defaults taken, still open to change:
    or chosen by members, are possible later.
 3. **A shared account is shared with every member** of the workspace. Choosing which members can
    use one (a list per account) can come later.
-4. **Switching covers CLI accounts only.** Falling back to a model provider (the agent runtime's
-   own API models) changes how the conversation runs and is left out.
+4. **A model can end the queue**, after the accounts. Each model the user queues is one they
+   chose to continue on, with the conversation's history, and it bills the provider account it
+   belongs to. A model that is not at the end of the queue is still tried only when no account
+   can run.
 5. **The conversation stays on the account it switched to** until that one stops, rather than
    going back once the first one's limit resets, to save hand-offs.
 6. **The proxy's token can't be revoked before it expires**, by design (stateless). Removing the

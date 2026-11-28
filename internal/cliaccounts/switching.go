@@ -16,7 +16,7 @@ import (
 	"taskto.ai/taskto/internal/conversations"
 )
 
-type ModelSetter func(ctx context.Context, agentConversation int64, cli cliworker.CLI) error
+type ModelSetter func(ctx context.Context, agentConversation int64, provider, modelID string) error
 
 func (s *Service) SetModelSetter(f ModelSetter) { s.setModel = f }
 
@@ -109,10 +109,13 @@ func (s *Service) switchingOn(ctx context.Context, user int64) (bool, error) {
 
 type queueEntry struct {
 	account, shared int64
+	provider, model string
 }
 
+func (e queueEntry) isModel() bool { return e.provider != "" }
+
 func (s *Service) queue(ctx context.Context, user int64) ([]queueEntry, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT coalesce(account_id, 0), coalesce(shared_account_id, 0) FROM cli_switch_queue
+	rows, err := s.db.QueryContext(ctx, `SELECT coalesce(account_id, 0), coalesce(shared_account_id, 0), coalesce(provider, ''), coalesce(model_id, '') FROM cli_switch_queue
 		WHERE user_id = ? ORDER BY position`, user)
 	if err != nil {
 		return nil, err
@@ -121,7 +124,7 @@ func (s *Service) queue(ctx context.Context, user int64) ([]queueEntry, error) {
 	var out []queueEntry
 	for rows.Next() {
 		var e queueEntry
-		if err := rows.Scan(&e.account, &e.shared); err != nil {
+		if err := rows.Scan(&e.account, &e.shared, &e.provider, &e.model); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -136,9 +139,10 @@ func (s *Service) byQueue(ctx context.Context, user int64, own []row, shared []s
 	}
 	ownAt, sharedAt := map[int64]int{}, map[int64]int{}
 	for i, e := range q {
-		if e.account != 0 {
+		switch {
+		case e.account != 0:
 			ownAt[e.account] = i + 1
-		} else {
+		case e.shared != 0:
 			sharedAt[e.shared] = i + 1
 		}
 	}
@@ -274,14 +278,15 @@ type QueueAccount struct {
 	Number        int           `json:"number,omitempty"`
 	Workspace     int64         `json:"workspace,omitempty"`
 	WorkspaceName string        `json:"workspace_name,omitempty"`
+	ModelID       string        `json:"model_id,omitempty"`
 	Limited       bool          `json:"limited"`
 	LimitedUntil  string        `json:"limited_until,omitempty"`
 }
 
-type switchingState struct {
+type SwitchingState struct {
 	Enabled   bool           `json:"enabled"`
-	Queue     []QueueAccount `json:"queue"`
-	Available []QueueAccount `json:"available"`
+	Queue     []QueueAccount `json:"queue" apitypes:"nonnull"`
+	Available []QueueAccount `json:"available" apitypes:"nonnull"`
 }
 
 func (s *Service) SwitchingRoutes(mux *http.ServeMux, a interface {
@@ -347,31 +352,44 @@ func limitFields(limited bool, until time.Time) (bool, string) {
 }
 
 func (s *Service) handleSwitching(w http.ResponseWriter, r *http.Request) {
-	ctx, user := r.Context(), caller(r)
-	on, err := s.switchingOn(ctx, user)
+	out, err := s.state(r.Context(), caller(r))
 	if err != nil {
 		serverError(w, r, err)
 		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Service) state(ctx context.Context, user int64) (SwitchingState, error) {
+	on, err := s.switchingOn(ctx, user)
+	if err != nil {
+		return SwitchingState{}, err
 	}
 	avail, err := s.available(ctx, user)
 	if err != nil {
-		serverError(w, r, err)
-		return
+		return SwitchingState{}, err
 	}
 	q, err := s.queue(ctx, user)
 	if err != nil {
-		serverError(w, r, err)
-		return
+		return SwitchingState{}, err
 	}
-	out := switchingState{Enabled: on, Queue: []QueueAccount{}, Available: avail.list}
+	out := SwitchingState{Enabled: on, Queue: []QueueAccount{}, Available: avail.list}
 	for _, e := range q {
-		if a, ok := avail.byRow[e.account]; ok && e.account != 0 {
+		if e.isModel() {
+			ok, err := s.modelQueueable(ctx, user, e.provider, e.model)
+			if err != nil {
+				return SwitchingState{}, err
+			}
+			if ok {
+				out.Queue = append(out.Queue, QueueAccount{Kind: "model", ID: e.provider, ModelID: e.model, Title: e.model})
+			}
+		} else if a, ok := avail.byRow[e.account]; ok && e.account != 0 {
 			out.Queue = append(out.Queue, a)
 		} else if a, ok := avail.shared[e.shared]; ok && e.shared != 0 {
 			out.Queue = append(out.Queue, a)
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	return out, nil
 }
 
 const maxQueue = 32
@@ -380,8 +398,10 @@ func (s *Service) handleSetSwitching(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled *bool `json:"enabled"`
 		Queue   *[]struct {
-			Account string `json:"account"`
-			Shared  int64  `json:"shared"`
+			Account  string `json:"account"`
+			Shared   int64  `json:"shared"`
+			Provider string `json:"provider"`
+			ModelID  string `json:"model_id"`
 		} `json:"queue"`
 	}
 	if !readJSON(w, r, &req) {
@@ -403,6 +423,21 @@ func (s *Service) handleSetSwitching(w http.ResponseWriter, r *http.Request) {
 		for _, q := range *req.Queue {
 			var e queueEntry
 			switch {
+			case q.Provider != "" || q.ModelID != "":
+				if q.Account != "" || q.Shared != 0 || q.Provider == "" || q.ModelID == "" {
+					writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, `queue: a model is {"provider": "<id>", "model_id": "<id>"} and nothing else`)
+					return
+				}
+				ok, err := s.modelQueueable(ctx, user, q.Provider, q.ModelID)
+				if err != nil {
+					serverError(w, r, err)
+					return
+				}
+				if !ok {
+					writeError(w, http.StatusNotFound, apierr.CodeQueueAccountNotFound, "queue: a model that isn't one of yours, or of your workspaces")
+					return
+				}
+				e.provider, e.model = q.Provider, q.ModelID
 			case q.Account != "" && q.Shared == 0:
 				e.account = avail.own[q.Account]
 			case q.Account == "" && q.Shared > 0:
@@ -439,14 +474,17 @@ func (s *Service) handleSetSwitching(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		for i, e := range entries {
-			var account, shared any
-			if e.account != 0 {
+			var account, shared, provider, model any
+			switch {
+			case e.isModel():
+				provider, model = e.provider, e.model
+			case e.account != 0:
 				account = e.account
-			} else {
+			default:
 				shared = e.shared
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO cli_switch_queue (user_id, position, account_id, shared_account_id)
-				VALUES (?, ?, ?, ?)`, user, i+1, account, shared); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO cli_switch_queue (user_id, position, account_id, shared_account_id, provider, model_id)
+				VALUES (?, ?, ?, ?, ?, ?)`, user, i+1, account, shared, provider, model); err != nil {
 				return err
 			}
 		}
