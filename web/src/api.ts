@@ -24,6 +24,25 @@ export class ApiError extends Error {
 
 export const SESSION_LOST = 'taskto:session-lost'
 
+export const ACCESS_LOST = 'taskto:access-lost'
+
+const ACCESS_LOST_CODES = new Set<unknown>(['space_not_found', 'workspace_not_found'])
+
+export type AccessLostScope = { workspace?: number; space?: number }
+
+const accessLostScope = (path: string, code: string): AccessLostScope => {
+  const found = /^\/api\/workspaces\/(\d+)(?:\/spaces\/(\d+))?/.exec(path)
+  if (!found) return {}
+  const workspace = Number(found[1])
+  if (code === 'workspace_not_found') return { workspace }
+  return found[2] === undefined ? {} : { workspace, space: Number(found[2]) }
+}
+
+export const accessLostConcerns = (e: Event, workspace: number, space: number): boolean => {
+  const scope = (e as CustomEvent<AccessLostScope | null>).detail
+  return scope?.workspace === workspace && (scope.space === undefined || scope.space === space)
+}
+
 export const sessionLostFor = (user: number) => new CustomEvent(SESSION_LOST, { detail: { user } })
 
 export const concernsAccount = (e: Event, signedIn: number | null | undefined): boolean => {
@@ -71,7 +90,7 @@ async function send(path: string, init: RequestInit) {
 
 type Sent = Awaited<ReturnType<typeof send>>
 
-function refuse({ res, extra, same }: Sent, data: { error?: unknown; code?: string } | null): never {
+function refuse(path: string, { res, extra, same }: Sent, data: { error?: unknown; code?: string } | null): never {
   if (res.status === 401 && same()) {
     endSession()
     const expected = Number(extra[EXPECTED_USER_HEADER as keyof typeof extra])
@@ -84,6 +103,9 @@ function refuse({ res, extra, same }: Sent, data: { error?: unknown; code?: stri
     const expected = Number(key === undefined ? undefined : extra[key as keyof typeof extra])
     window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED_EVENT, { detail: { expected } }))
   }
+  if (res.status === 404 && data?.code !== undefined && ACCESS_LOST_CODES.has(data.code)) {
+    window.dispatchEvent(new CustomEvent(ACCESS_LOST, { detail: accessLostScope(path, data.code) }))
+  }
   const message = data && typeof data.error === 'string' ? data.error : `${res.status} ${res.statusText}`
   throw new ApiError(res.status, message, data)
 }
@@ -95,7 +117,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (init.signal?.aborted || (e as { name?: string } | null)?.name === 'AbortError') throw e
     return null
   })
-  if (!sent.res.ok) refuse(sent, data)
+  if (!sent.res.ok) refuse(path, sent, data)
   return data as T
 }
 
@@ -106,7 +128,7 @@ export async function apiBytes(path: string, init: Pick<RequestInit, 'signal' | 
       if (init.signal?.aborted || (e as { name?: string } | null)?.name === 'AbortError') throw e
       return null
     })
-    refuse(sent, data)
+    refuse(path, sent, data)
   }
   return sent.res.arrayBuffer()
 }

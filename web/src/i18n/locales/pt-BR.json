@@ -595,6 +595,10 @@
     "publishedOn": "publicado em {date}",
     "open": "Abrir",
     "openNamed": "Abrir {name}",
+    "openWindow": "Abrir em uma nova janela",
+    "openTab": "Abrir em uma nova aba",
+    "openInTaskto": "Abrir no taskto",
+    "standaloneNotFound": "Este app não foi encontrado",
     "moreNamed": "Mais ações para {name}",
     "publishItem": "Publicar…",
     "moveItem": "Mover para um espaço…",
@@ -3191,6 +3195,7 @@
       "open": "Abrir",
       "openNamed": "Abrir {name}",
       "back": "Voltar aos apps baixados",
+      "notDownloaded": "Este app não foi baixado neste dispositivo. Os apps baixados estão listados aqui.",
       "needsUpdate": "Esta versão do taskto.ai não consegue mostrar {name}."
     },
     "accountChanged": {

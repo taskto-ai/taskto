@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
 import { api, type Me } from '../api'
 import { setPreferences } from '../i18n'
@@ -1712,4 +1713,415 @@ test('Log out over a draft asks the page first, once: kept, nobody is signed out
   await screen.findByRole('heading', { name: 'Log in' })
   expect(calls.filter((c) => c.path === '/api/logout')).toHaveLength(1)
   expect(ask).toHaveBeenCalledTimes(2)
+})
+
+const runApp = {
+  id: 7,
+  space_id: 3,
+  name: 'Expenses',
+  archived_at: null,
+  version: 1,
+  rows: 0,
+  access: {
+    roles: ['user'],
+    restricted: false,
+    view: true,
+    design: false,
+    publish: false,
+    submit: true,
+    manage_roles: false,
+    read_records: 'all',
+    modify_records: 'all',
+  },
+  live: {
+    number: 1,
+    definition_version: 1,
+    requires: ['component.Column', 'component.Text'],
+    definition: { collection: { fields: [{ name: 'description', type: 'string' }] }, actions: {} },
+    published_at: '2026-11-18T10:00:00.000Z',
+    published_by: { id: 1, name: 'Ann', agent: false },
+    live: true,
+  },
+  unpublished_changes: false,
+  draft: { definition_version: 1, requires: [] },
+}
+const appBase = '/api/workspaces/1/spaces/3/apps/7'
+const runRoutes = {
+  'GET /api/setup': { body: { needed: false } },
+  'GET /api/me': { body: me },
+  ...pages,
+  'GET /api/workspaces/1/spaces': {
+    body: { spaces: [{ id: 3, name: 'Mine', kind: 'private', access: 'write', archived_at: null }] },
+  },
+  [`GET ${appBase}`]: { body: runApp },
+  [`GET ${appBase}/surface?release=1`]: { body: surface },
+  [`GET ${appBase}/effects`]: { body: { effects: [], active: 0, failed: 0 } },
+  [`GET ${appBase}/records/query`]: { body: { records: [], next_cursor: null, total: 0, aggregates: [] } },
+}
+
+test('an app opened by its run address is the whole page: no sidebar, its name in the tab, the address kept', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  document.title = 'before'
+  const calls = fakeFetch(runRoutes)
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
+  expect(screen.queryByRole('link', { name: 'All apps' })).toBeNull()
+  expect(screen.getByRole('main')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Skip to the content' })).toBeTruthy()
+  await waitFor(() => expect(document.title).toBe('Expenses · taskto.ai'))
+  expect(window.location.pathname).toBe('/w/1/run/3-7')
+  expect(calls.some((c) => c.path.startsWith('/api/workspaces/1/conversations'))).toBe(false)
+})
+
+test('the run address keeps the screen, and its link goes to the app inside the shell', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7-home')
+  fakeFetch(runRoutes)
+  render(<App />)
+  const link = await screen.findByRole('link', { name: 'Open in taskto' })
+  expect(link.getAttribute('href')).toBe('/w/1/apps/3-7-home')
+})
+
+test('a run address in a workspace the person is not in is not found, and is not sent elsewhere', async () => {
+  window.history.replaceState(null, '', '/w/99/run/3-7')
+  const calls = fakeFetch(runRoutes)
+  render(<App />)
+  await screen.findByText('This app wasn’t found')
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
+  await act(async () => {})
+  expect(window.location.pathname).toBe('/w/99/run/3-7')
+  expect(calls.some((c) => c.path.includes('/spaces'))).toBe(false)
+  expect(screen.getByRole('link', { name: 'Home' }).getAttribute('href')).toBe('/')
+})
+
+test('a run address for a space the person can not see is not found, and asks for no data of the app', async () => {
+  window.history.replaceState(null, '', '/w/1/run/8-7')
+  const calls = fakeFetch(runRoutes)
+  render(<App />)
+  await screen.findByText('This app wasn’t found')
+  expect(screen.getByRole('link', { name: 'All apps' }).getAttribute('href')).toBe('/w/1/apps')
+  await act(async () => {})
+  expect(window.location.pathname).toBe('/w/1/run/8-7')
+  expect(calls.filter((c) => c.path.includes('/apps/'))).toEqual([])
+  expect(screen.queryByRole('heading', { level: 1, name: 'Expenses' })).toBeNull()
+})
+
+test('a run address that is not an app is the shell’s own: it goes to the conversations', async () => {
+  window.history.replaceState(null, '', '/w/1/run/x')
+  fakeFetch(runRoutes)
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  await waitFor(() => expect(window.location.pathname).toBe('/w/1/conversations'))
+})
+
+test('opened signed out, a run address asks for the login and then shows the app', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  let session = false
+  fakeFetch({
+    ...runRoutes,
+    'GET /api/me': () => (session ? { body: me } : { status: 401, body: { error: 'not logged in' } }),
+    'POST /api/login': () => {
+      session = true
+      return { body: me }
+    },
+  })
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Log in' })
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'right password!' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  expect(window.location.pathname).toBe('/w/1/run/3-7')
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
+})
+
+test('an open app is gone, with its name, its form and its title, when the server says the person lost the space', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  document.title = 'before'
+  let kept = true
+  const calls = fakeFetch({
+    ...runRoutes,
+    'GET /api/workspaces/1/spaces': () => ({
+      body: { spaces: kept ? [{ id: 3, name: 'Mine', kind: 'private', access: 'write', archived_at: null }] : [] },
+    }),
+    [`POST ${appBase}/actions`]: () => ({ status: 404, body: { error: 'Space not found', code: 'space_not_found' } }),
+  })
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  await waitFor(() => expect(document.title).toBe('Expenses · taskto.ai'))
+  const spaceReads = () => calls.filter((c) => c.path === '/api/workspaces/1/spaces').length
+  expect(spaceReads()).toBe(1)
+
+  kept = false
+  await act(async () => {
+    await api(`${appBase}/actions`, { method: 'POST', body: {} }).catch(() => undefined)
+  })
+  await screen.findByText('This app wasn’t found')
+  expect(screen.queryByRole('heading', { level: 1, name: 'Expenses' })).toBeNull()
+  expect(screen.queryByRole('region', { name: 'Expenses' })).toBeNull()
+  expect(document.title).toBe('before')
+  expect(window.location.pathname).toBe('/w/1/run/3-7')
+})
+
+test('a denial that arrives while an earlier check for access is still out wins over that check’s reply', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  document.title = 'before'
+  let kept = true
+  let release: () => void = () => {}
+  let holdNext = false
+  const calls = fakeFetch({
+    ...runRoutes,
+    'GET /api/workspaces/1/spaces': async () => {
+      const authorized = { spaces: [{ id: 3, name: 'Mine', kind: 'private', access: 'write', archived_at: null }] }
+      if (holdNext) {
+        holdNext = false
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return { body: authorized }
+      }
+      return { body: kept ? authorized : { spaces: [] } }
+    },
+    [`POST ${appBase}/actions`]: () => ({ status: 404, body: { error: 'Space not found', code: 'space_not_found' } }),
+  })
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  await waitFor(() => expect(document.title).toBe('Expenses · taskto.ai'))
+  const spaceReads = () => calls.filter((c) => c.path === '/api/workspaces/1/spaces').length
+
+  holdNext = true
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'))
+  })
+  await waitFor(() => expect(spaceReads()).toBe(2))
+
+  kept = false
+  await act(async () => {
+    await api(`${appBase}/actions`, { method: 'POST', body: {} }).catch(() => undefined)
+  })
+  await act(async () => {
+    release()
+  })
+  await screen.findByText('This app wasn’t found')
+  expect(screen.queryByRole('heading', { level: 1, name: 'Expenses' })).toBeNull()
+  expect(document.title).toBe('before')
+  await act(async () => {})
+  await act(async () => {})
+  expect(spaceReads()).toBe(3)
+})
+
+test('an open app that is back in the foreground asks again, and is gone when the space is', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  let kept = true
+  const calls = fakeFetch({
+    ...runRoutes,
+    'GET /api/workspaces/1/spaces': () => ({
+      body: { spaces: kept ? [{ id: 3, name: 'Mine', kind: 'private', access: 'write', archived_at: null }] : [] },
+    }),
+  })
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  const spaceReads = () => calls.filter((c) => c.path === '/api/workspaces/1/spaces').length
+  expect(spaceReads()).toBe(1)
+
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'))
+  })
+  await waitFor(() => expect(spaceReads()).toBe(2))
+  expect(screen.getByRole('heading', { level: 1, name: 'Expenses' })).toBeTruthy()
+
+  kept = false
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'))
+  })
+  await screen.findByText('This app wasn’t found')
+  expect(screen.queryByRole('heading', { level: 1, name: 'Expenses' })).toBeNull()
+})
+
+test('an open app stays when the check for access fails for a reason that is not the loss of it', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  let down = false
+  fakeFetch({
+    ...runRoutes,
+    'GET /api/workspaces/1/spaces': () =>
+      down
+        ? { status: 500, body: { error: 'broken' } }
+        : { body: { spaces: [{ id: 3, name: 'Mine', kind: 'private', access: 'write', archived_at: null }] } },
+  })
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  down = true
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'))
+  })
+  await act(async () => {})
+  expect(screen.getByRole('heading', { level: 1, name: 'Expenses' })).toBeTruthy()
+  expect(screen.queryByText('This app wasn’t found')).toBeNull()
+})
+
+test('a denial for another space does not close an open app, even when the check that follows fails', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  let down = false
+  const calls = fakeFetch({
+    ...runRoutes,
+    'GET /api/workspaces/1/spaces': () =>
+      down
+        ? { status: 500, body: { error: 'broken' } }
+        : { body: { spaces: [{ id: 3, name: 'Mine', kind: 'private', access: 'write', archived_at: null }] } },
+    'GET /api/workspaces/1/spaces/9/apps/5': () => ({
+      status: 404,
+      body: { error: 'Space not found', code: 'space_not_found' },
+    }),
+  })
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  const spaceReads = () => calls.filter((c) => c.path === '/api/workspaces/1/spaces').length
+
+  down = true
+  await act(async () => {
+    await api('/api/workspaces/1/spaces/9/apps/5').catch(() => undefined)
+  })
+  await act(async () => {})
+  await act(async () => {})
+  expect(screen.getByRole('heading', { level: 1, name: 'Expenses' })).toBeTruthy()
+  expect(screen.queryByText('This app wasn’t found')).toBeNull()
+  expect(spaceReads()).toBe(1)
+})
+
+test('an open app that was denied is gone even when the check that follows fails, and comes back when a later check confirms access', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  let down = false
+  const calls = fakeFetch({
+    ...runRoutes,
+    'GET /api/workspaces/1/spaces': () =>
+      down
+        ? { status: 500, body: { error: 'broken' } }
+        : { body: { spaces: [{ id: 3, name: 'Mine', kind: 'private', access: 'write', archived_at: null }] } },
+    [`POST ${appBase}/actions`]: () => ({ status: 404, body: { error: 'Space not found', code: 'space_not_found' } }),
+  })
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  const spaceReads = () => calls.filter((c) => c.path === '/api/workspaces/1/spaces').length
+
+  down = true
+  await act(async () => {
+    await api(`${appBase}/actions`, { method: 'POST', body: {} }).catch(() => undefined)
+  })
+  await waitFor(() => expect(spaceReads()).toBe(2))
+  await act(async () => {})
+  expect(screen.queryByRole('heading', { level: 1, name: 'Expenses' })).toBeNull()
+  expect(screen.queryByRole('region', { name: 'Expenses' })).toBeNull()
+
+  down = false
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'))
+  })
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+})
+
+test('losing the whole workspace while an app is open ends in the not found page, and asks once, not again and again', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  let kept = true
+  const calls = fakeFetch({
+    ...runRoutes,
+    'GET /api/workspaces/1/spaces': () =>
+      kept
+        ? { body: { spaces: [{ id: 3, name: 'Mine', kind: 'private', access: 'write', archived_at: null }] } }
+        : { status: 404, body: { error: 'Workspace not found', code: 'workspace_not_found' } },
+  })
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  kept = false
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'))
+  })
+  await screen.findByText('This app wasn’t found')
+  await act(async () => {})
+  await act(async () => {})
+  expect(calls.filter((c) => c.path === '/api/workspaces/1/spaces')).toHaveLength(2)
+})
+
+test('an open app asks again when its tab becomes visible, and not while the tab is hidden', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  const calls = fakeFetch({
+    ...runRoutes,
+    'GET /api/workspaces/1/spaces': {
+      body: { spaces: [{ id: 3, name: 'Mine', kind: 'private', access: 'write', archived_at: null }] },
+    },
+  })
+  const visibility = vi.spyOn(document, 'visibilityState', 'get')
+  try {
+    render(<App />)
+    await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+    const spaceReads = () => calls.filter((c) => c.path === '/api/workspaces/1/spaces').length
+    expect(spaceReads()).toBe(1)
+
+    visibility.mockReturnValue('hidden')
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(spaceReads()).toBe(1)
+
+    visibility.mockReturnValue('visible')
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await waitFor(() => expect(spaceReads()).toBe(2))
+  } finally {
+    visibility.mockRestore()
+  }
+})
+
+test('an app on its own is in the workspace’s language', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  const inPortuguese = { ...me, workspaces: [{ ...me.workspaces[0], locale: 'pt-BR' }, me.workspaces[1]] }
+  fakeFetch({ ...runRoutes, 'GET /api/me': { body: inPortuguese } })
+  const languages = vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['xx'])
+  try {
+    render(<App />)
+    await screen.findByRole('link', { name: 'Abrir no taskto' })
+  } finally {
+    languages.mockRestore()
+    await setPreferences({ workspace: null })
+  }
+})
+
+test('an app on its own in a space the person can only read says it is view only, and one they write to does not', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  const space = (access: string) => ({
+    'GET /api/workspaces/1/spaces': {
+      body: { spaces: [{ id: 3, name: 'Mine', kind: 'shared', access, archived_at: null }] },
+    },
+  })
+  fakeFetch({ ...runRoutes, ...space('read') })
+  render(<App />)
+  await screen.findByText(/You can view this app; only the space’s editors change it\./)
+  cleanup()
+  fakeFetch({ ...runRoutes, ...space('write') })
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  expect(screen.queryByText(/You can view this app/)).toBeNull()
+})
+
+test('going from one app’s address to another’s starts the second app afresh', async () => {
+  window.history.replaceState(null, '', '/w/1/run/3-7')
+  const other = '/api/workspaces/1/spaces/3/apps/8'
+  const again = Object.fromEntries(
+    Object.entries(runRoutes)
+      .filter(([key]) => key.includes(appBase))
+      .map(([key, value]) => [
+        key.replace(appBase, other),
+        key.endsWith(appBase) ? { body: { ...runApp, id: 8, name: 'Hours' } } : value,
+      ]),
+  )
+  fakeFetch({ ...runRoutes, ...again })
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Records and history' }))
+  expect(screen.getAllByRole('button', { name: 'Hide records and history' })[0]?.getAttribute('aria-expanded')).toBe(
+    'true',
+  )
+  act(() => navigate('/w/1/run/3-8'))
+  await screen.findByRole('heading', { level: 1, name: 'Hours' })
+  expect(screen.getByRole('button', { name: 'Records and history' }).getAttribute('aria-expanded')).toBe('false')
 })

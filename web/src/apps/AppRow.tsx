@@ -19,7 +19,7 @@ import { AppRoles } from './AppRoles'
 import { LoadingRows } from './AppsLoading'
 import { DuplicateDialog } from './AppTemplates'
 import { IconDialog } from './IconDialog'
-import { appPath, builderPath } from './route'
+import { appPath, builderPath, openRunWindow } from './route'
 import './Apps.css'
 
 type Open = 'rename' | 'icon' | 'move' | 'duplicate' | 'releases' | 'roles' | 'publish' | null
@@ -68,6 +68,7 @@ export function AppRow({
     duplicate: copyTo.length > 0,
     move: writable && app.access.design && targets.length > 0,
     offline: writable && app.access.publish,
+    window: !offline && (!!app.live || reviewer),
   }
 
   const run = async (body: { name?: string; icon?: string; archived?: boolean }) => {
@@ -116,7 +117,15 @@ export function AppRow({
   )
 
   const menu =
-    may.publish || may.releases || may.roles || may.rename || may.icon || may.duplicate || may.move || may.offline
+    may.window ||
+    may.publish ||
+    may.releases ||
+    may.roles ||
+    may.rename ||
+    may.icon ||
+    may.duplicate ||
+    may.move ||
+    may.offline
   const actions = (
     <>
       {!offline && writable && app.access.design && (
@@ -159,6 +168,11 @@ export function AppRow({
       )}
       {menu && (
         <MoreMenu label={t('apps.moreNamed', { name: app.name })}>
+          {may.window && (
+            <MenuItem icon="browser" onSelect={() => openRunWindow(workspace, space.id, app.id)}>
+              {t('apps.openWindow')}
+            </MenuItem>
+          )}
           {may.publish && (
             <MenuItem icon="upload" onSelect={() => setOpen('publish')}>
               {t('apps.publishItem')}
