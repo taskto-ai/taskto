@@ -625,7 +625,9 @@ the desks API ([api.md](api.md#desks)), so it comes back on reload and on anothe
   exactly that path, which is activated and its pane focused. Focusing another pane replaces the
   address, so Back walks addresses, not focus. A page in the focused pane navigates through the
   router, so the leave guards ask; a page in another pane asks its own place's guard first, and so
-  does closing a tab. Only the active tab of each pane is mounted.
+  does closing a tab; replacing a pane's active page (another tab, a new tab) asks that page's guard,
+  and splitting or closing a whole pane, which remounts the pages around it, asks every place's.
+  Only the active tab of each pane is mounted.
 - **Saving.** `useDesk` shows the address as one pane until the desk arrives, and saves 800 ms
   after the last change, at once when the page is hidden (a `keepalive` request), never before the
   desk has loaded and never after the session changed. A refused save is said and sent
