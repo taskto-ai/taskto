@@ -51,6 +51,22 @@ export const TEXT_PAIRS: readonly PairSet[] = [
     min: 4.5,
   },
   { fg: ['text', 'text-muted', 'danger'], on: [['selected', 'surface']], min: 4.5 },
+  {
+    fg: ['diff-add-text'],
+    on: CARD_GROUNDS.flatMap((g): Ground[] => [
+      ['diff-add-soft', g],
+      ['diff-add', 'diff-add-soft', g],
+    ]),
+    min: 4.5,
+  },
+  {
+    fg: ['diff-del-text'],
+    on: CARD_GROUNDS.flatMap((g): Ground[] => [
+      ['diff-del-soft', g],
+      ['diff-del', 'diff-del-soft', g],
+    ]),
+    min: 4.5,
+  },
   { fg: ['on-accent'], on: ['accent', 'accent-hover'], min: 4.5 },
   { fg: ['on-danger'], on: ['danger'], min: 4.5 },
   { fg: ['on-accent'], on: ['paper'], min: 4.5 },
