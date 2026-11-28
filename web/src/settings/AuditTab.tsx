@@ -69,6 +69,9 @@ export const AUDIT_ACTIONS = [
   'app_integration_approved',
   'app_integration_rejected',
   'app_integration_revoked',
+  'skill_created',
+  'skill_updated',
+  'skill_removed',
   'data_export_started',
   'workspace_export_started',
   'server_update_requested',
@@ -88,6 +91,7 @@ export const AUDIT_TARGETS = [
   'shared_cli_account',
   'integration',
   'app_integration_approval',
+  'skill',
 ] as const
 
 export const AUDIT_DETAILS = [
@@ -129,6 +133,7 @@ export const AUDIT_DETAILS = [
   'mentions_anonymized',
   'method',
   'mode',
+  'name',
   'notice_confirmed',
   'offline_downloads',
   'private_spaces',
@@ -140,6 +145,7 @@ export const AUDIT_DETAILS = [
   'role',
   'scope',
   'space_allowed',
+  'space_id',
   'spaces',
   'to',
   'uploads_removed',

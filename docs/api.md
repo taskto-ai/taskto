@@ -443,6 +443,13 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `notification_email_verification_invalid` | 400 | The link that confirms the caller's email address is unknown, used, expired, replaced by a newer one, or for an address the caller no longer has. |
 | `notification_email_verification_too_soon` | 429 | A confirmation link was sent to the caller a moment ago (`Retry-After`; `seconds` says how long to wait). |
 | `notification_email_verification_unavailable` | 502 | The confirmation email couldn't be sent; another may be asked for at once. |
+| `skill_not_found` | 404 | No such skill of this owner (a person's own, a space's or the workspace's): another owner's skill, or one of another workspace, is the same `404`. |
+| `skill_name_invalid` | 400 | A skill's `name` isn't a lowercase letter followed by 1 to 39 lowercase letters, digits or hyphens. |
+| `skill_name_taken` | 409 | The owner has a skill of that name already. |
+| `skill_title_length` | 400 | A skill's `title` isn't 1 to `max` characters on one line. |
+| `skill_description_length` | 400 | A skill's `description` isn't 1 to `max` characters on one line. |
+| `skill_body_length` | 400 | A skill's `body` is empty, isn't text, or is over `max_kib` KiB. |
+| `too_many_skills` | 409 | The owner has `max` skills: remove one first. |
 
 ### Sessions
 
@@ -1393,7 +1400,8 @@ app's button does both: it posts, then goes to the address.
 | `conversations/<id>-<title>.json` | Each conversation the caller owns **in this workspace**, archived ones too: `{"conversation": {…as the conversations API gives it…}, "entries": […], "transcript": "complete"}`. The entries are the agent runtime's, oldest first, in the shape the web app draws, as `GET …/conversations/{conversation}/entries` pages them, as the history was when its export began. If the agent runtime is off, no longer has the conversation or stops answering (each read waits at most 30 seconds), `transcript` is `"unavailable"` (`entries` empty) or `"incomplete"` (the entries read before it stopped), and the manifest says so. |
 | `apps/<id>-<name>.json` | Each app of the private space, offline ones too: `{"app": {id, name, icon, archived_at, created_at, updated_at}, "records": […]}`. The records are the live ones (not deleted), as the agent's `list_app_rows` tool gives them (each field by name, with `id` and `revision`). An attachment field holds each photo's metadata, not its bytes; the app's definition isn't included (copy the app, or see [templates](templates.md)). |
 | `desks/<id>-main.json` | Each [desk](#desks) the caller has in **this workspace** (today the main desk, once it has been saved): `{"id", "name", "layout", "version", "updated_at"}`, exactly what `GET …/desks/{desk}` answers. A layout holds only route paths and ids; the pages it names are exported (or not) by their own sections. Nobody else's desk, and none of the caller's in another workspace. |
-| `manifest.json` | `{"format": 1, "scope": "user", "exported_at", "workspace": {id, name}, "user": {id, name, email}, "counts": {documents, boards, cards, comments, conversations, desks, apps, records}, "skipped": […]}`. `skipped` lists what couldn't be included, as `{"kind", "reason", "ref"}`: `document` with `unavailable` and its path (a file whose bytes the server no longer has), `documents` with `unavailable` (the space's history was rewritten while the export read it) or `off` (the server has no knowledge base), `app` with `unavailable` and its ID (the app was moved out of the private space while the export read it), `conversations` with `off` (the server has none), or `transcript` with `unavailable` or `incomplete` and a conversation's ID; it is capped at 1000 (`"skipped_truncated": true` then). |
+| `skills/<name>.md` | Each of the caller's own [skills](skills.md) in this workspace, disabled ones too: Markdown with a front matter of `name`, `title`, `description` and `enabled` (the text values quoted), then the instructions byte for byte as stored (a blank line after the front matter, nothing added or removed at the end). Skills of a space or of the workspace are not the caller's and are not in it. |
+| `manifest.json` | `{"format": 1, "scope": "user", "exported_at", "workspace": {id, name}, "user": {id, name, email}, "counts": {documents, boards, cards, comments, conversations, desks, apps, records, skills}, "skipped": […]}`. `skipped` lists what couldn't be included, as `{"kind", "reason", "ref"}`: `document` with `unavailable` and its path (a file whose bytes the server no longer has), `documents` with `unavailable` (the space's history was rewritten while the export read it) or `off` (the server has no knowledge base), `app` with `unavailable` and its ID (the app was moved out of the private space while the export read it), `conversations` or `skills` with `off` (the server has none), or `transcript` with `unavailable` or `incomplete` and a conversation's ID; it is capped at 1000 (`"skipped_truncated": true` then). |
 
 **The scope is where a thing is now, and who owns a conversation.** The documents, boards and
 apps are those in the caller's private space at the moment each is read, so an app or a document
@@ -1587,6 +1595,58 @@ Admin only. `{"role": "viewer"}`. `204`; `404` if the user isn't a member of the
 Admin only. Removes the member from the space; their access ends with their next request.
 `204`; `404` if the user isn't a member of the space.
 
+## Skills
+
+A **skill** is a named, described set of instructions that people teach the agent once and reuse
+([docs/skills.md](skills.md): what a skill is and is not, who may manage which). It is text only,
+advice in the agent's prompt that adds no permission. These routes store and manage skills; they
+take a session only (`403 token_refused` with an access token), and a skill's text is never in a
+log or in the [audit log](audit.md).
+
+A skill, as every route below answers it:
+
+```json
+{"id": 7, "scope": "space", "space_id": 3, "name": "quote-writer", "title": "How we write a quote",
+ "description": "Use when someone asks for a quote or an estimate.", "body": "# Quotes\n…",
+ "enabled": true, "origin": "", "updated_at": "2026-11-27T10:00:00.000Z"}
+```
+
+`scope` is `user`, `space` or `workspace`; `space_id` is there for a space's skills only. `name`
+is a lowercase letter followed by 1 to 39 lowercase letters, digits or hyphens, and unique per
+owner (a person, a space, the workspace); `title` is 1 to 100 characters and `description` 1 to 300,
+each on one line (no line break of any kind, such as a line or paragraph separator, anywhere in the field, at its start or end included; only spaces and tabs are trimmed from the ends); `body` is Markdown of 1 byte to 32 KiB. A request
+body is read up to the size a valid skill takes when every character is written as a JSON escape (about 200 KiB); a bigger one is `400 invalid_json`. `origin` is `""` for a skill written
+here. An owner holds at most 200 skills. A list is `{"skills": [...]}`, by `name`.
+
+The same four routes exist for each owner:
+
+| Owner | Routes | Who |
+|---|---|---|
+| a person | `/api/me/workspaces/{workspace}/skills` | any member, for their own: another person's skill is `404 skill_not_found`, an admin's included |
+| a shared space | `/api/workspaces/{workspace}/spaces/{space}/skills` | anyone who can read the space lists them; creating, changing and deleting need write access (`403 space_read_only`, `403 space_archived`); `404 space_not_found` for a space the caller can't read, a private space, or one of another workspace |
+| the workspace | `/api/workspaces/{workspace}/skills` | any member lists them; creating, changing and deleting are an admin's (`403 admin_only`) |
+
+- `GET …/skills` lists the owner's skills. Those who only use a space's or the workspace's skills
+  get the enabled ones; those who manage them get all. Who the caller is, whether they are still a
+  member (`404 workspace_not_found` otherwise) and whether they may read or manage the owner are
+  read again when the request is served, in the same transaction as the list or the change, so a
+  removal, a disabling or a demotion that commits after the request was admitted is honoured. A
+  list is read from one database snapshot taken when that check is made: a change committed after
+  it is not in the answer, and one committed before it is.
+- `POST …/skills` with `{"name", "title", "description", "body", "enabled"}` (`enabled` is
+  optional and defaults to `true`; other fields are `400 invalid_json`) answers `201` with the
+  skill; `409 skill_name_taken` or `409 too_many_skills`.
+- `PATCH …/skills/{skill}` with any of `name`, `title`, `description`, `body` and `enabled`
+  answers `200` with the skill; an empty object is `400 bad_request`. A skill never changes
+  owner.
+- `DELETE …/skills/{skill}` answers `204`.
+
+A skill is found by its id **and** its owner in the path: the id of another owner's skill, or of
+one in another workspace or space, is `404 skill_not_found`.
+
+A change to a space's or the workspace's skills records `skill_created`, `skill_updated` or
+`skill_removed` on the audit log; a person's own skills record nothing.
+
 ## Audit log
 
 ### `GET /api/workspaces/{workspace}/audit`
@@ -1604,7 +1664,7 @@ Query, all optional:
 |---|---|
 | `action` | one action code, such as `member_removed` ([the list](audit.md#what-is-recorded)) |
 | `actor` | the id of the user who did it |
-| `target_type` | `user`, `workspace`, `invite`, `space`, `access_token`, `provider_account` or `shared_cli_account` |
+| `target_type` | `user`, `workspace`, `invite`, `space`, `access_token`, `provider_account`, `shared_cli_account`, `integration`, `app_integration_approval` or `skill` |
 | `from`, `to` | RFC 3339 times in the years 1000 to 9999; `from` is included, `to` is not |
 | `limit` | the page size, 1 to 200; 50 if omitted |
 | `cursor` | the `next` of the previous page |
@@ -1629,8 +1689,8 @@ An unknown action or target type, or a malformed value, is `400 bad_request`; a 
 are added. The names are read when the log is, not when the event was recorded, and only for
 what belongs to the workspace: `actor` and `target_user` are the user while they are a member
 of it (otherwise `null`, and `actor_id` and `target_id` still say who), and `target_name` is the
-name of the workspace, a shared space, a provider account or a shared CLI account the event is
-about, if it still exists (matched by its id **and** creation time, since ids are reused;
+name of the workspace, a shared space, a provider account, a shared CLI account or an integration the event is
+about, or if it still exists (matched by its id **and** creation time, since ids are reused;
 `null` otherwise). An access token's or an invite's name is never resolved. `details` are the
 facts the action declares, never free text.
 
@@ -3116,7 +3176,7 @@ saying what is wrong) unless:
   (`internal/apps/catalog.go`): A2UI's basic catalog without `Image`, `Video`,
   `AudioPlayer` and the `openUrl` function (an app is shared, and a picture from
   elsewhere would tell that server who opens it, and could carry the app's data in its
-  address), plus `Stat` (a labelled value), `Table` (a sortable table of the records, below), `Markdown` (formatted text from a literal or a
+  address), plus `Stat` (a labelled value), `Chart` (a line, bar or area chart of a declared series, below), `Table` (a sortable table of the records, below), `Markdown` (formatted text from a literal or a
   binding, drawn by the web app's own renderer, which never makes HTML: links show as text
   and are never followed, and images show as links, so an app opens nothing outside),
   `Show` (draws its child while a rule holds,
@@ -3146,6 +3206,20 @@ saying what is wrong) unless:
   that the server sends to a client carries its field's `type`, added to the surface only, never
   stored in the definition. `app_catalog` describes `Table` and the two kinds of prop it
   introduces: a field's name of given types and an action's name of given kinds.
+- **Chart** draws one value of the data model as a line, bar or area chart: `{"id", "component": "Chart", "data": {"path": "/<series name>"}, "label", "variant"?, "stacked"?, "unit"?}`.
+  `data` is the binding of a declared series (`series`, above; or any value of its shape: `{"x": [{"key", "label"}], "series": [{"key", "label", "values"}]}`); `label` is the chart's name, shown as its
+  caption and read by screen readers; `variant` is `line` (the default), `bar` or `area`; `stacked`
+  puts each series of a bar or area chart on top of the one before it (a running total, a missing
+  value adding nothing); `unit` is text that follows the numbers. The chart is plain SVG drawn by the
+  web app and has no prop for a colour, a link or a picture: it loads and runs nothing, and what it
+  shows from the data (labels, keys, the unit) is text only. Only the first six series are
+  drawn, in the label colours of the theme, with a legend; a missing, malformed or empty value draws
+  "No data yet". Every number is also in a table that only screen readers reach, with every series
+  (up to 24) and up to 120 points; a value that is not a number, or is beyond 10^15, is a gap in the
+  drawing and a dash in the table. The server's own keys are translated or formatted for the
+  viewer: `true` and `false` as yes and no, `other` as "Other", and day, week and month keys as
+  dates. The plot reads left to right in every language. `app_catalog` describes `Chart` and how
+  to feed it.
 - **Icons**: an `Icon`'s `name` is `{"svgPath": "<path data>"}`, A2UI's own form, and a path is
   the way to give an icon: one SVG path, drawn on a fixed 24 by 24 view box (`0 0 24 24`) and
   filled in the text's colour (nonzero fill). It is written by a model or by whoever edits the app
@@ -4247,7 +4321,7 @@ explorer offers to filter or sort by none of those three, and offers a filter on
 type takes.
 
 A barcode's text is taken as it was read: a line break, a tab or any other control character in it, even around
-it, is `422 app_field_not_barcode` (only spaces are trimmed). A `captured_at` must have a real zone: `Z` or an
+it, is `422 app_field_not_barcode` (only the spaces that are not control characters, such as the space and the no-break space, are trimmed from its ends; a text of nothing but spaces and line breaks, such as a lone tab, is left out like an empty one and is not refused). A `captured_at` must have a real zone: `Z` or an
 offset of at most `23:59` (`+24:60` is no time).
 
 The agent sees these values in `list_app_rows` (a signature as the picture's metadata, never its bytes) and has no
@@ -5653,13 +5727,16 @@ conversation's content`) on those routes. The server logs it, and an operator ca
 A conversation as the API shows it:
 
 ```json
-{"id": 7, "workspace_id": 1, "title": "Plans", "archived_at": null, "created_at": "…", "updated_at": "…", "cli_permissions": "ask"}
+{"id": 7, "workspace_id": 1, "title": "Plans", "archived_at": null, "created_at": "…", "updated_at": "…", "cli_permissions": "ask", "origin": null}
 ```
 
 - `title`: up to 200 printable characters, trimmed; may be empty.
 - `archived_at`: when the owner archived it, or `null`. An archived conversation can be read
   and streamed, but not sent to or switched to another model (`409`) until it is unarchived.
 - `updated_at`: the last rename, archive or message.
+- `origin`: `null` for a conversation someone started themselves; for one the server
+  started, it identifies whether an app or routine started it and the relevant space, app or
+  routine IDs. The deduplication key stays private.
 - `cli_permissions`: on a CLI worker, `ask` (the default: the CLI asks the owner before it
   runs a command, edits a file or fetches a page) or `allow_all` (nothing asks). See
   [Permission questions](#permission-questions) and [agent-safety.md](agent-safety.md).

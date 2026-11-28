@@ -94,7 +94,11 @@ recomputed from those records with the same rules the server uses
 (`2026-02-30` and `2026-04-31` are not dates, `2028-02-29` is): the device checks a date it is
 given, and the rows a `month_of` summary counts, with [`dates.ts`](../web/src/offline/dates.ts),
 and the server and the device are tested against the same list of dates
-(`internal/apps/testdata/dates.json`).
+(`internal/apps/testdata/dates.json`). The text a person types in any field is trimmed of the same
+characters on both sides, the Unicode White_Space set (the no-break space, the next-line character and the
+ideographic space among them, the byte order mark and the zero-width space not), and a number with a byte order
+mark at an edge is refused on both; `internal/apps/testdata/spaces.json` is their shared list, and the web's
+side is [`text.ts`](../web/src/offline/text.ts).
 Declared chart series are recomputed from the downloaded rows plus queued changes, with the same
 grouping and bucket rules as the server.
 

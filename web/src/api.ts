@@ -194,6 +194,7 @@ export type Conversation = {
   created_at: string
   updated_at: string
   cli_permissions?: 'ask' | 'allow_all'
+  origin: { kind: 'app' | 'routine'; space_id?: number; app_id?: number; routine_id?: number } | null
 }
 
 export type ModelRef = { provider: string; model_id: string }

@@ -20,8 +20,8 @@ Each event is one row of `audit_events` (`internal/db/migrations/0036_audit_even
 | `actor_id` | the user who did it; empty for an anonymous attempt (a login to an account that doesn't exist, a refused single sign-on) or once that user is deleted (`actor_deleted` then says which) |
 | `actor_deleted`, `target_deleted` | 1 when the actor's account, or the account the event is about, was [deleted](#deleted-accounts) |
 | `action` | a stable snake_case code, from the table below |
-| `target_type`, `target_id`, `target_created_at` | what it was done to: a `user`, `invite`, `space`, `access_token`, `provider_account`, `shared_cli_account`, `integration` or `workspace`, and when that object was created (see below) |
-| `details` | a small JSON of facts the action declares: a role before and after, the names of the fields that changed, a provider's host. Never a name or other text a person typed |
+| `target_type`, `target_id`, `target_created_at` | what it was done to: a `user`, `invite`, `space`, `access_token`, `provider_account`, `shared_cli_account`, `integration`, `skill` or `workspace`, and when that object was created (see below) |
+| `details` | a small JSON of facts the action declares: a role before and after, the names of the fields that changed, a provider's host. Never a name or other text a person typed (a skill's `name` is the one exception: the identifier that says which skill, recorded as the person gave it; its title, description and instructions are never recorded) |
 | `client_addr` | the address the request came from, found as the login limits find it (the direct peer, or the client behind a [trusted proxy](install.md)); empty for an event with no request |
 
 A workspace's events are deleted with it. An index serves the log of one workspace, newest
@@ -98,9 +98,13 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `app_integration_approved` | an admin approves a contract and binds an integration | the workspace | app integration approval | `kind`, `app_id`, `integration_id`, `provider`, `space_allowed` (whether approving also allowed the space) |
 | `app_integration_rejected` | an admin turns a request down | the workspace | app integration approval | `kind`, `app_id` |
 | `app_integration_revoked` | an admin withdraws an approval | the workspace | app integration approval | `kind`, `app_id`, `integration_id` |
+| `skill_created`, `skill_updated`, `skill_removed` | a skill of a shared space or of the workspace is made, changed or removed ([skills](skills.md)): they change what the agent is told for other people. A person's own skills, which change nobody else's access, record nothing | the skill's | skill | `scope` (`space` or `workspace`), `space_id` (a space's), `name`; `fields` on an update (`name`, `title`, `description`, `body`, `enabled`: which changed, never the text) |
 
 The names a person gives things (a token's, a space's, a shared account's label, an integration's name, a model's) are
-not recorded: they are free text, and people paste secrets into such boxes. The target's id
+not recorded: they are free text, and people paste secrets into such boxes. The one exception is a skill's `name`, the
+identifier that says which skill an event is about. It is recorded as stored: as the person typed it, after leading and trailing spaces and tabs are trimmed. Its pattern (a lowercase letter,
+then lowercase letters, digits and hyphens, 2 to 40 characters) limits its syntax and does not detect a secret: a value of
+that shape, such as a token in hexadecimal, is accepted and kept in the log, so a skill's name must never hold a secret. A skill's title is never recorded or shown in the log, since it can be that of a space the reader may not open. The target's id
 says which object it was, and `fields` says what about it changed.
 
 Notes:
@@ -198,7 +202,8 @@ The code makes the details narrow, so a future change can't leak by accident:
   It fails, and its change is rolled back, so the mistake shows in the tests.
 - No detail is free text. The values of the pattern-checked kinds are ones a person doesn't
   type freely (an address and a host pass their patterns; a pasted token doesn't), or come from the
-  code or the operator. A name a person types is never a detail.
+  code or the operator. A name a person types is never a detail, except a skill's `name`, which the schema checks
+  against the pattern of a skill's identifier. The pattern limits the name's syntax; it doesn't keep a secret out of it.
 - A detail named like a secret (`password`, `token`, `key`, `secret`, `hash`, `link`, `cookie`,
   `session`…) must be a boolean, and a test checks every schema for it.
 - Tests run each family's flow with known secret values and check that none of them is in any
@@ -226,7 +231,7 @@ events within the hour. Backups contain the log like the rest of the database.
   actor isn't the request's user (accepting an invite as a new account).
 - For an event with no transaction, use `audit.Log`, which logs a failure and returns nothing.
 - Add the code to `internal/audit/actions.go`, its details to `internal/audit/schema.go` (fixed
-  and typed; never a name or other text a person typed), and a test that does the action, checks the
+  and typed; never a name or other text a person typed, but a skill's `name`, an identifier recorded as stored, trimmed of leading and trailing spaces and tabs), and a test that does the action, checks the
   row (actor, workspace, target, details), checks that a refused request records nothing, and,
   if the action handles a secret, runs `audittest.NoSecrets`. Add it to the table above.
 - An action that deletes its target passes `TargetCreated` from the delete's `RETURNING

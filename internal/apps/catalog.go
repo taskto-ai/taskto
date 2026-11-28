@@ -140,6 +140,13 @@ var components = map[string]map[string]prop{
 		"sort":    fieldNamed(columnTypes...),
 		"dir":     enum("asc", "desc"),
 	}),
+	"Chart": props(map[string]prop{
+		"data":    req(kDynValue),
+		"variant": enum("line", "bar", "area"),
+		"label":   req(kDynString),
+		"stacked": opt(kBool),
+		"unit":    opt(kDynString),
+	}),
 	"Show":           {"when": req(kRule), "source": enum("draft", "record"), "child": req(kComponentID)},
 	"PhotoInput":     {"field": req(kString), "label": opt(kDynString), "value": req(kDynStringList)},
 	"Photos":         {"label": opt(kDynString), "value": req(kDynStringList)},

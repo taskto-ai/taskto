@@ -554,6 +554,14 @@ export type Conversation = {
   created_at: string
   updated_at: string
   cli_permissions: string
+  origin: ConversationOrigin | null
+}
+
+export type ConversationOrigin = {
+  kind: string
+  space_id?: number
+  app_id?: number
+  routine_id?: number
 }
 
 export type ConversationsModelRef = {
@@ -910,6 +918,23 @@ export type SearchSegment = {
 export type SendReply = {
   submission_id: number
   model?: ConversationsModelRef
+}
+
+export type Skill = {
+  id: number
+  scope: string
+  space_id?: number
+  name: string
+  title: string
+  description: string
+  body: string
+  enabled: boolean
+  origin: string
+  updated_at: string
+}
+
+export type SkillList = {
+  skills: Skill[]
 }
 
 export type Space = {
