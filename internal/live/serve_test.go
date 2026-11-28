@@ -56,18 +56,32 @@ type rig struct {
 
 func newRig(t *testing.T, cfg Config) *rig {
 	t.Helper()
+	return startRig(t, cfg, false, nil)
+}
+
+func startRig(t *testing.T, cfg Config, h2 bool, wrap func(http.ResponseWriter) http.ResponseWriter) *rig {
+	t.Helper()
 	g := &rig{t: t, clocks: newClocks(), session: map[string]context.CancelFunc{}}
 	g.recheck = func(context.Context) error { return nil }
 	cfg.Heartbeat, cfg.Recheck, cfg.Ticker = testHeartbeat, testRecheck, g.clocks.ticker
 	cfg.WatchSession = g.watch
 	g.hub = New(cfg)
-	g.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	g.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := int64(1)
 		if r.URL.Query().Get("user") == "2" {
 			user = 2
 		}
+		if wrap != nil {
+			w = wrap(w)
+		}
 		g.hub.Serve(w, r, room, user, func(ctx context.Context) error { return g.recheck(ctx) })
 	}))
+	if h2 {
+		g.srv.EnableHTTP2 = true
+		g.srv.StartTLS()
+	} else {
+		g.srv.Start()
+	}
 	t.Cleanup(g.srv.Close)
 	return g
 }
@@ -813,6 +827,8 @@ func TestACancelledSessionKeepsTheSlotUntilTheHandlerReturns(t *testing.T) {
 	g := newRig(t, Config{MaxStreams: 1})
 	w := newGatedWriter()
 	done := serveGated(g, w, "a", func(context.Context) error { return nil })
+	var open sync.Once
+	t.Cleanup(func() { open.Do(func() { close(w.gate) }) })
 	<-w.first
 	g.endSession("a")
 	deadline := time.Now().Add(200 * time.Millisecond)
@@ -827,7 +843,7 @@ func TestACancelledSessionKeepsTheSlotUntilTheHandlerReturns(t *testing.T) {
 	if code, _ := errorBody(t, second); code != apierr.CodeTooManyStreams {
 		t.Fatalf("code = %q", code)
 	}
-	close(w.gate)
+	open.Do(func() { close(w.gate) })
 	finished(t, done)
 	g.waitSubscribers(0)
 }
