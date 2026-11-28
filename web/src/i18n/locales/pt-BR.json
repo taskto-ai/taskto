@@ -601,6 +601,13 @@
     "moveTitle": "Mover {name} para um espaço",
     "moveNote": "O app é movido com os registros. Quem pode usá-lo passa a ser definido pelo espaço de destino.",
     "renameNamed": "Renomear {name}",
+    "changeIcon": "Alterar ícone",
+    "iconTitle": "Ícone de {name}",
+    "iconNone": "Sem ícone (usar iniciais)",
+    "iconCustom": "Ou digite ou cole um emoji",
+    "iconCustomHelp": "Um emoji. Sem ele, o app mostra as iniciais.",
+    "iconPreview": "Pré-visualização",
+    "iconInvalid": "Use um único emoji.",
     "takeOfflineConfirm": {
       "title": "Tirar {name} do ar?",
       "body": "Ninguém poderá abri-lo até que alguém que possa publicá-lo o restaure. Os registros são mantidos."
@@ -1016,6 +1023,7 @@
     "app_offline": "Este app está fora do ar: restaure-o para abri-lo.",
     "app_changed": "Alguém alterou este app enquanto isso: recarregue e tente de novo.",
     "app_name_length": "O nome do app precisa ter de 1 a {max} caracteres.",
+    "app_icon_invalid": "Um ícone é um único emoji.",
     "too_many_apps": "Um espaço pode ter no máximo {max} apps.",
     "app_token_rate_limited": "Seus tokens de acesso executaram {max} ações em um minuto aqui, o máximo permitido. Tente de novo em {seconds} segundos.",
     "app_full": "Este app está cheio: ele comporta no máximo {max_rows} linhas e {max_mib} MiB de dados.",

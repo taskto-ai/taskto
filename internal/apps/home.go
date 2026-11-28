@@ -45,6 +45,7 @@ type HomeItem struct {
 	SpaceID   int64        `json:"space_id"`
 	AppID     int64        `json:"app_id"`
 	AppName   string       `json:"app_name"`
+	AppIcon   string       `json:"app_icon,omitempty"`
 	WidgetID  string       `json:"widget_id,omitempty"`
 	Widget    *Widget      `json:"widget,omitempty"`
 	Label     string       `json:"label,omitempty"`
@@ -84,6 +85,7 @@ type AvailableApp struct {
 	SpaceKind      string             `json:"space_kind"`
 	AppID          int64              `json:"app_id"`
 	Name           string             `json:"name"`
+	Icon           string             `json:"icon"`
 	Widgets        []Widget           `json:"widgets" apitypes:"nonnull"`
 	Pin            *Pin               `json:"pin"`
 	CanSetDefaults bool               `json:"can_set_defaults"`
@@ -127,6 +129,7 @@ type rawHome struct {
 	hidden         bool
 	appID, spaceID int64
 	appName        string
+	appIcon        string
 	archived       bool
 	live           sql.NullInt64
 	defVersion     sql.NullInt64
@@ -134,7 +137,7 @@ type rawHome struct {
 	contributions  sql.NullString
 }
 
-const homeAppColumns = `a.id, a.space_id, a.name, a.archived_at IS NOT NULL, a.live_release,
+const homeAppColumns = `a.id, a.space_id, a.name, a.icon, a.archived_at IS NOT NULL, a.live_release,
 	r.definition_version, r.requires, json_extract(r.definition, '$.contributions')`
 const (
 	homeItemFrom = `
@@ -148,7 +151,7 @@ const (
 )
 
 func (r *rawHome) scanApp(row scanner, dest ...any) error {
-	return row.Scan(append(dest, &r.appID, &r.spaceID, &r.appName, &r.archived, &r.live, &r.defVersion, &r.requires, &r.contributions)...)
+	return row.Scan(append(dest, &r.appID, &r.spaceID, &r.appName, &r.appIcon, &r.archived, &r.live, &r.defVersion, &r.requires, &r.contributions)...)
 }
 
 func (s *Service) loadHome(ctx context.Context, userID, workspaceID, only int64) ([]rawHome, error) {
@@ -233,7 +236,7 @@ func (h *homeResolver) resolve(raw rawHome) (item HomeItem, acc access.AppAccess
 	}
 	item = HomeItem{
 		ID: raw.id, DefaultID: raw.defaultID, Source: SourcePersonal, Kind: raw.kind, SpaceID: raw.spaceID, AppID: raw.appID,
-		AppName: raw.appName, WidgetID: raw.widget, State: StateUnavailable,
+		AppName: raw.appName, AppIcon: raw.appIcon, WidgetID: raw.widget, State: StateUnavailable,
 	}
 	if raw.defaultID != 0 {
 		item.ID, item.Source = 0, SourceDefault
@@ -641,7 +644,7 @@ func (s *Service) available(ctx context.Context, userID, workspaceID int64) ([]A
 			}
 		}
 		rows, err := s.db.QueryContext(ctx, `
-			SELECT a.id, a.name, json_extract(r.definition, '$.contributions')
+			SELECT a.id, a.name, a.icon, json_extract(r.definition, '$.contributions')
 			FROM apps a JOIN app_releases r ON r.app_id = a.id AND r.number = a.live_release
 			WHERE a.space_id = ? AND a.archived_at IS NULL ORDER BY a.name, a.id`, sp.ID)
 		if err != nil {
@@ -649,9 +652,9 @@ func (s *Service) available(ctx context.Context, userID, workspaceID int64) ([]A
 		}
 		for rows.Next() {
 			var id int64
-			var name string
+			var name, icon string
 			var contributions sql.NullString
-			if err := rows.Scan(&id, &name, &contributions); err != nil {
+			if err := rows.Scan(&id, &name, &icon, &contributions); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
@@ -660,7 +663,7 @@ func (s *Service) available(ctx context.Context, userID, workspaceID int64) ([]A
 				continue
 			}
 			app := AvailableApp{
-				SpaceID: sp.ID, SpaceName: sp.Name, SpaceKind: string(sp.Kind), AppID: id, Name: name, Widgets: []Widget{},
+				SpaceID: sp.ID, SpaceName: sp.Name, SpaceKind: string(sp.Kind), AppID: id, Name: name, Icon: icon, Widgets: []Widget{},
 				CanSetDefaults: sp.Kind == access.Shared && sp.Access.Allows(access.Write) && acc.Publish,
 				Defaults:       []AvailableDefault{},
 			}
