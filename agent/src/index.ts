@@ -5,15 +5,19 @@ import { format } from 'node:util'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
 import {
+  ConversationBusy,
   type ConversationId,
   type Cursor,
   configure,
   createRegistry,
   type EntryId,
   Harness,
+  LiveDoc,
   type SubmissionId,
 } from '@earendil-works/pi-durable'
 import { cliTools } from './cli.js'
+import { ContinuePin, latestReplyEntryId, pinHolds } from './continue.js'
+import { InputError, type NoteInput, noteEntry, parseNote, type TasktoInputEntry, validInputEntry } from './input.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
 import { Lifecycle } from './lifecycle.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
@@ -99,7 +103,7 @@ class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly reason?: 'unknown_model' | 'no_model',
+    readonly reason?: 'unknown_model' | 'no_model' | 'busy' | 'moved',
   ) {
     super(message)
   }
@@ -276,6 +280,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (resource === 'conversations' && parts.length === 3) {
     if (req.method === 'POST' && action === 'submit') {
       const body = await readJson(req)
+      let entry: TasktoInputEntry | undefined
       if (typeof body.content !== 'string') throw new HttpError(400, 'content must be a string')
       const content = body.content
       const whenBusy = body.whenBusy
@@ -291,6 +296,10 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       if (body.language !== undefined && !validLanguage(body.language)) {
         throw new HttpError(400, 'language must be a BCP 47 tag such as "pt-BR", or ""')
       }
+      if (body.entry !== undefined) {
+        if (!validInputEntry(body.entry)) throw new HttpError(400, 'entry must be a bounded taskto.input entry')
+        entry = body.entry
+      }
       const conv = await conversation(id)
       const { capability, language } = body as { capability?: string; language?: string }
       let submissionId: SubmissionId | undefined
@@ -299,6 +308,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         submissionId = await conv.submit(tx, {
           type: 'input',
           content,
+          ...(entry !== undefined ? { entry } : {}),
           ...(whenBusy ? { whenBusy } : {}),
           ...(typeof body.requestId === 'string' ? { requestId: body.requestId } : {}),
         })
@@ -312,6 +322,48 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         }
       }, context)
       return send(res, 202, { submissionId })
+    }
+    if (req.method === 'POST' && action === 'continue') {
+      const body = await readJson(req)
+      const model = modelRef(body.model)
+      const afterEntry = body.afterEntry
+      if (typeof afterEntry !== 'number' || !Number.isSafeInteger(afterEntry) || afterEntry < 1) {
+        throw new HttpError(400, 'afterEntry must be the id of the last entry')
+      }
+      const conv = await conversation(id)
+      let submissionId: SubmissionId | undefined
+      await testHooks.beforeContinueWrite?.()
+      try {
+        await conv.commit(async (tx) => {
+          if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
+          const pin = await tx.doc(ContinuePin, conv.id)
+          if (afterEntry <= pin.consumed || (await latestReplyEntryId(tx, conv.id)) !== afterEntry) {
+            throw new HttpError(409, 'the conversation moved on', 'moved')
+          }
+          submissionId = await conv.submit(tx, { type: 'continue' })
+          pin.consumed = afterEntry
+          pin.submission = submissionId
+          await configure(tx, conv.id, { model })
+        }, context)
+      } catch (error) {
+        if (error instanceof ConversationBusy) throw new HttpError(409, 'the conversation is busy', 'busy')
+        throw error
+      }
+      return send(res, 202, { submissionId, model })
+    }
+    if (req.method === 'POST' && action === 'note') {
+      let note: NoteInput
+      try {
+        note = parseNote(await readJson(req))
+      } catch (error) {
+        if (error instanceof InputError) throw new HttpError(400, error.message)
+        throw error
+      }
+      const submission = await (await conversation(id)).submit(
+        { type: 'write', entry: noteEntry(note), ...(note.requestId ? { requestId: note.requestId } : {}) },
+        context,
+      )
+      return send(res, 202, { submissionId: submission.id })
     }
     if (req.method === 'POST' && action === 'retire') {
       const found = await conversation(id)
@@ -364,6 +416,9 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       await testHooks.beforeModelWrite?.()
       await conv.commit(async (tx) => {
         if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
+        if (pinHolds(await tx.doc(ContinuePin, conv.id), await tx.doc(LiveDoc, conv.id))) {
+          throw new HttpError(409, 'a continued reply keeps its model until it ends', 'busy')
+        }
         await configure(tx, conv.id, { model })
       }, context)
       return send(res, 200, model)

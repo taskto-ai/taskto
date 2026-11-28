@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
@@ -33,6 +34,15 @@ type harness struct {
 }
 
 func newHarness(t *testing.T, tune func(*cliworker.Config)) *harness {
+	t.Helper()
+	h := newFreshHarness(t, tune)
+	if err := h.w.Reconcile(context.Background(), bootCensus(cliworker.TestBoot, time.Now(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func newFreshHarness(t *testing.T, tune func(*cliworker.Config)) *harness {
 	t.Helper()
 	root := t.TempDir()
 	fakes := clitest.Install(t, t.TempDir())
@@ -59,7 +69,7 @@ func newHarness(t *testing.T, tune func(*cliworker.Config)) *harness {
 
 func (h *harness) user(t *testing.T, user int64, cli cliworker.CLI, s clitest.Scenario, signedIn bool) cliworker.Dirs {
 	t.Helper()
-	dirs, err := h.layout.Ensure(user)
+	dirs, err := h.layout.Ensure(h.w.HomeForTest(acct(user)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +80,19 @@ func (h *harness) user(t *testing.T, user int64, cli cliworker.CLI, s clitest.Sc
 	return dirs
 }
 
+func (h *harness) introduce(t *testing.T, users ...int64) {
+	t.Helper()
+	for _, user := range users {
+		h.w.HomeForTest(acct(user))
+	}
+}
+
+func acct(user int64) cliowner.Account { return cliworker.AccountForTest(user) }
+
+func (h *harness) home(user int64) cliworker.Dirs { return h.layout.Home(h.w.HomeForTest(acct(user))) }
+
 func spec(id string, user int64, cli cliworker.CLI, prompt string) cliworker.TurnSpec {
-	s := cliworker.TurnSpec{ID: id, User: user, CLI: cli, Conversation: 7, Prompt: prompt}
+	s := cliworker.TurnSpec{ID: id, User: user, Identity: cliworker.IdentityForTest(user), Boot: cliworker.TestBoot, Installation: cliworker.TestInstallation, CLI: cli, Conversation: 7, Prompt: prompt}
 	if cli != cliworker.Codex {
 		s.Session = fmt.Sprintf("00000000-0000-4000-8000-%012d", user*1000+int64(len(id)))
 	}
@@ -350,6 +371,7 @@ func TestReattach(t *testing.T) {
 
 func TestTurnIDOfAnotherUser(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	h.user(t, 1, cliworker.Claude, clitest.Scenario{SleepMS: 300}, true)
 	if _, _, err := h.w.Start(spec("mine", 1, cliworker.Claude, "hi")); err != nil {
 		t.Fatal(err)
@@ -490,6 +512,7 @@ func TestNewWorkerStopsOrphans(t *testing.T) {
 	cliPID := clitest.Calls(t, dirs.Config(cliworker.Claude))[0].PID
 	bg := backgroundPID(t, dirs.Config(cliworker.Claude))
 
+	h.w.CrashForTest()
 	second, err := cliworker.New(h.cfg)
 	if err != nil {
 		t.Fatal(err)

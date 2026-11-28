@@ -5,13 +5,14 @@ package cliworker
 import (
 	"errors"
 	"os/exec"
+	"time"
 )
 
 const isolationSupported = false
 
 type Isolation struct {
-	UIDBase       int
-	Passwd, Group string
+	UIDBase         int
+	UserFile, Group string
 }
 
 func (w *Worker) asUser(_ *exec.Cmd, _ int64) error {
@@ -21,4 +22,10 @@ func (w *Worker) asUser(_ *exec.Cmd, _ int64) error {
 	return nil
 }
 
-func killUIDs(int) int { return 0 }
+func killUIDs(int) (int, error) { return 0, nil }
+
+func (w *Worker) dropUnixUser(int64) {}
+
+func killUID(int, time.Duration) error { return nil }
+
+func checkPidfds() error { return nil }

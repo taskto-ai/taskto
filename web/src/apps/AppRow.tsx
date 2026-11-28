@@ -2,7 +2,6 @@ import { type FormEvent, useEffect, useEffectEvent, useId, useState } from 'reac
 import { type App, api, type Space } from '../api'
 import { useFormat, useT } from '../i18n'
 import { spaceLabel } from '../spaces'
-import { Avatar } from '../ui/Avatar'
 import { Badge } from '../ui/Badge'
 import { Button, ButtonLink } from '../ui/Button'
 import { useConfirm } from '../ui/ConfirmDialog'
@@ -13,15 +12,17 @@ import { MenuItem, MenuSeparator, MoreMenu } from '../ui/Menu'
 import { Notice } from '../ui/Notice'
 import { Row } from '../ui/Rows'
 import { Select } from '../ui/Select'
+import { AppAvatar } from './AppAvatar'
 import { appError, PublishPanel } from './AppPublish'
 import { AppReleases } from './AppReleases'
 import { AppRoles } from './AppRoles'
 import { LoadingRows } from './AppsLoading'
 import { DuplicateDialog } from './AppTemplates'
+import { IconDialog } from './IconDialog'
 import { appPath, builderPath, openRunWindow } from './route'
 import './Apps.css'
 
-type Open = 'rename' | 'move' | 'duplicate' | 'releases' | 'roles' | 'publish' | null
+type Open = 'rename' | 'icon' | 'move' | 'duplicate' | 'releases' | 'roles' | 'publish' | null
 
 export function AppRow({
   workspace,
@@ -43,7 +44,7 @@ export function AppRow({
   targets: Space[]
   copyTo: Space[]
   spaceBase: string
-  change: (app: App, body: { name?: string; archived?: boolean }) => Promise<string | null>
+  change: (app: App, body: { name?: string; icon?: string; archived?: boolean }) => Promise<string | null>
   move: (app: App, to: number) => Promise<string | null>
   report: (error: string | null) => void
   reload: () => void
@@ -63,13 +64,14 @@ export function AppRow({
     releases: reviewer && !!app.live,
     roles: writable && app.access.manage_roles && space.kind === 'shared',
     rename: writable && app.access.design,
+    icon: writable && app.access.design,
     duplicate: copyTo.length > 0,
     move: writable && app.access.design && targets.length > 0,
     offline: writable && app.access.publish,
     window: !offline && (!!app.live || reviewer),
   }
 
-  const run = async (body: { name?: string; archived?: boolean }) => {
+  const run = async (body: { name?: string; icon?: string; archived?: boolean }) => {
     setBusy(true)
     const failed = await change(app, body)
     setBusy(false)
@@ -115,7 +117,15 @@ export function AppRow({
   )
 
   const menu =
-    may.window || may.publish || may.releases || may.roles || may.rename || may.duplicate || may.move || may.offline
+    may.window ||
+    may.publish ||
+    may.releases ||
+    may.roles ||
+    may.rename ||
+    may.icon ||
+    may.duplicate ||
+    may.move ||
+    may.offline
   const actions = (
     <>
       {!offline && writable && app.access.design && (
@@ -183,6 +193,11 @@ export function AppRow({
               {t('apps.rename')}
             </MenuItem>
           )}
+          {may.icon && (
+            <MenuItem icon="edit" disabled={busy} onSelect={() => setOpen('icon')}>
+              {t('apps.changeIcon')}
+            </MenuItem>
+          )}
           {may.duplicate && (
             <MenuItem icon="copy" onSelect={() => setOpen('duplicate')}>
               {t('apps.duplicate.open')}
@@ -215,6 +230,17 @@ export function AppRow({
           onClose={close}
           onRename={async (name) => {
             const failed = await run({ name })
+            if (!failed) close()
+            return failed
+          }}
+        />
+      )}
+      {open === 'icon' && (
+        <IconDialog
+          app={app}
+          onClose={close}
+          onSave={async (icon) => {
+            const failed = await run({ icon })
             if (!failed) close()
             return failed
           }}
@@ -262,7 +288,7 @@ export function AppRow({
 
   return (
     <Row
-      leading={<Avatar name={app.name} shape="square" size="lg" decorative />}
+      leading={<AppAvatar name={app.name} icon={app.icon} size="lg" decorative />}
       title={app.name}
       detail={detail}
       status={status}

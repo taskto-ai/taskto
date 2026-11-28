@@ -5,7 +5,9 @@ import {
   api,
   type BackupStatus,
   backupPath,
+  type CLIWorkerStatus,
   type Credit,
+  cliWorkerPath,
   type DictationStatus,
   dictationPath,
   type UpdateAvailable,
@@ -55,6 +57,7 @@ export function AboutTab({ workspace, operator }: { workspace: number; operator:
       </Section>
       {operator && <UpdatesPanel workspace={workspace} />}
       {operator && <BackupsPanel workspace={workspace} />}
+      {operator && <CLIWorkerPanel workspace={workspace} />}
     </SettingsTab>
   )
 }
@@ -438,6 +441,31 @@ const BACKUP_TONE: Record<BackupStatus['health'], NoticeTone> = {
   ok: 'success',
   failing: 'warning',
   late: 'danger',
+}
+
+function CLIWorkerPanel({ workspace }: { workspace: number }) {
+  const t = useT()
+  const status = useLoad(() => api<CLIWorkerStatus>(cliWorkerPath(workspace)), [workspace])
+  const s = status.data
+  if (!s?.authority_lost && !s?.other_installation) {
+    return null
+  }
+  const command = `taskto cli-worker trust-server -homes /homes -boot ${s.boot ?? ''} -installation ${s.installation ?? ''}`
+  return (
+    <Section title={t('settings.about.cliWorker.title')}>
+      <Notice tone="danger">
+        {t(
+          s.other_installation
+            ? 'settings.about.cliWorker.otherInstallation'
+            : 'settings.about.cliWorker.authorityLost',
+        )}
+      </Notice>
+      <p className="settings-text">{t('settings.about.cliWorker.handOver')}</p>
+      <p className="settings-text">
+        <code>{command}</code>
+      </p>
+    </Section>
+  )
 }
 
 function BackupsPanel({ workspace }: { workspace: number }) {

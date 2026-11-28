@@ -29,12 +29,14 @@ type OfflineDefinition struct {
 	Screens           []OfflineScreen          `json:"screens,omitempty"`
 	Actions           map[string]OfflineAction `json:"actions" apitypes:"nonnull"`
 	Summaries         map[string]Summary       `json:"summaries,omitempty"`
+	Series            map[string]Series        `json:"series,omitempty"`
 }
 
 type OfflineApp struct {
 	AppID      int64             `json:"app_id"`
 	SpaceID    int64             `json:"space_id"`
 	Name       string            `json:"name"`
+	Icon       string            `json:"icon"`
 	Release    int64             `json:"release"`
 	Definition OfflineDefinition `json:"definition"`
 	Messages   []Message         `json:"messages" apitypes:"json,nonnull"`
@@ -84,7 +86,7 @@ func (s *Service) offlineApp(ctx context.Context, sp access.Space, actor Actor, 
 		scope = "all"
 	}
 	out := OfflineApp{
-		AppID: a.ID, SpaceID: sp.ID, Name: a.Name,
+		AppID: a.ID, SpaceID: sp.ID, Name: a.Name, Icon: a.Icon,
 		Release:    a.Live.Number,
 		Definition: offlineDefinition(def),
 		Messages:   Surface(SurfaceID(a.ID), def, rows),
@@ -174,6 +176,7 @@ func offlineDefinition(def Definition) OfflineDefinition {
 		Entry:             def.Entry,
 		Actions:           map[string]OfflineAction{},
 		Summaries:         def.Summaries,
+		Series:            def.Series,
 	}
 	if out.Requires == nil {
 		out.Requires = []string{}

@@ -21,10 +21,12 @@
     "component.SignatureInput",
     "component.Slider",
     "component.Stat",
+    "component.Table",
     "component.Tabs",
     "component.Text",
     "component.TextField",
     "data.labels",
+    "data.series",
     "effect.create_card",
     "effect.create_document",
     "effect.create_payment_link",
@@ -183,6 +185,16 @@
     "Stat": [
       "label",
       "value"
+    ],
+    "Table": [
+      "accessibility",
+      "columns",
+      "dir",
+      "items",
+      "label",
+      "open",
+      "sort",
+      "weight"
     ],
     "Tabs": [
       "accessibility",

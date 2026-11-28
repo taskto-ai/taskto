@@ -20,7 +20,7 @@ import (
 
 func (h *harness) runningTurn(t *testing.T, id string, user int64, cli cliworker.CLI, slot cliworker.Slot, s clitest.Scenario) *cliworker.Turn {
 	t.Helper()
-	dirs, err := h.layout.EnsureSlot(user, cli, slot)
+	dirs, err := h.layout.EnsureSlot(h.w.HomeForTest(acct(user)), cli, slot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,15 +39,16 @@ func (h *harness) runningTurn(t *testing.T, id string, user int64, cli cliworker
 
 func TestLogoutStopsTheTurnsOnTheAccountBeforeTheFilesGo(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	h.w.SetGroupWaitForTest(-1)
 	mine := h.runningTurn(t, "mine", 1, cliworker.Claude, "", clitest.Scenario{SleepMS: 60_000, TermWriteMS: 300})
 	second := h.runningTurn(t, "second", 1, cliworker.Claude, "2", clitest.Scenario{SleepMS: 60_000})
 	other := h.runningTurn(t, "other", 2, cliworker.Claude, "", clitest.Scenario{SleepMS: 60_000})
-	config := h.layout.User(1).Config(cliworker.Claude)
+	config := h.home(1).Config(cliworker.Claude)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := h.w.Logout(ctx, 1, cliworker.Claude, ""); err != nil {
+	if err := h.w.Logout(ctx, acct(1), cliworker.Claude, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !mine.Over() {
@@ -60,7 +61,7 @@ func TestLogoutStopsTheTurnsOnTheAccountBeforeTheFilesGo(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(config, clitest.LateWrite)); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the stopped CLI saved its file into the account's directory after it was removed: %v", err)
 	}
-	if st, _ := h.w.Status(ctx, 1, cliworker.Claude, ""); st.LoggedIn {
+	if st, _ := h.w.Status(ctx, acct(1), cliworker.Claude, ""); st.LoggedIn {
 		t.Error("the account is still signed in")
 	}
 	if second.Over() || other.Over() {
@@ -70,6 +71,7 @@ func TestLogoutStopsTheTurnsOnTheAccountBeforeTheFilesGo(t *testing.T) {
 
 func TestLogoutClosesTheAccountWhileItsFilesGo(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
+	h.introduce(t, 1, 2)
 	h.w.SetGroupWaitForTest(-1)
 	mine := h.runningTurn(t, "mine", 1, cliworker.Claude, "", clitest.Scenario{SleepMS: 60_000, TermWriteMS: 1500})
 	h.user(t, 1, cliworker.Codex, clitest.Scenario{}, true)
@@ -77,9 +79,9 @@ func TestLogoutClosesTheAccountWhileItsFilesGo(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	loggedOut := make(chan error, 1)
-	go func() { loggedOut <- h.w.Logout(ctx, 1, cliworker.Claude, "") }()
+	go func() { loggedOut <- h.w.Logout(ctx, acct(1), cliworker.Claude, "") }()
 	eventually(t, "the account was never closed to new work", func() bool {
-		_, err := h.w.Status(ctx, 1, cliworker.Claude, "")
+		_, err := h.w.Status(ctx, acct(1), cliworker.Claude, "")
 		return errors.Is(err, cliworker.ErrRemoving)
 	})
 	if mine.Over() {
@@ -88,19 +90,19 @@ func TestLogoutClosesTheAccountWhileItsFilesGo(t *testing.T) {
 	if _, _, err := h.w.Start(spec("during", 1, cliworker.Claude, "hi")); !errors.Is(err, cliworker.ErrRemoving) {
 		t.Errorf("a turn started on the account that is being removed: %v", err)
 	}
-	if _, err := h.w.StartLogin(1, cliworker.Claude, ""); !errors.Is(err, cliworker.ErrRemoving) {
+	if _, err := h.w.StartLogin(acct(1), cliworker.Claude, ""); !errors.Is(err, cliworker.ErrRemoving) {
 		t.Errorf("a sign-in started on the account that is being removed: %v", err)
 	}
-	if st, err := h.w.Status(ctx, 1, cliworker.Codex, ""); err != nil || !st.LoggedIn {
+	if st, err := h.w.Status(ctx, acct(1), cliworker.Codex, ""); err != nil || !st.LoggedIn {
 		t.Errorf("the user's other CLI during the removal: %+v %v", st, err)
 	}
 	if err := <-loggedOut; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.w.Status(ctx, 1, cliworker.Claude, ""); err != nil {
+	if _, err := h.w.Status(ctx, acct(1), cliworker.Claude, ""); err != nil {
 		t.Errorf("a check after the removal: %v", err)
 	}
-	clitest.SignIn(t, "claude", h.layout.User(1).Config(cliworker.Claude))
+	clitest.SignIn(t, "claude", h.home(1).Config(cliworker.Claude))
 	if done := last(run(t, h.w, spec("after", 1, cliworker.Claude, "hi"))); done.Status != cliworker.StatusOK {
 		t.Errorf("a turn after the removal: %+v", done)
 	}
@@ -112,7 +114,7 @@ func TestLogoutCancelsAHelperRequestOnTheAccount(t *testing.T) {
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{StatusSleepMS: 20_000}, true)
 	errs := make(chan error, 1)
 	go func() {
-		_, err := h.w.Status(context.Background(), 1, cliworker.Claude, "")
+		_, err := h.w.Status(context.Background(), acct(1), cliworker.Claude, "")
 		errs <- err
 	}()
 	eventually(t, "the status check didn't start", func() bool {
@@ -120,7 +122,7 @@ func TestLogoutCancelsAHelperRequestOnTheAccount(t *testing.T) {
 		return err == nil
 	})
 	start := time.Now()
-	if err := h.w.Logout(context.Background(), 1, cliworker.Claude, ""); err != nil {
+	if err := h.w.Logout(context.Background(), acct(1), cliworker.Claude, ""); err != nil {
 		t.Fatal(err)
 	}
 	if took := time.Since(start); took > 10*time.Second {
@@ -141,8 +143,10 @@ func TestLogoutCancelsAHelperRequestOnTheAccount(t *testing.T) {
 
 func TestRemovalWaitsForLeftoverProcessesOfTheAccount(t *testing.T) {
 	for name, remove := range map[string]func(*cliworker.Worker, context.Context) error{
-		"logout": func(w *cliworker.Worker, ctx context.Context) error { return w.Logout(ctx, 1, cliworker.Claude, "") },
-		"forget": func(w *cliworker.Worker, ctx context.Context) error { return w.Forget(ctx, 1) },
+		"logout": func(w *cliworker.Worker, ctx context.Context) error {
+			return w.Logout(ctx, acct(1), cliworker.Claude, "")
+		},
+		"forget": func(w *cliworker.Worker, ctx context.Context) error { return w.Forget(ctx, acct(1)) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, nil)
@@ -180,11 +184,12 @@ func TestRemovalWaitsForLeftoverProcessesOfTheAccount(t *testing.T) {
 
 func TestLogoutsOfOneAccountDoNotOverlap(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
+	h.introduce(t, 1, 2)
 	h.runningTurn(t, "mine", 1, cliworker.Claude, "", clitest.Scenario{SleepMS: 60_000, TermWriteMS: 800})
 	ctx := context.Background()
 	results := make(chan error, 2)
 	for range 2 {
-		go func() { results <- h.w.Logout(ctx, 1, cliworker.Claude, "") }()
+		go func() { results <- h.w.Logout(ctx, acct(1), cliworker.Claude, "") }()
 	}
 	for range 2 {
 		if err := <-results; err != nil {
@@ -197,14 +202,14 @@ func TestForgetWaitsForADisconnectInProgress(t *testing.T) {
 	h := newHarness(t, nil)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{LogoutSleepMS: 1500}, true)
 	loggedOut := make(chan error, 1)
-	go func() { loggedOut <- h.w.Logout(context.Background(), 1, cliworker.Claude, "") }()
+	go func() { loggedOut <- h.w.Logout(context.Background(), acct(1), cliworker.Claude, "") }()
 	eventually(t, "the sign-out didn't start", func() bool {
 		_, err := os.Stat(filepath.Join(dirs.Config(cliworker.Claude), clitest.LogoutStarted))
 		return err == nil
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := h.w.Forget(ctx, 1); err != nil {
+	if err := h.w.Forget(ctx, acct(1)); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -222,13 +227,13 @@ func TestLogoutWaitsForACancelledSignInThatANewOneReplaced(t *testing.T) {
 	h := newHarness(t, func(c *cliworker.Config) { c.StopGrace = 10 * time.Second })
 	h.w.SetGroupWaitForTest(-1)
 	dirs := h.user(t, 1, cliworker.Claude, clitest.Scenario{TermWriteMS: 1500}, false)
-	old, err := h.w.StartLogin(1, cliworker.Claude, "")
+	old, err := h.w.StartLogin(acct(1), cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.w.CancelLogin(1, cliworker.Claude, "")
+	h.w.CancelLogin(acct(1), cliworker.Claude, "")
 	clitest.WriteScenario(t, dirs.Config(cliworker.Claude), clitest.Scenario{})
-	replacement, err := h.w.StartLogin(1, cliworker.Claude, "")
+	replacement, err := h.w.StartLogin(acct(1), cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +245,7 @@ func TestLogoutWaitsForACancelledSignInThatANewOneReplaced(t *testing.T) {
 		t.Fatal("fixture: the cancelled sign-in had ended already")
 	default:
 	}
-	if err := h.w.Logout(context.Background(), 1, cliworker.Claude, ""); err != nil {
+	if err := h.w.Logout(context.Background(), acct(1), cliworker.Claude, ""); err != nil {
 		t.Fatal(err)
 	}
 	for name, l := range map[string]*cliworker.Login{"the cancelled one": old, "its replacement": replacement} {
@@ -263,13 +268,13 @@ func TestAnAlreadyCancelledRemovalRemovesNothing(t *testing.T) {
 	cancel()
 	launched := h.w.HelperLaunchesForTest()
 
-	if err := h.w.Logout(cancelled, 1, cliworker.Claude, ""); err == nil {
+	if err := h.w.Logout(cancelled, acct(1), cliworker.Claude, ""); err == nil {
 		t.Error("a disconnect for a caller that had given up went through")
 	}
 	if _, err := os.Stat(creds); err != nil {
 		t.Errorf("the login's files went for a caller that had given up: %v", err)
 	}
-	if err := h.w.Forget(cancelled, 1); err == nil {
+	if err := h.w.Forget(cancelled, acct(1)); err == nil {
 		t.Error("a removal for a caller that had given up went through")
 	}
 	if _, err := os.Stat(creds); err != nil {
@@ -278,7 +283,7 @@ func TestAnAlreadyCancelledRemovalRemovesNothing(t *testing.T) {
 	if n := h.w.HelperLaunchesForTest(); n != launched {
 		t.Errorf("%d helpers were started for callers that had given up", n-launched)
 	}
-	if err := h.w.Forget(context.Background(), 1); err != nil {
+	if err := h.w.Forget(context.Background(), acct(1)); err != nil {
 		t.Fatal(err)
 	}
 	gone(t, dirs.Root)

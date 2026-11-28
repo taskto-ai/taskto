@@ -60,6 +60,15 @@ func TestAppToolsBuildAppsForTheirUser(t *testing.T) {
 		t.Fatalf("update_app = %v", updated)
 	}
 	w.status(http.StatusConflict, w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 1, "name": "Stale"})
+	iconic := w.ok(w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 2, "icon": "🧾"})
+	if iconic["icon"] != "🧾" || iconic["name"] != "Spending" || id(iconic["version"]) != 3 {
+		t.Fatalf("update_app with an icon = %v", iconic)
+	}
+	w.status(http.StatusBadRequest, w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 3, "icon": "abc"})
+	plain := w.ok(w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 3, "icon": ""})
+	if plain["icon"] != "" || id(plain["version"]) != 4 {
+		t.Fatalf("update_app clearing the icon = %v", plain)
+	}
 	w.exec(`INSERT INTO app_rows (app_id, data) VALUES (?, '{"description": "Coffee", "amount": 4.5, "dropped": "old"}')`, app)
 	rows := w.ok(w.aliceConv, "list_app_rows", map[string]any{"space_id": w.alicePrivate, "app_id": app})["rows"].([]any)
 	if len(rows) != 1 || rows[0].(map[string]any)["description"] != "Coffee" || rows[0].(map[string]any)["dropped"] != nil {
@@ -126,7 +135,7 @@ func TestAppToolsBuildAppsForTheirUser(t *testing.T) {
 	}
 	w.exec(`DELETE FROM apps WHERE space_id = ? AND id != ?`, w.alicePrivate, app)
 
-	w.ok(w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 2, "archived": true})
+	w.ok(w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 4, "archived": true})
 	if rows := w.ok(w.aliceConv, "list_app_rows", map[string]any{"space_id": w.alicePrivate, "app_id": app})["rows"].([]any); len(rows) != 1 {
 		t.Fatalf("an offline app's rows = %v", rows)
 	}
@@ -352,4 +361,49 @@ func TestQueryAppRowsPagesFiltersAndTotals(t *testing.T) {
 		t.Fatalf("a user's agent gets %v", own)
 	}
 	w.status(http.StatusNotFound, w.bobConv, "query_app_rows", ref(nil))
+}
+
+func TestAppToolsOfferAnIconAndMakeAppsWithOne(t *testing.T) {
+	for _, d := range Definitions() {
+		if d.Name != "create_app" && d.Name != "update_app" {
+			continue
+		}
+		var schema struct {
+			Properties map[string]struct {
+				Type      string `json:"type"`
+				MaxLength int    `json:"maxLength"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(d.InputSchema, &schema); err != nil {
+			t.Fatal(err)
+		}
+		if icon := schema.Properties["icon"]; icon.Type != "string" || icon.MaxLength != 32 {
+			t.Errorf("%s offers the icon as %+v", d.Name, icon)
+		}
+	}
+
+	w := newWorld(t)
+	made := w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.alicePrivate, "name": "Iconic", "icon": "🧾", "definition": expenses(t)})
+	if made["icon"] != "🧾" {
+		t.Fatalf("create_app with an icon = %v", made)
+	}
+	w.status(http.StatusBadRequest, w.aliceConv, "create_app", map[string]any{"space_id": w.alicePrivate, "name": "Plain", "icon": "abc", "definition": expenses(t)})
+	w.status(http.StatusNotFound, w.bobConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": id(made["id"]), "version": 1, "icon": "🏠"})
+	if shown := w.ok(w.aliceConv, "show_app", map[string]any{"space_id": w.alicePrivate, "app_id": id(made["id"])}); shown["icon"] != "🧾" {
+		t.Fatalf("another user's update changed the icon: %v", shown)
+	}
+}
+
+func TestTheAgentCannotGiveAnIconWithoutTheRightToDesignTheApp(t *testing.T) {
+	w := newWorld(t)
+	app := id(w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.shared, "name": "Team expenses", "definition": expenses(t)})["id"])
+	w.exec(`UPDATE space_members SET role = 'editor' WHERE space_id = ? AND user_id = ?`, w.shared, w.bob)
+	w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'user'), (?, ?, 'builder')`, app, w.bob, app, w.alice)
+	w.status(http.StatusForbidden, w.bobConv, "update_app", map[string]any{"space_id": w.shared, "app_id": app, "version": 1, "icon": "🧾"})
+	if shown := w.ok(w.aliceConv, "show_app", map[string]any{"space_id": w.shared, "app_id": app}); shown["icon"] != "" || id(shown["version"]) != 1 {
+		t.Fatalf("a refused update changed the app: %v", shown)
+	}
+	if set := w.ok(w.aliceConv, "update_app", map[string]any{"space_id": w.shared, "app_id": app, "version": 1, "icon": "🧾"}); set["icon"] != "🧾" {
+		t.Fatalf("the designer's update = %v", set)
+	}
 }

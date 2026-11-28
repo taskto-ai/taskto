@@ -30,6 +30,7 @@ const app = (over: Record<string, unknown> = {}) => ({
   id: 1,
   space_id: 2,
   name: 'Expenses',
+  icon: '',
   archived_at: null,
   version: 1,
   rows: 1,
@@ -67,6 +68,13 @@ test("the app's name heads the page, with the way back, to its records and to ed
   expect(within(header).getByRole('link', { name: 'All apps' }).getAttribute('href')).toBe('/w/1/apps')
   expect(within(header).getByRole('link', { name: 'Edit Expenses with AI' })).toBeTruthy()
   expect(within(header).getByRole('button', { name: 'Records and history' })).toBeTruthy()
+})
+
+test("the app's emoji stands before its name in the header, and does not become part of the name", async () => {
+  serve({ icon: '🧾' })
+  render(<LaunchedApp workspace={1} space={2} app={1} writable />)
+  const heading = await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  expect(within(heading).getByText('🧾').closest('[aria-hidden="true"]')).toBeTruthy()
 })
 
 test("nothing the frame draws is a primary button: the app's own is the page's one", async () => {

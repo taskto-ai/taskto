@@ -10,6 +10,7 @@ import { Page } from '../ui/Page'
 import { PageHeader } from '../ui/PageHeader'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
+import { AppAvatar } from './AppAvatar'
 import { AppEffects } from './AppEffects'
 import { AppRecords, RecordsButton } from './AppRecords'
 import { AppStage } from './AppStage'
@@ -83,7 +84,16 @@ export function LaunchedApp({
     <Page width={standalone ? 'full' : 'list'}>
       <PageHeader
         path={standalone ? undefined : <BackToApps workspace={workspace} />}
-        title={data?.name ?? t('apps.app')}
+        title={
+          data ? (
+            <>
+              <AppAvatar name={data.name} icon={data.icon} size="lg" className="apps-avatar-title" decorative />
+              {data.name}
+            </>
+          ) : (
+            t('apps.app')
+          )
+        }
         help={notes.length > 0 ? notes.join(' ') : undefined}
         actions={
           (standalone || running) && (

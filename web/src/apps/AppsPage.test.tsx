@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
+import { PinnedNav } from '../home/PinnedNav'
 import { parseRoute, usePath } from '../router'
+import { beginSession, endSession } from '../session'
 import { fakeFetch } from '../test/fakes'
 import { AppsPage } from './AppsPage'
 import { forgetOperations } from './operations'
@@ -41,6 +43,7 @@ const app = (over: Record<string, unknown>) => ({
   id: 1,
   space_id: 2,
   name: 'Expenses',
+  icon: '',
   archived_at: null,
   version: 1,
   rows: 1,
@@ -117,6 +120,7 @@ test("lists every space's apps, and changes only the ones the user may", async (
     'Open in a new window',
     'History',
     'Rename',
+    'Change icon',
     'Duplicate as template',
     'Take offline',
   ])
@@ -816,4 +820,189 @@ test('the menu opens an app in a window of its own, one per app, and not an app 
   popup.closed = true
   expect(await menuItems(crew, 'Gone')).not.toContain('Open in a new window')
   expect(await menuItems(crew, 'Soon')).not.toContain('Open in a new window')
+})
+
+test('an icon is picked from the list or typed, saved with the version the person saw, and shown in the row', async () => {
+  let expenses = app({})
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': () => ({ body: { apps: [expenses] } }),
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': { body: { apps: [] } },
+    'PATCH /api/workspaces/1/spaces/2/apps/1': (call) => {
+      const body = call.body as { version: number; icon: string }
+      if (body.icon === '🛑') return { status: 400, body: { error: 'bad', code: 'app_icon_invalid' } }
+      expenses = app({ ...expenses, version: expenses.version + 1, icon: body.icon })
+      return { body: expenses }
+    },
+  })
+  render(<Routed />)
+  const mine = await screen.findByRole('region', { name: 'Private' })
+  await within(mine).findByText('Expenses')
+  expect(within(mine).getByText('E')).toBeTruthy()
+
+  await choose(mine, 'Expenses', 'Change icon')
+  let dialog = await screen.findByRole('dialog', { name: 'Icon for Expenses' })
+  const save = within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement
+  expect(save.disabled).toBe(true)
+  const group = within(dialog).getByRole('radiogroup', { name: 'Change icon' })
+  expect((within(group).getByRole('radio', { name: 'No icon (use initials)' }) as HTMLInputElement).checked).toBe(true)
+  fireEvent.click(within(group).getByRole('radio', { name: '🧾' }))
+  expect((within(group).getByRole('radio', { name: '🧾' }) as HTMLInputElement).checked).toBe(true)
+  expect(save.disabled).toBe(false)
+  fireEvent.click(save)
+  await within(mine).findByText('🧾')
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(within(mine).queryByText('E')).toBeNull()
+  expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ version: 1, icon: '🧾' }])
+
+  await choose(mine, 'Expenses', 'Change icon')
+  dialog = await screen.findByRole('dialog', { name: 'Icon for Expenses' })
+  expect((within(dialog).getByRole('radio', { name: '🧾' }) as HTMLInputElement).checked).toBe(true)
+  const typed = within(dialog).getByLabelText('Or type or paste an emoji')
+  fireEvent.change(typed, { target: { value: 'abc' } })
+  expect(within(dialog).getByText('Use a single emoji.')).toBeTruthy()
+  expect((within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(typed, { target: { value: '1' } })
+  expect((within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(typed, { target: { value: '🧾🧾' } })
+  expect((within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(typed, { target: { value: ' 🦄 ' } })
+  expect(within(dialog).getByText('Use a single emoji.')).toBeTruthy()
+  expect((within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(typed, { target: { value: '🧾\u200b' } })
+  expect((within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(typed, { target: { value: '🦄' } })
+  expect(within(dialog).queryByText('Use a single emoji.')).toBeNull()
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await within(mine).findByText('🦄')
+  expect(calls.filter((c) => c.method === 'PATCH').at(-1)?.body).toEqual({ version: 2, icon: '🦄' })
+
+  await choose(mine, 'Expenses', 'Change icon')
+  dialog = await screen.findByRole('dialog', { name: 'Icon for Expenses' })
+  expect((within(dialog).getByLabelText('Or type or paste an emoji') as HTMLInputElement).value).toBe('🦄')
+  fireEvent.click(within(dialog).getByRole('radio', { name: 'No icon (use initials)' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await within(mine).findByText('E')
+  expect(calls.filter((c) => c.method === 'PATCH').at(-1)?.body).toEqual({ version: 3, icon: '' })
+
+  await choose(mine, 'Expenses', 'Change icon')
+  dialog = await screen.findByRole('dialog', { name: 'Icon for Expenses' })
+  fireEvent.change(within(dialog).getByLabelText('Or type or paste an emoji'), { target: { value: '🛑' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(4))
+  expect(screen.getByRole('dialog', { name: 'Icon for Expenses' })).toBeTruthy()
+})
+
+test('the icon is changed only by someone who may design the app in a space they may write', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': {
+      body: { apps: [app({ access: { ...everything, design: false } }), app({ id: 2, name: 'Mine', icon: '🧾' })] },
+    },
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': {
+      body: { apps: [app({ id: 7, space_id: 3, name: 'Team tracker', icon: '🚚' })] },
+    },
+  })
+  render(<Routed />)
+  const mine = await screen.findByRole('region', { name: 'Private' })
+  const team = screen.getByRole('region', { name: 'Team' })
+  await within(team).findByText('Team tracker')
+  expect(within(team).getByText('🚚')).toBeTruthy()
+  expect(await menuItems(team, 'Team tracker')).not.toContain('Change icon')
+  await within(mine).findByText('Mine')
+  expect(within(mine).getByText('🧾')).toBeTruthy()
+  expect(await menuItems(mine, 'Expenses')).not.toContain('Change icon')
+  expect(await menuItems(mine, 'Mine')).toContain('Change icon')
+})
+
+test('a pin in the sidebar shows the new icon as soon as the icon is saved, with no reload', async () => {
+  let expenses = app({})
+  const pin = (icon: string) => ({
+    id: 11,
+    source: 'personal',
+    kind: 'pin',
+    space_id: 2,
+    app_id: 1,
+    app_name: 'Expenses',
+    app_icon: icon,
+    label: 'Expenses',
+    state: 'ready',
+  })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': () => ({ body: { apps: [expenses] } }),
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': { body: { apps: [] } },
+    'GET /api/workspaces/1/home': () => ({
+      body: { widgets: [], pins: [pin(expenses.icon)], hidden: [], limits: { widgets: 24, pins: 20 } },
+    }),
+    'PATCH /api/workspaces/1/spaces/2/apps/1': (call) => {
+      expenses = app({ ...expenses, version: expenses.version + 1, icon: (call.body as { icon: string }).icon })
+      return { body: expenses }
+    },
+  })
+  render(
+    <>
+      <PinnedNav workspace={1} path="/w/1/apps" />
+      <Routed />
+    </>,
+  )
+  const pinned = await screen.findByRole('region', { name: 'Pinned apps' })
+  const link = within(pinned).getByRole('link', { name: 'Expenses' })
+  expect(within(link).getByText('EX')).toBeTruthy()
+  const mine = await screen.findByRole('region', { name: 'Private' })
+  await choose(mine, 'Expenses', 'Change icon')
+  const dialog = await screen.findByRole('dialog', { name: 'Icon for Expenses' })
+  fireEvent.click(within(dialog).getByRole('radio', { name: '🧾' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await within(mine).findByText('🧾')
+  await waitFor(() =>
+    expect(within(within(pinned).getByRole('link', { name: 'Expenses' })).getByText('🧾')).toBeTruthy(),
+  )
+  expect(calls.filter((c) => c.path === '/api/workspaces/1/home')).toHaveLength(2)
+})
+
+test('an icon saved by a login that has ended tells nothing to the sidebar of the next one', async () => {
+  let answer: () => void = () => {}
+  const pin = (id: number, icon: string) => ({
+    id,
+    source: 'personal',
+    kind: 'pin',
+    space_id: 2,
+    app_id: 1,
+    app_name: 'Expenses',
+    app_icon: icon,
+    label: 'Expenses',
+    state: 'ready',
+  })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': { body: { apps: [app({})] } },
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': { body: { apps: [] } },
+    'GET /api/workspaces/1/home': {
+      body: { widgets: [], pins: [pin(11, '')], hidden: [], limits: { widgets: 24, pins: 20 } },
+    },
+    'PATCH /api/workspaces/1/spaces/2/apps/1': () =>
+      new Promise((done) => {
+        answer = () => done({ body: app({ version: 2, icon: '🧾' }) })
+      }),
+  })
+  beginSession(1)
+  const first = render(<Routed />)
+  const mine = await screen.findByRole('region', { name: 'Private' })
+  await choose(mine, 'Expenses', 'Change icon')
+  const dialog = await screen.findByRole('dialog', { name: 'Icon for Expenses' })
+  fireEvent.click(within(dialog).getByRole('radio', { name: '🧾' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(calls.some((c) => c.method === 'PATCH')).toBe(true))
+  first.unmount()
+  endSession()
+  beginSession(2)
+  render(<PinnedNav workspace={1} path="/w/1/apps" />)
+  const pinned = await screen.findByRole('region', { name: 'Pinned apps' })
+  const loads = () => calls.filter((c) => c.method === 'GET' && c.path === '/api/workspaces/1/home').length
+  const before = loads()
+  await act(async () => answer())
+  await new Promise((r) => setTimeout(r, 20))
+  expect(loads()).toBe(before)
+  expect(within(pinned).getByRole('link', { name: 'Expenses' })).toBeTruthy()
 })

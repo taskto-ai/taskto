@@ -126,7 +126,7 @@ func switchEnv(t *testing.T, enabled bool) (*turnEnv, int64, *modelCalls) {
 	e.svc.SetModelSetter(models.set)
 	e.owner.connect(cliworker.Claude)
 	e.owner.connect(cliworker.Codex)
-	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Fail: "You've hit your usage limit · resets 3pm"})
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Fail: "You've hit your usage limit · resets 3pm"})
 	e.owner.setSwitching(map[string]any{"enabled": enabled, "queue": []map[string]any{{"account": "claude"}, {"account": "codex"}}})
 	return e, e.conversation(e.owner), models
 }
@@ -155,7 +155,7 @@ func TestSwitchOnALimit(t *testing.T) {
 	if notice != "Claude Code reached its usage limit: continuing on Codex" {
 		t.Errorf("notice = %q", notice)
 	}
-	calls := clitest.Calls(t, e.layout.User(e.owner.id).Config(cliworker.Codex))
+	calls := clitest.Calls(t, e.dirs(e.owner.id).Config(cliworker.Codex))
 	var turn clitest.Call
 	for _, c := range calls {
 		if len(c.Args) > 0 && c.Args[0] == "exec" {
@@ -181,7 +181,7 @@ func TestSwitchOnALimit(t *testing.T) {
 	if d := done(e.turn(conv, turnBody{Turn: "t2", CLI: "claude", Model: "default", Prompt: "again"})); d.Status != cliworker.StatusOK {
 		t.Fatalf("next turn = %+v", d)
 	}
-	if n := len(turnCalls(t, e.layout.User(e.owner.id).Config(cliworker.Claude))); n != 1 {
+	if n := len(turnCalls(t, e.dirs(e.owner.id).Config(cliworker.Claude))); n != 1 {
 		t.Errorf("Claude ran %d turns: the limited account was tried again", n)
 	}
 
@@ -200,7 +200,7 @@ func TestNoSwitchWhenOff(t *testing.T) {
 	if d.Status != cliworker.StatusFailed || !strings.Contains(d.Text, "usage limit") {
 		t.Fatalf("done = %+v", d)
 	}
-	for _, c := range clitest.Calls(t, e.layout.User(e.owner.id).Config(cliworker.Codex)) {
+	for _, c := range clitest.Calls(t, e.dirs(e.owner.id).Config(cliworker.Codex)) {
 		if len(c.Args) > 0 && c.Args[0] == "exec" {
 			t.Fatal("Codex ran a turn with switching off")
 		}
@@ -212,7 +212,7 @@ func TestNoSwitchWhenOff(t *testing.T) {
 
 func TestSwitchOnAnExpiredLogin(t *testing.T) {
 	e, conv, _ := switchEnv(t, true)
-	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Expired: true})
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Expired: true})
 	events := e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it"})
 	if d := done(events); d.Status != cliworker.StatusOK {
 		t.Fatalf("done = %+v\n%+v", d, events)
@@ -236,10 +236,10 @@ func TestStartPastALimitedAccount(t *testing.T) {
 	if d := done(events); d.Status != cliworker.StatusOK {
 		t.Fatalf("done = %+v", d)
 	}
-	if n := len(turnCalls(t, e.layout.User(e.owner.id).Config(cliworker.Claude))); n != 0 {
+	if n := len(turnCalls(t, e.dirs(e.owner.id).Config(cliworker.Claude))); n != 0 {
 		t.Errorf("the limited account ran %d turns", n)
 	}
-	if n := len(turnCalls(t, e.layout.User(e.owner.id).ConfigOf(cliworker.Claude, "2"))); n != 1 {
+	if n := len(turnCalls(t, e.dirs(e.owner.id).ConfigOf(cliworker.Claude, "2"))); n != 1 {
 		t.Errorf("the second account ran %d turns", n)
 	}
 	found := false
@@ -260,7 +260,7 @@ func TestQueueOrdersTheAccounts(t *testing.T) {
 	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "grok-2"}, {"account": "grok"}}})
 	conv := e.conversation(e.owner)
 	e.turn(conv, turnBody{Turn: "t1", CLI: "grok", Model: "default", Prompt: "hello"})
-	if n := len(clitest.Calls(t, e.layout.User(e.owner.id).ConfigOf(cliworker.Grok, "2"))); n == 0 {
+	if n := len(clitest.Calls(t, e.dirs(e.owner.id).ConfigOf(cliworker.Grok, "2"))); n == 0 {
 		t.Error("the first account of the queue didn't run the turn")
 	}
 }
@@ -287,7 +287,7 @@ func TestSwitchSkipsAnotherWorkspacesAccount(t *testing.T) {
 
 func TestStopEndsTheChain(t *testing.T) {
 	e, conv, _ := switchEnv(t, true)
-	codex := e.layout.User(e.owner.id).Config(cliworker.Codex)
+	codex := e.dirs(e.owner.id).Config(cliworker.Codex)
 	clitest.WriteScenario(t, codex, clitest.Scenario{SleepMS: 20000})
 	turnDone := make(chan struct{})
 	go func() {

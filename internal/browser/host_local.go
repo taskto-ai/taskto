@@ -9,14 +9,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 type LocalHost struct {
-	Root string
-	Bins map[Program]string
-	Path string
+	Root  string
+	Home  func(a cliowner.Account) (string, error)
+	Found func(a cliowner.Account) (string, bool, error)
+	Bins  map[Program]string
+	Path  string
 }
 
 func FindBins(chromium string) map[Program]string {
@@ -41,21 +44,31 @@ func FindBins(chromium string) map[Program]string {
 	return bins
 }
 
-func (h *LocalHost) Paths(user int64) Paths {
-	return Paths{Root: filepath.Join(h.Root, "u"+strconv.FormatInt(user, 10), "browser")}
+func (h *LocalHost) Paths(a cliowner.Account) (Paths, error) {
+	if !a.Valid() {
+		return Paths{}, errors.New("invalid account")
+	}
+	if h.Home == nil {
+		return HomePaths(filepath.Join(h.Root, a.Identity)), nil
+	}
+	home, err := h.Home(a)
+	if err != nil {
+		return Paths{}, err
+	}
+	return HomePaths(home), nil
 }
 
 func (h *LocalHost) Bin(prog Program) string { return h.Bins[prog] }
 
-func (h *LocalHost) Start(user int64, spec ProcSpec, extra []*os.File) (*exec.Cmd, error) {
-	if user <= 0 {
-		return nil, errors.New("invalid user")
-	}
+func (h *LocalHost) Start(a cliowner.Account, spec ProcSpec, extra []*os.File) (*exec.Cmd, error) {
 	bin := h.Bins[spec.Program]
 	if bin == "" {
 		return nil, ErrUnavailable
 	}
-	p := h.Paths(user)
+	p, err := h.Paths(a)
+	if err != nil {
+		return nil, err
+	}
 	if err := Prepare(p, spec); err != nil {
 		return nil, err
 	}
@@ -79,8 +92,12 @@ func (h *LocalHost) Start(user int64, spec ProcSpec, extra []*os.File) (*exec.Cm
 	return cmd, nil
 }
 
-func (h *LocalHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteCloser, error) {
-	return DialRetry(ctx, h.Paths(user).VNCSocket())
+func (h *LocalHost) DialVNC(ctx context.Context, a cliowner.Account) (io.ReadWriteCloser, error) {
+	p, err := h.Paths(a)
+	if err != nil {
+		return nil, err
+	}
+	return DialRetry(ctx, p.VNCSocket())
 }
 
 func DialRetry(ctx context.Context, path string) (net.Conn, error) {
@@ -100,11 +117,28 @@ func DialRetry(ctx context.Context, path string) (net.Conn, error) {
 	}
 }
 
-func (h *LocalHost) Clean(user int64) error { return Clean(h.Paths(user)) }
-
-func (h *LocalHost) Purge(user int64) error {
-	if user <= 0 {
-		return errors.New("invalid user")
+func (h *LocalHost) Clean(a cliowner.Account) error {
+	p, err := h.Paths(a)
+	if err != nil {
+		return err
 	}
-	return Purge(h.Paths(user))
+	return Clean(p)
+}
+
+func (h *LocalHost) Purge(a cliowner.Account) error {
+	if a.Identity == "" {
+		return nil
+	}
+	if h.Found != nil {
+		home, ok, err := h.Found(a)
+		if err != nil || !ok {
+			return err
+		}
+		return Purge(HomePaths(home))
+	}
+	p, err := h.Paths(a)
+	if err != nil {
+		return err
+	}
+	return Purge(p)
 }

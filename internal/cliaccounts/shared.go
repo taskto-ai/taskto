@@ -155,13 +155,20 @@ func (s *Service) recordSharedLimits(ctx context.Context, id int64, limits []cli
 }
 
 func (s *Service) usageRow(ctx context.Context, user int64, a sharedRow) (row, error) {
+	r, err := scanRow(s.db.QueryRowContext(ctx, `SELECT `+rowColumns+` FROM cli_accounts WHERE user_id = ? AND shared_account_id = ?`, user, a.ID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return row{state: Connected, ref: ref{cli: a.CLI, slot: sharedSlot(a.ID)}}, nil
+	}
+	r.ref = ref{cli: a.CLI, slot: sharedSlot(a.ID)}
+	return r, err
+}
+
+func (s *Service) createUsageRow(ctx context.Context, user int64, a sharedRow) (row, error) {
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO cli_accounts (user_id, cli, slot, state, shared_account_id)
 		VALUES (?, ?, NULL, 'connected', ?) ON CONFLICT (user_id, shared_account_id) DO NOTHING`, user, string(a.CLI), a.ID); err != nil {
 		return row{}, err
 	}
-	r, err := scanRow(s.db.QueryRowContext(ctx, `SELECT `+rowColumns+` FROM cli_accounts WHERE user_id = ? AND shared_account_id = ?`, user, a.ID))
-	r.ref = ref{cli: a.CLI, slot: sharedSlot(a.ID)}
-	return r, err
+	return s.usageRow(ctx, user, a)
 }
 
 func sharedSlot(id int64) cliworker.Slot { return cliworker.Slot("s" + strconv.FormatInt(id, 10)) }

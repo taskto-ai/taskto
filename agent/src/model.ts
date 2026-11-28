@@ -1,6 +1,8 @@
 import type { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
+import { testHooks } from './test-hooks.js'
+
 export const SCRIPT_MODEL_ID = 'script-1'
 
 export const TOKENS_PER_SECOND_ENV = 'TASKTO_AGENT_SCRIPT_TOKENS_PER_SECOND'
@@ -35,11 +37,22 @@ export function installScriptModel(models: ReturnType<typeof createModels>, prov
     if (last?.role === 'toolResult') {
       return fauxAssistantMessage(fauxText(`finished ${last.toolName}: ${textOf(last.content)}`))
     }
-    const text = textOf(last?.content)
+    const written = textOf(last?.content)
+    const failing = testHooks.scriptFailures
+      ? /^fail:(?<on>[a-z0-9-]+)(?:;(?<then>.*))?$/s.exec(written.trim())?.groups
+      : undefined
+    if (failing?.on === provider) {
+      return fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'rate limit reached' })
+    }
+    const text = failing?.then ?? written
     if (text.trim() === 'system') {
       const sections: Record<string, string> = {}
       for (const m of context.messages) if (m.role === 'system') Object.assign(sections, m.sections)
       return fauxAssistantMessage(fauxText(`system: ${Object.values(sections).join('\n')}`))
+    }
+    if (text.trim() === 'context') {
+      const seen = context.messages.filter((m) => m.role !== 'system').map((m) => `${m.role}=${textOf(m.content)}`)
+      return fauxAssistantMessage(fauxText(`context: ${seen.join(' | ')}`))
     }
     const call = /^tool:(?<name>[a-z_]+):(?<ms>\d+)$/.exec(text.trim())?.groups
     if (call?.name && call.ms) {
