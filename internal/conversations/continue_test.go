@@ -168,6 +168,19 @@ func TestContinueOfAStaleFailureIsRefused(t *testing.T) {
 	}
 }
 
+func TestContinueBehindAQueuedMessageIsRefusedWithItsOwnCode(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	e.rt.mu.Lock()
+	e.rt.err = &agentrt.StatusError{Code: 409, Message: "messages are queued behind the failed reply", Reason: "queued"}
+	e.rt.mu.Unlock()
+	rec := owner.expect(http.StatusConflict, http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("script", "script-1", 7))
+	if code := decode[map[string]string](t, rec)["code"]; code != string(apierr.CodeConversationQueued) {
+		t.Fatalf("code = %q, want %q", code, apierr.CodeConversationQueued)
+	}
+}
+
 func TestContinueOnAModelTheOwnerCannotRunIsRefusedBeforeTheRuntime(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()

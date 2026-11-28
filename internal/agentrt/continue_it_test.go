@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -392,8 +393,9 @@ func TestAnEntryThatAContinueConsumedIsNotContinuedAgainWhenTheRunAddedNoEntry(t
 }
 
 type turnRecorder struct {
-	mu     sync.Mutex
-	pinned []bool
+	mu      sync.Mutex
+	pinned  []bool
+	prompts []string
 }
 
 func (r *turnRecorder) serve(t *testing.T) string {
@@ -411,11 +413,13 @@ func (r *turnRecorder) serve(t *testing.T) string {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /cli/turn", func(w http.ResponseWriter, req *http.Request) {
 		var body struct {
-			Pinned bool `json:"pinned"`
+			Pinned bool   `json:"pinned"`
+			Prompt string `json:"prompt"`
 		}
 		_ = json.NewDecoder(req.Body).Decode(&body)
 		r.mu.Lock()
 		r.pinned = append(r.pinned, body.Pinned)
+		r.prompts = append(r.prompts, body.Prompt)
 		r.mu.Unlock()
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		_, _ = w.Write([]byte(`{"seq":1,"type":"done","status":"ok","text":"ok"}` + "\n"))
@@ -424,6 +428,12 @@ func (r *turnRecorder) serve(t *testing.T) string {
 	go func() { _ = srv.Serve(l) }()
 	t.Cleanup(func() { srv.Close() })
 	return path
+}
+
+func (r *turnRecorder) asked() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.prompts...)
 }
 
 func (r *turnRecorder) seen() []bool {
@@ -472,5 +482,297 @@ func TestACLITurnOfAContinuedRunSaysItIsPinnedAndALaterOneDoesNot(t *testing.T) 
 	}
 	if got := rec.seen(); len(got) != 2 || !got[0] || got[1] {
 		t.Fatalf("the CLI turns said pinned = %v, want [true false]: the continued run's, then an ordinary message's", got)
+	}
+}
+
+func cliSidecar(t *testing.T, rec *turnRecorder) *sidecar {
+	t.Helper()
+	config := map[string]any{"providers": []any{
+		map[string]any{"id": "script", "kind": "script"},
+		map[string]any{"id": "cli-claude", "kind": "cli", "name": "Claude Code", "cli": "claude", "models": []any{map[string]any{"id": "default", "name": "Default"}}},
+	}}
+	path := filepath.Join(t.TempDir(), "providers.json")
+	if err := os.WriteFile(path, []byte(mustJSON(config)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return startSidecar(t, "TASKTO_AGENT_PROVIDERS="+path, "TASKTO_AGENT_TOOLS_SOCKET="+rec.serve(t))
+}
+
+func TestAFailureAfterAFinishedToolCallIsContinuedOnACLIWithTheToolResult(t *testing.T) {
+	rec := &turnRecorder{}
+	s := cliSidecar(t, rec)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := "fail-after-tool:script;tool:pause_safe:200"
+	failed, err := s.client.Submit(ctx, conv, Input{Content: request, Capability: "cap"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, failed); err != nil || settled.Reason != "model_error" {
+		t.Fatalf("the request settled %+v, %v; want model_error after its tool call finished", settled, err)
+	}
+	sub, _, err := s.client.Continue(ctx, conv, ModelRef{Provider: "cli-claude", ModelID: "default"}, lastEntryID(t, s.client, conv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	}
+	prompts := rec.asked()
+	if len(prompts) != 1 {
+		t.Fatalf("the CLI worker ran %d turns, want 1", len(prompts))
+	}
+	for _, want := range []string{request, `{"tool":"pause_safe","result":"paused 200ms"}`} {
+		if !strings.Contains(prompts[0], want) {
+			t.Fatalf("the CLI's prompt %q lacks %q", prompts[0], want)
+		}
+	}
+}
+
+func TestASteerPlacedDuringAFailedRunIsContinuedOnACLIWithEveryRequestAndResult(t *testing.T) {
+	for name, languages := range map[string][2]string{
+		"one language":   {"", ""},
+		"language moved": {"en", "pt-BR"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &turnRecorder{}
+			s := cliSidecar(t, rec)
+			ctx := ctxFor(t)
+			conv, err := s.client.CreateConversation(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w, err := s.client.Watch(ctx, conv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.Close()
+			first, err := s.client.Submit(ctx, conv, Input{Content: "tool:pause_safe:1000", Capability: "cap", Language: languages[0]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitForOps(t, w, "waited 200ms")
+			steer := "fail-after-tool:script;tool:pause_safe:200"
+			second, err := s.client.Submit(ctx, conv, Input{Content: steer, Capability: "cap", Language: languages[1], WhenBusy: "steer"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range []int64{first, second} {
+				if settled, err := s.client.Wait(ctx, id); err != nil || settled.Reason != "model_error" {
+					t.Fatalf("submission %d settled %+v, %v; want model_error in the same run", id, settled, err)
+				}
+			}
+			sub, _, err := s.client.Continue(ctx, conv, ModelRef{Provider: "cli-claude", ModelID: "default"}, lastEntryID(t, s.client, conv))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+				t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+			}
+			prompts := rec.asked()
+			if len(prompts) != 1 {
+				t.Fatalf("the CLI worker ran %d turns, want 1", len(prompts))
+			}
+			for _, want := range []string{"tool:pause_safe:1000", steer, `{"tool":"pause_safe","result":"paused 1000ms"}`, `{"tool":"pause_safe","result":"paused 200ms"}`} {
+				if !strings.Contains(prompts[0], want) {
+					t.Fatalf("the CLI's prompt %q lacks %q", prompts[0], want)
+				}
+			}
+		})
+	}
+}
+
+func TestACLITurnStartsAtItsOwnRequestNotAtAnEarlierFailedRun(t *testing.T) {
+	const earlier = "fail-after-tool:script;tool:pause_safe:200"
+	cli := ModelRef{Provider: "cli-claude", ModelID: "default"}
+	failEarlier := func(t *testing.T, s *sidecar, conv int64) {
+		t.Helper()
+		id, err := s.client.Submit(ctxFor(t), conv, Input{Content: earlier, Capability: "cap"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settled, err := s.client.Wait(ctxFor(t), id); err != nil || settled.Reason != "model_error" {
+			t.Fatalf("the earlier request settled %+v, %v; want model_error after its tool call finished", settled, err)
+		}
+	}
+	check := func(t *testing.T, rec *turnRecorder) {
+		t.Helper()
+		prompts := rec.asked()
+		if len(prompts) != 1 {
+			t.Fatalf("the CLI worker ran %d turns, want 1", len(prompts))
+		}
+		if !strings.Contains(prompts[0], "only the new request") {
+			t.Fatalf("the CLI's prompt %q lacks the new request", prompts[0])
+		}
+		for _, unwanted := range []string{earlier, "pause_safe", "paused 200ms"} {
+			if strings.Contains(prompts[0], unwanted) {
+				t.Fatalf("the CLI's prompt %q carries %q of an earlier, separate run", prompts[0], unwanted)
+			}
+		}
+	}
+
+	t.Run("a new message sent on the CLI after a failed run", func(t *testing.T) {
+		rec := &turnRecorder{}
+		s := cliSidecar(t, rec)
+		ctx := ctxFor(t)
+		conv, err := s.client.CreateConversation(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		failEarlier(t, s, conv)
+		if err := s.client.SetModel(ctx, conv, cli); err != nil {
+			t.Fatal(err)
+		}
+		id, err := s.client.Submit(ctx, conv, Input{Content: "only the new request", Capability: "cap"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settled, err := s.client.Wait(ctx, id); err != nil || settled.Status != "done" {
+			t.Fatalf("the new request settled %+v, %v; want done", settled, err)
+		}
+		check(t, rec)
+	})
+
+	t.Run("a second failed run continued on the CLI", func(t *testing.T) {
+		rec := &turnRecorder{}
+		s := cliSidecar(t, rec)
+		ctx := ctxFor(t)
+		conv, err := s.client.CreateConversation(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		failEarlier(t, s, conv)
+		id, err := s.client.Submit(ctx, conv, Input{Content: "fail:script;only the new request", Capability: "cap"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settled, err := s.client.Wait(ctx, id); err != nil || settled.Reason != "model_error" {
+			t.Fatalf("the new request settled %+v, %v; want its own model_error", settled, err)
+		}
+		sub, _, err := s.client.Continue(ctx, conv, cli, lastEntryID(t, s.client, conv))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+			t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+		}
+		check(t, rec)
+	})
+}
+
+func answered(t *testing.T, s *sidecar, conv int64, text string) bool {
+	t.Helper()
+	msgs, err := s.client.Messages(ctxFor(t), conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range msgs {
+		if m.Role == "assistant" && m.Text == text {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAContinueNeverPlacesAFollowUpQueuedBehindTheFailedRequest(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.client.Watch(ctx, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	failed, err := s.client.Submit(ctx, conv, Input{Content: "fail-after-tool:script;tool:pause_safe:1000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForOps(t, w, "waited 200ms")
+	queued, err := s.client.Submit(ctx, conv, Input{Content: "second question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, failed); err != nil || settled.Reason != "model_error" {
+		t.Fatalf("the first request settled %+v, %v; want model_error", settled, err)
+	}
+	after := lastEntryID(t, s.client, conv)
+	if _, _, err := s.client.Continue(ctx, conv, backupModel, after); conflictReason(err) != "queued" {
+		t.Fatalf("a continue with a follow-up queued behind the failure: err = %v, want a 409 with reason queued", err)
+	}
+	if now := lastEntryID(t, s.client, conv); now != after {
+		t.Fatalf("the refused continue added entry %d after %d", now, after)
+	}
+	if answered(t, s, conv, "echo: second question") {
+		t.Fatal("the refused continue answered the queued follow-up")
+	}
+	third, err := s.client.Submit(ctx, conv, Input{Content: "third question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{queued, third} {
+		if settled, err := s.client.Wait(ctx, id); err != nil || settled.Status != "done" {
+			t.Fatalf("submission %d settled %+v, %v; want done", id, settled, err)
+		}
+	}
+	if !answered(t, s, conv, "echo: second question") {
+		t.Fatal("the follow-up that stayed queued was never answered")
+	}
+}
+
+func TestAContinueOfARunningConversationWithAQueuedMessageIsBusyNotQueued(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.client.Watch(ctx, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	running, err := s.client.Submit(ctx, conv, Input{Content: "tool:pause_safe:30000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForOps(t, w, "waited 200ms")
+	queued, err := s.client.Submit(ctx, conv, Input{Content: "second question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.client.Continue(ctx, conv, backupModel, lastEntryID(t, s.client, conv)); conflictReason(err) != "busy" {
+		t.Fatalf("a continue while a run is going and a message waits behind it: err = %v, want a 409 with reason busy", err)
+	}
+	if err := s.client.Abort(ctx, conv); err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for _, id := range []int64{running, queued} {
+		if _, err := s.client.Wait(waitCtx, id); err != nil {
+			t.Fatalf("submission %d did not settle: %v", id, err)
+		}
+	}
+}
+
+func TestAContinueOfTheFailedRequestRetriesItWhenNothingIsQueued(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv := failedConversationOf(t, s, "fail-after-tool:script;tool:pause_safe:200")
+	sub, _, err := s.client.Continue(ctx, conv, backupModel, lastEntryID(t, s.client, conv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	}
+	if got := lastAssistant(t, s.client, conv); got != "finished pause_safe: paused 200ms" {
+		t.Fatalf("the retried request answered %q, want the tool's result used by the backup model", got)
 	}
 }
