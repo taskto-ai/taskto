@@ -25,6 +25,7 @@ import (
 	"taskto.ai/taskto/internal/export"
 	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/live"
 	"taskto.ai/taskto/internal/mail"
 	"taskto.ai/taskto/internal/mcpserver"
 	"taskto.ai/taskto/internal/notifications"
@@ -45,6 +46,7 @@ type Options struct {
 	Providers        *providers.Service
 	Search           *search.Index
 	Conversations    *conversations.Service
+	Live             *live.Hub
 	Tools            *agenttools.Service
 	CLIAccounts      *cliaccounts.Service
 	Dictation        *dictation.Service
@@ -88,6 +90,10 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	desk.New(sqlDB).Routes(mux, accounts)
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)
+	if opts.Live != nil {
+		opts.Live.UseSessions(accounts.WatchSession)
+		spaces.OnMemberRemoved(opts.Live.EndUserIn)
+	}
 	boardSvc := boards.New(sqlDB, spaces)
 	if opts.Scheduler != nil {
 		boardSvc.WithScheduler(opts.Scheduler)

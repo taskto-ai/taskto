@@ -783,9 +783,21 @@ type appFile struct {
 type appInfo struct {
 	ID         int64   `json:"id"`
 	Name       string  `json:"name"`
+	Icon       string  `json:"icon"`
 	ArchivedAt *string `json:"archived_at"`
 	CreatedAt  string  `json:"created_at"`
 	UpdatedAt  string  `json:"updated_at"`
+}
+
+func newAppFile(got apps.ExportedApp, shared bool) appFile {
+	file := appFile{App: appInfo{ID: got.App.ID, Name: got.App.Name, Icon: got.App.Icon, ArchivedAt: got.App.ArchivedAt, CreatedAt: got.App.CreatedAt, UpdatedAt: got.App.UpdatedAt}, Rows: got.Rows}
+	if shared {
+		file.Live = got.Live
+	}
+	if file.Rows == nil {
+		file.Rows = []map[string]any{}
+	}
+	return file
 }
 
 func (ex *run) privateApps(ctx context.Context) error {
@@ -825,13 +837,7 @@ func (ex *run) apps(ctx context.Context, p place) error {
 		if err != nil {
 			return fmt.Errorf("reading an app's records: %w", err)
 		}
-		file := appFile{App: appInfo{ID: got.App.ID, Name: got.App.Name, ArchivedAt: got.App.ArchivedAt, CreatedAt: got.App.CreatedAt, UpdatedAt: got.App.UpdatedAt}, Rows: got.Rows}
-		if p.shared {
-			file.Live = got.Live
-		}
-		if file.Rows == nil {
-			file.Rows = []map[string]any{}
-		}
+		file := newAppFile(got, p.shared)
 		name := ex.names.claim(p.path("apps", cleanElem(strconv.FormatInt(got.App.ID, 10)+"-"+slug(got.App.Name), maxElemBytes)+".json")...)
 		if err := ex.json(name, file); err != nil {
 			return err

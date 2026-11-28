@@ -38,6 +38,7 @@ export type Download = Scope & {
   key: string
   user: number
   name: string
+  icon?: string
   release: number
   definition: OfflineApp['definition']
   messages: unknown[]

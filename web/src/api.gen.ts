@@ -8,6 +8,7 @@ export type App = {
   id: number
   space_id: number
   name: string
+  icon: string
   archived_at: string | null
   version: number
   rows: number
@@ -438,6 +439,7 @@ export type AvailableApp = {
   space_kind: string
   app_id: number
   name: string
+  icon: string
   widgets: Widget[]
   pin: Pin | null
   can_set_defaults: boolean
@@ -540,6 +542,10 @@ export type Comment = {
   mentions: BoardsMentionedPerson[]
 }
 
+export type ContinueModels = {
+  providers: ProvidersChoice[] | null
+}
+
 export type Conversation = {
   id: number
   workspace_id: number
@@ -548,6 +554,11 @@ export type Conversation = {
   created_at: string
   updated_at: string
   cli_permissions: string
+}
+
+export type ConversationsModelRef = {
+  provider: string
+  model_id: string
 }
 
 export type DeletionReply = {
@@ -623,6 +634,7 @@ export type HomeItem = {
   space_id: number
   app_id: number
   app_name: string
+  app_icon?: string
   widget_id?: string
   widget?: Widget
   label?: string
@@ -765,6 +777,7 @@ export type OfflineApp = {
   app_id: number
   space_id: number
   name: string
+  icon: string
   release: number
   definition: AppsOfflineDefinition
   messages: (Record<string, unknown> | null)[]
@@ -788,6 +801,19 @@ export type PendingDeletion = {
 export type Pin = {
   label: string
   screen?: string
+}
+
+export type ProvidersChoice = {
+  provider: string
+  name: string
+  scope: string
+  account?: number
+  models: ProvidersModelChoice[] | null
+}
+
+export type ProvidersModelChoice = {
+  id: string
+  name: string
 }
 
 export type RecordVersion = {
@@ -881,6 +907,11 @@ export type SearchSegment = {
   match?: boolean
 }
 
+export type SendReply = {
+  submission_id: number
+  model?: ConversationsModelRef
+}
+
 export type Skill = {
   id: number
   scope: string
@@ -916,6 +947,11 @@ export type SpaceIntegration = {
   display_name: string
   kind: string
   status: string
+}
+
+export type SubmissionReply = {
+  submission_id: number
+  model: ConversationsModelRef
 }
 
 export type Token = {

@@ -16,6 +16,7 @@ import (
 	"taskto.ai/taskto/internal/config"
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/drain"
+	"taskto.ai/taskto/internal/live"
 	"taskto.ai/taskto/internal/lockfile"
 	"taskto.ai/taskto/internal/serverkey"
 )
@@ -102,7 +103,7 @@ func TestRunShutdownJoinsRequestsInFlight(t *testing.T) {
 	started := make(chan struct{})
 	var queryErr atomic.Value
 	var finished atomic.Bool
-	wrapHandler = func(h http.Handler, sqlDB *sql.DB) http.Handler {
+	wrapHandler = func(h http.Handler, sqlDB *sql.DB, _ *live.Hub) http.Handler {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/test-slow", func(_ http.ResponseWriter, r *http.Request) {
 			close(started)
@@ -203,7 +204,7 @@ func TestRunKeepsTheDataLockWhenAHandlerIsStuck(t *testing.T) {
 	shutdownGrace, handlerWait = 50*time.Millisecond, 100*time.Millisecond
 
 	started, release := make(chan struct{}), make(chan struct{})
-	wrapHandler = func(h http.Handler, _ *sql.DB) http.Handler {
+	wrapHandler = func(h http.Handler, _ *sql.DB, _ *live.Hub) http.Handler {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/test-stuck", func(http.ResponseWriter, *http.Request) {
 			close(started)
@@ -284,7 +285,7 @@ func TestRunDrainsWhenTheListenerFails(t *testing.T) {
 	started := make(chan struct{})
 	var queryErr atomic.Value
 	var finished atomic.Bool
-	wrapHandler = func(h http.Handler, sqlDB *sql.DB) http.Handler {
+	wrapHandler = func(h http.Handler, sqlDB *sql.DB, _ *live.Hub) http.Handler {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/test-slow", func(_ http.ResponseWriter, r *http.Request) {
 			close(started)
@@ -326,5 +327,70 @@ func TestRunDrainsWhenTheListenerFails(t *testing.T) {
 	}
 	if p, _ := queryErr.Load().(*error); p == nil || *p != nil {
 		t.Fatalf("the request's query during shutdown failed: %v", p)
+	}
+}
+
+func TestRunEndsALiveStreamWhenItShutsDown(t *testing.T) {
+	oldGrace, oldWrap := shutdownGrace, wrapHandler
+	t.Cleanup(func() { shutdownGrace, wrapHandler = oldGrace, oldWrap })
+	shutdownGrace = time.Minute
+
+	subscribed, ended := make(chan struct{}), make(chan struct{})
+	wrapHandler = func(h http.Handler, _ *sql.DB, hub *live.Hub) http.Handler {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/test-live", func(w http.ResponseWriter, _ *http.Request) {
+			events, _, unsubscribe, err := hub.Subscribe(context.Background(), live.Topic{Kind: "room", SpaceID: 1, Generation: 1, ResourceID: 1}, 1)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			defer unsubscribe()
+			w.WriteHeader(http.StatusOK)
+			_ = http.NewResponseController(w).Flush()
+			close(subscribed)
+			for range events {
+			}
+			close(ended)
+		})
+		mux.Handle("/", h)
+		return mux
+	}
+
+	cfg := config.Default()
+	cfg.Addr = "127.0.0.1:0"
+	cfg.DataDir = filepath.Join(t.TempDir(), "data")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	addrc := make(chan net.Addr, 1)
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfg, func(a net.Addr) { addrc <- a }) }()
+	var addr net.Addr
+	select {
+	case addr = <-addrc:
+	case err := <-done:
+		t.Fatalf("run returned before listening: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("run didn't start listening")
+	}
+	getAsync(addr, "/test-live")
+	select {
+	case <-subscribed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stream never subscribed")
+	}
+
+	cancel()
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("shutdown did not end the live stream: the hub is not registered to end its streams")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run after cancel: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("run didn't stop after cancel")
 	}
 }

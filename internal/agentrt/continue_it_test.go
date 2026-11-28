@@ -1,0 +1,476 @@
+package agentrt
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+)
+
+func twoScriptModels(t *testing.T) []string {
+	t.Helper()
+	config := map[string]any{"providers": []any{
+		map[string]any{"id": "script", "kind": "script"},
+		map[string]any{"id": "backup", "kind": "script", "name": "Backup"},
+	}}
+	path := filepath.Join(t.TempDir(), "providers.json")
+	if err := os.WriteFile(path, []byte(mustJSON(config)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return []string{"TASKTO_AGENT_PROVIDERS=" + path}
+}
+
+func conflictReason(err error) string {
+	var se *StatusError
+	if errors.As(err, &se) && se.Code == 409 {
+		return se.Reason
+	}
+	return ""
+}
+
+var (
+	scriptModel = ModelRef{Provider: "script", ModelID: "script-1"}
+	backupModel = ModelRef{Provider: "backup", ModelID: "script-1"}
+)
+
+func lastEntryID(t *testing.T, c *Client, conv int64) int64 {
+	t.Helper()
+	raw, err := c.Entries(ctxFor(t), conv, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page struct {
+		Entries []struct {
+			ID    int64 `json:"id"`
+			Model []struct {
+				Role     string `json:"role"`
+				Provider string `json:"provider"`
+			} `json:"model"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(raw, &page); err != nil || len(page.Entries) == 0 {
+		t.Fatalf("entries %s: %v", raw, err)
+	}
+	return page.Entries[len(page.Entries)-1].ID
+}
+
+func lastAssistantProvider(t *testing.T, c *Client, conv int64) string {
+	t.Helper()
+	raw, err := c.Entries(ctxFor(t), conv, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page struct {
+		Entries []struct {
+			Model []struct {
+				Role     string `json:"role"`
+				Provider string `json:"provider"`
+			} `json:"model"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(raw, &page); err != nil {
+		t.Fatal(err)
+	}
+	for i := len(page.Entries) - 1; i >= 0; i-- {
+		for j := len(page.Entries[i].Model) - 1; j >= 0; j-- {
+			if m := page.Entries[i].Model[j]; m.Role == "assistant" {
+				return m.Provider
+			}
+		}
+	}
+	t.Fatalf("no assistant message in %s", raw)
+	return ""
+}
+
+func failedConversation(t *testing.T, s *sidecar) int64 {
+	t.Helper()
+	return failedConversationOf(t, s, "fail:script")
+}
+
+func failedConversationOf(t *testing.T, s *sidecar, prompt string) int64 {
+	t.Helper()
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := s.client.Submit(ctx, conv, Input{Content: prompt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, failed); err != nil || settled.Status != "unanswered" || settled.Reason != "model_error" {
+		t.Fatalf("the failing request settled %+v, %v; want unanswered with model_error", settled, err)
+	}
+	return conv
+}
+
+func TestContinueAfterAFailedReplyAnswersOnTheModelItWasGiven(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv := failedConversation(t, s)
+	sub, _, err := s.client.Continue(ctx, conv, backupModel, lastEntryID(t, s.client, conv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	}
+	if got := lastAssistant(t, s.client, conv); got != "echo: fail:script" {
+		t.Fatalf("the answer after the continue = %q, want the request answered again on the new model", got)
+	}
+	if got := lastAssistantProvider(t, s.client, conv); got != "backup" {
+		t.Fatalf("the answer came from %q, want backup", got)
+	}
+}
+
+func TestContinueRunsOnItsOwnModelWhateverIsWrittenBeforeItsCommit(t *testing.T) {
+	s := startSidecar(t, append(twoScriptModels(t), "TASKTO_AGENT_TEST_CONTINUE_PAUSE_MS=1500")...)
+	ctx := ctxFor(t)
+	conv := failedConversation(t, s)
+	after := lastEntryID(t, s.client, conv)
+	done := make(chan error, 1)
+	var sub int64
+	go func() {
+		var err error
+		sub, _, err = s.client.Continue(ctx, conv, backupModel, after)
+		done <- err
+	}()
+	waitForOutput(t, s, "test: the continue is waiting before its commit")
+	if err := s.client.SetModel(ctx, conv, scriptModel); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	}
+	if got := lastAssistantProvider(t, s.client, conv); got != "backup" {
+		t.Fatalf("the continuation ran on %q after another tab chose script, want backup", got)
+	}
+}
+
+func TestContinueOfAFailureThatMovedOnIsRefusedAndStartsNothing(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv := failedConversation(t, s)
+	stale := lastEntryID(t, s.client, conv)
+	again, err := s.client.Submit(ctx, conv, Input{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, again); err != nil || settled.Status != "done" {
+		t.Fatalf("the next request settled %+v, %v; want done", settled, err)
+	}
+	before := lastEntryID(t, s.client, conv)
+	if before == stale {
+		t.Fatal("the next request wrote no entry")
+	}
+	if _, _, err := s.client.Continue(ctx, conv, scriptModel, stale); conflictReason(err) != "moved" {
+		t.Fatalf("a continue of a failure the conversation moved past: err = %v, want a 409 with reason moved", err)
+	}
+	if after := lastEntryID(t, s.client, conv); after != before {
+		t.Fatalf("a refused continue changed the conversation: last entry %d, was %d", after, before)
+	}
+	if got, err := s.client.Model(ctx, conv); err != nil || got != scriptModel {
+		t.Fatalf("a refused continue changed the model to %+v, %v; want script", got, err)
+	}
+}
+
+func addNote(t *testing.T, s *sidecar, conv int64) int64 {
+	t.Helper()
+	if _, err := s.client.Note(ctxFor(t), conv, NoteInput{Text: "a private note", Author: 7}); err != nil {
+		t.Fatal(err)
+	}
+	return lastEntryID(t, s.client, conv)
+}
+
+func TestAPrivateNoteDoesNotMoveTheFailureAContinueAnswers(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv := failedConversation(t, s)
+	failure := lastEntryID(t, s.client, conv)
+	note := addNote(t, s, conv)
+	if note == failure {
+		t.Fatal("the note wrote no entry")
+	}
+	if _, _, err := s.client.Continue(ctx, conv, backupModel, note); conflictReason(err) != "moved" {
+		t.Fatalf("a continue after the note's entry: err = %v, want a 409 with reason moved: the note is not the failed reply", err)
+	}
+	sub, _, err := s.client.Continue(ctx, conv, backupModel, failure)
+	if err != nil {
+		t.Fatalf("a continue of the failed reply with a note after it: %v", err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	}
+}
+
+func TestAPrivateNoteDoesNotReopenAFailureAContinueConsumed(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered, err := s.client.Submit(ctx, conv, Input{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, answered); err != nil || settled.Status != "done" {
+		t.Fatalf("the request settled %+v, %v; want done", settled, err)
+	}
+	reply := lastEntryID(t, s.client, conv)
+	first, _, err := s.client.Continue(ctx, conv, backupModel, reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, first); err != nil || settled.Status != "unanswered" {
+		t.Fatalf("the continue settled %+v, %v; want unanswered", settled, err)
+	}
+	note := addNote(t, s, conv)
+	for _, entry := range []int64{note, reply} {
+		if _, _, err := s.client.Continue(ctx, conv, backupModel, entry); conflictReason(err) != "moved" {
+			t.Fatalf("a continue of entry %d after a continue consumed the reply %d and a note came: err = %v, want a 409 with reason moved", entry, reply, err)
+		}
+	}
+}
+
+func TestContinueOnTheProductionEntryEchoesAFailurePrompt(t *testing.T) {
+	s := startSidecarAt(t, productionEntry)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := s.client.Submit(ctx, conv, Input{Content: "fail:script"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("a failure prompt on the production entry settled %+v, %v; want done", settled, err)
+	}
+	if got := lastAssistant(t, s.client, conv); got != "echo: fail:script" {
+		t.Fatalf("the production entry answered %q, want an echo", got)
+	}
+}
+
+func TestContinueOfABusyConversationIsRefusedAndStartsNothing(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.client.Watch(ctx, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	running, err := s.client.Submit(ctx, conv, Input{Content: "tool:pause_safe:30000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForOps(t, w, "waited 200ms")
+	if _, _, err := s.client.Continue(ctx, conv, backupModel, lastEntryID(t, s.client, conv)); conflictReason(err) != "busy" {
+		t.Fatalf("continue while a run is going: err = %v, want a 409 with reason busy", err)
+	}
+	if got, err := s.client.Model(ctx, conv); err != nil || got != scriptModel {
+		t.Fatalf("a refused continue changed the running conversation's model to %+v, %v; want script", got, err)
+	}
+	if err := s.client.Abort(ctx, conv); err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if settled, err := s.client.Wait(waitCtx, running); err != nil || settled.Status != "unanswered" {
+		t.Fatalf("the running submission = %+v, %v; want unanswered", settled, err)
+	}
+}
+
+func TestContinueOfARetiredOrUnknownConversationIsNotFound(t *testing.T) {
+	s := startSidecar(t)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.RetireConversation(ctx, conv); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.client.Continue(ctx, conv, scriptModel, 1); !notFound(err) {
+		t.Fatalf("continue of a retired conversation: err = %v, want a 404", err)
+	}
+	if _, _, err := s.client.Continue(ctx, conv+1000, scriptModel, 1); !notFound(err) {
+		t.Fatalf("continue of an unknown conversation: err = %v, want a 404", err)
+	}
+}
+
+func TestContinueOvertakenByARetireStartsNoRun(t *testing.T) {
+	s := startSidecar(t, "TASKTO_AGENT_TEST_CONTINUE_PAUSE_MS=600")
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed := make(chan error, 1)
+	go func() {
+		_, _, err := s.client.Continue(ctx, conv, scriptModel, 1)
+		resumed <- err
+	}()
+	waitForOutput(t, s, "test: the continue is waiting before its commit")
+	if err := s.client.RetireConversation(ctx, conv); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-resumed; !notFound(err) {
+		t.Fatalf("a continue the retire overtook: err = %v, want a 404", err)
+	}
+}
+
+func TestAContinuedRunKeepsItsModelWhileItIsRunning(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv := failedConversationOf(t, s, "fail:script;tool:pause_safe:1500")
+	w, err := s.client.Watch(ctx, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	sub, _, err := s.client.Continue(ctx, conv, backupModel, lastEntryID(t, s.client, conv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForOps(t, w, "waited 200ms")
+	if err := s.client.SetModel(ctx, conv, scriptModel); conflictReason(err) != "busy" {
+		t.Fatalf("a model write while the continued run is going: err = %v, want a 409 with reason busy", err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	}
+	if got := lastAssistantProvider(t, s.client, conv); got != "backup" {
+		t.Fatalf("the generation after the tool ran on %q, want the continue's backup", got)
+	}
+	if err := s.client.SetModel(ctx, conv, scriptModel); err != nil {
+		t.Fatalf("a model write once the continued run ended: %v", err)
+	}
+}
+
+func TestAnEntryThatAContinueConsumedIsNotContinuedAgainWhenTheRunAddedNoEntry(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered, err := s.client.Submit(ctx, conv, Input{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, answered); err != nil || settled.Status != "done" {
+		t.Fatalf("the request settled %+v, %v; want done", settled, err)
+	}
+	after := lastEntryID(t, s.client, conv)
+	first, _, err := s.client.Continue(ctx, conv, backupModel, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, first); err != nil || settled.Status != "unanswered" {
+		t.Fatalf("the continue of an answered conversation settled %+v, %v; want unanswered", settled, err)
+	}
+	if now := lastEntryID(t, s.client, conv); now != after {
+		t.Fatalf("the continue added entry %d: this test needs a run that adds none", now)
+	}
+	if _, _, err := s.client.Continue(ctx, conv, backupModel, after); conflictReason(err) != "moved" {
+		t.Fatalf("a second continue of the entry the first one consumed: err = %v, want a 409 with reason moved", err)
+	}
+}
+
+type turnRecorder struct {
+	mu     sync.Mutex
+	pinned []bool
+}
+
+func (r *turnRecorder) serve(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "tt-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, "t.sock")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /cli/turn", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			Pinned bool `json:"pinned"`
+		}
+		_ = json.NewDecoder(req.Body).Decode(&body)
+		r.mu.Lock()
+		r.pinned = append(r.pinned, body.Pinned)
+		r.mu.Unlock()
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = w.Write([]byte(`{"seq":1,"type":"done","status":"ok","text":"ok"}` + "\n"))
+	})
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(l) }()
+	t.Cleanup(func() { srv.Close() })
+	return path
+}
+
+func (r *turnRecorder) seen() []bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]bool(nil), r.pinned...)
+}
+
+func TestACLITurnOfAContinuedRunSaysItIsPinnedAndALaterOneDoesNot(t *testing.T) {
+	rec := &turnRecorder{}
+	socket := rec.serve(t)
+	config := map[string]any{"providers": []any{
+		map[string]any{"id": "script", "kind": "script"},
+		map[string]any{"id": "cli-claude", "kind": "cli", "name": "Claude Code", "cli": "claude", "models": []any{map[string]any{"id": "default", "name": "Default"}}},
+	}}
+	path := filepath.Join(t.TempDir(), "providers.json")
+	if err := os.WriteFile(path, []byte(mustJSON(config)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := startSidecar(t, "TASKTO_AGENT_PROVIDERS="+path, "TASKTO_AGENT_TOOLS_SOCKET="+socket)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := s.client.Submit(ctx, conv, Input{Content: "fail:script", Capability: "cap"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, failed); err != nil || settled.Reason != "model_error" {
+		t.Fatalf("the failing request settled %+v, %v", settled, err)
+	}
+	sub, _, err := s.client.Continue(ctx, conv, ModelRef{Provider: "cli-claude", ModelID: "default"}, lastEntryID(t, s.client, conv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	}
+	again, err := s.client.Submit(ctx, conv, Input{Content: "and again", Capability: "cap"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, again); err != nil || settled.Status != "done" {
+		t.Fatalf("the next message settled %+v, %v; want done", settled, err)
+	}
+	if got := rec.seen(); len(got) != 2 || !got[0] || got[1] {
+		t.Fatalf("the CLI turns said pinned = %v, want [true false]: the continued run's, then an ordinary message's", got)
+	}
+}
