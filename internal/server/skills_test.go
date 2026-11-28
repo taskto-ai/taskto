@@ -177,6 +177,8 @@ func TestWorkspaceSkillsAreUsedByMembersAndChangedByAdminsOnly(t *testing.T) {
 	s.refused(s.bob.cookie, http.MethodPost, wide, skillBody("by-member"), http.StatusForbidden, "admin_only")
 	s.refused(s.bob.cookie, http.MethodPatch, one, map[string]any{"title": "Taken"}, http.StatusForbidden, "admin_only")
 	s.refused(s.bob.cookie, http.MethodDelete, one, nil, http.StatusForbidden, "admin_only")
+	s.refused(s.bob.cookie, http.MethodPost, wide, map[string]any{"name": "Bad Name"}, http.StatusForbidden, "admin_only")
+	s.refused(s.bob.cookie, http.MethodPatch, one, map[string]any{}, http.StatusForbidden, "admin_only")
 
 	if got := s.skillNames(s.alice.cookie, s.workspaceSkills(s.two, "")); len(got) != 0 {
 		t.Fatalf("workspace two lists workspace one's skills: %v", got)
