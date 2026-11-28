@@ -2781,6 +2781,10 @@
     "archived": "Archived",
     "showArchivedTitle": "Show archived conversations",
     "new": "New",
+    "origin": {
+      "app": "App",
+      "routine": "Routine"
+    },
     "nothingArchived": "Nothing archived.",
     "none": "No conversations yet.",
     "noneHelp": "Start one with New, or ask the agent to build an app.",

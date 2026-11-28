@@ -2803,6 +2803,10 @@
     "archived": "Arquivadas",
     "showArchivedTitle": "Mostrar as conversas arquivadas",
     "new": "Nova",
+    "origin": {
+      "app": "App",
+      "routine": "Rotina"
+    },
     "nothingArchived": "Nenhuma conversa arquivada.",
     "none": "Nenhuma conversa ainda.",
     "noneHelp": "Comece uma em Nova, ou peça ao agente para criar um app.",
