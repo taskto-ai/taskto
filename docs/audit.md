@@ -102,7 +102,7 @@ millisecond could not be told apart, which needs a delete and a create within a 
 
 The names a person gives things (a token's, a space's, a shared account's label, an integration's name, a model's) are
 not recorded: they are free text, and people paste secrets into such boxes. The one exception is a skill's `name`, the
-identifier that says which skill an event is about. It is recorded as the person typed it. Its pattern (a lowercase letter,
+identifier that says which skill an event is about. It is recorded as stored: as the person typed it, after leading and trailing spaces and tabs are trimmed. Its pattern (a lowercase letter,
 then lowercase letters, digits and hyphens, 2 to 40 characters) limits its syntax and does not detect a secret: a value of
 that shape, such as a token in hexadecimal, is accepted and kept in the log, so a skill's name must never hold a secret. A skill's title is never recorded or shown in the log, since it can be that of a space the reader may not open. The target's id
 says which object it was, and `fields` says what about it changed.
@@ -231,7 +231,7 @@ events within the hour. Backups contain the log like the rest of the database.
   actor isn't the request's user (accepting an invite as a new account).
 - For an event with no transaction, use `audit.Log`, which logs a failure and returns nothing.
 - Add the code to `internal/audit/actions.go`, its details to `internal/audit/schema.go` (fixed
-  and typed; never a name or other text a person typed, but a skill's `name`, an identifier recorded as typed), and a test that does the action, checks the
+  and typed; never a name or other text a person typed, but a skill's `name`, an identifier recorded as stored, trimmed of leading and trailing spaces and tabs), and a test that does the action, checks the
   row (actor, workspace, target, details), checks that a refused request records nothing, and,
   if the action handles a secret, runs `audittest.NoSecrets`. Add it to the table above.
 - An action that deletes its target passes `TargetCreated` from the delete's `RETURNING
