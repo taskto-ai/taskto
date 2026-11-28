@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import { api, errorText, type ModelRef, type SendReply } from '../api'
+import { api, errorText, type LinkSkip, type ModelRef, type SendReply } from '../api'
 import { browserLocale, useT } from '../i18n'
 import { Button } from '../ui/Button'
 import { IconButton } from '../ui/IconButton'
@@ -76,6 +76,7 @@ export function Composer({
   const [busy, setBusy] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [skipped, setSkipped] = useState<{ base: string; items: LinkSkip[] } | null>(null)
   const pendingId = useRef<string | null>(null)
   const box = useRef<HTMLTextAreaElement>(null)
   const [dismissed, setDismissed] = useState<string | null>(null)
@@ -119,6 +120,7 @@ export function Composer({
     const began = choices?.()
     setBusy(true)
     setError(null)
+    setSkipped(null)
     try {
       if (noting) {
         await api(`${base}/notes`, { method: 'POST', body: { content, request_id: pendingId.current } })
@@ -131,6 +133,7 @@ export function Composer({
         }
         const reply = await api<SendReply>(`${base}/messages`, { method: 'POST', body })
         if (reply?.model && choices?.() === began) onSwitched?.(reply.model)
+        if (reply?.skipped?.length) setSkipped({ base, items: reply.skipped })
       }
       pendingId.current = null
       setDrafts((all) => (all[sentAs] === draft ? { ...all, [sentAs]: '' } : all))
@@ -205,6 +208,7 @@ export function Composer({
           </p>
         )}
         {error && <Notice tone="danger">{error}</Notice>}
+        {skipped?.base === base && <SkippedLinks items={skipped.items} />}
         {dictation.message}
         <div className="ui-chat-box" data-disabled={off || undefined} data-mode={mode}>
           <VisuallyHidden>
@@ -309,5 +313,25 @@ export function Composer({
         </div>
       </div>
     </form>
+  )
+}
+
+const SKIP_REASONS = ['unavailable', 'too_large'] as const
+
+const reasonOf = (reason: string) => (reason === 'too_large' ? 'too_large' : 'unavailable')
+
+function SkippedLinks({ items }: { items: LinkSkip[] }) {
+  const t = useT()
+  return (
+    <>
+      {SKIP_REASONS.map((reason) => {
+        const ids = items.filter((item) => reasonOf(item.reason) === reason).map((item) => `#${item.conversation}`)
+        return ids.length > 0 ? (
+          <Notice key={reason} tone="warning">
+            {t(`conversations.linkSkipped.${reason}`, { ids: ids.join(', ') })}
+          </Notice>
+        ) : null
+      })}
+    </>
   )
 }

@@ -2851,6 +2851,12 @@
     "agentWorking": "O agente está trabalhando.",
     "agentReplied": "O agente respondeu.",
     "mentionAgent": "Passar esta conversa a um agente",
+    "attached": "Anexada: {title}",
+    "attachedLabel": "Conversas anexadas a esta mensagem",
+    "linkSkipped": {
+      "unavailable": "O agente não recebeu a conversa do link {ids}: ela não pode ser lida ou não tem texto.",
+      "too_large": "O agente não recebeu a conversa do link {ids}: a mensagem ou as conversas do link são longas demais."
+    },
     "agentChip": "Esta conversa foi passada a {agent}",
     "agentWorkingLive": "O agente está trabalhando…",
     "loadEarlier": "Carregar mensagens anteriores",

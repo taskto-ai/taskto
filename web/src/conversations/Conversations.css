@@ -241,6 +241,26 @@
     overflow-wrap: anywhere;
   }
 
+  .ui-chat-attached {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ui-chat-attached-chip {
+    display: inline-block;
+    max-inline-size: 100%;
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--color-hover);
+    color: var(--color-link);
+    font: var(--type-small);
+    overflow-wrap: anywhere;
+  }
+
   .ui-chat-msg[data-role="assistant"] {
     display: grid;
     grid-template-columns: var(--space-6) minmax(0, 1fr);

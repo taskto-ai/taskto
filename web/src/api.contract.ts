@@ -25,6 +25,7 @@ export type Contract = [
   Is<Check<Gen.BoardsAuthor, NonNullable<Api.Author>>>,
   Is<Check<Gen.Conversation, Api.Conversation>>,
   Is<Check<Gen.ConversationsModelRef, Api.ModelRef>>,
+  Is<Check<Gen.ConversationsLinkSkip, Api.LinkSkip>>,
   Is<Check<Gen.SendReply, Api.SendReply>>,
   Is<Check<Gen.SubmissionReply, Api.SubmissionReply>>,
   Is<Check<Gen.ContinueModels, Api.ContinueModels>>,

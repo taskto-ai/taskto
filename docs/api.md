@@ -5841,6 +5841,39 @@ and the sender's user ID; optional `text` and `attached` fields preserve the ori
 conversation links separately from the content sent to the model. Exported conversations keep
 these entries and their data unchanged. Older `pi.user` entries remain readable.
 
+#### Linked conversations as context
+
+A link to another of the caller's conversations in the message, `/w/<workspace>/conversations/<id>`
+(relative, or absolute on the server's public URL: another host, scheme, port or a login in front
+of the host doesn't count; with no public URL only relative links do), gives the agent that
+conversation's text with the message, so it can continue from there.
+
+- Only links to the same workspace count, at most three different conversations (the first three
+  in the text), never the conversation being sent to.
+- Only a conversation the caller owns, as a member who is not disabled, is attached. Anything else
+  (someone else's, missing, in another workspace the link doesn't name) is skipped with the same
+  reason, `unavailable`, so a link can't tell whether a conversation exists. The check is made
+  when the message is sent, after the agent runtime was waited for, and again after the linked
+  text was read, so a conversation that stopped being the caller's during the read is left out.
+  A conversation shared with other people later must also be checked against everyone who can
+  read the conversation it is attached to.
+- What the agent gets is the typed text, then for each conversation a separator, `Context from the
+  conversation "<title>" (<id>), as the person attached it:` and the last whole lines of its user
+  and assistant text: at most 24 KiB of each and 48 KiB in all. A conversation with no text, or one
+  the agent runtime can't read within ten seconds, is skipped as `unavailable` and the message is
+  still sent. One that no longer fits in the total (less than 1 KiB left) is skipped as `too_large`.
+- The entry's `data` keeps `text` (what was typed) and `attached` (`[{"conversation": 12,
+  "title": "…"}]`), never the transcript, so the web app shows the typed text and a chip for each
+  attachment. If `data` with them would pass 4096 bytes, nothing is attached (`too_large`) and the
+  message goes as typed.
+- The reply lists what was left out: `202 {"submission_id": 12, "skipped": [{"conversation": 13,
+  "reason": "unavailable"}]}` (`skipped` is absent when nothing was).
+
+`GET …/messages` of the receiving conversation returns the attached text, as the model saw it, to
+whoever may read that conversation, and the search index holds it as part of that conversation's
+text. Both are the owner's own text today. No agent tool or MCP tool sends a message or reads
+a conversation's text by ID, so this route is the only way a link is followed.
+
 Sending and switching the model check access and the archive again just before passing the
 request to the agent runtime, after any wait for it to be ready. An archive, or a removal from
 the workspace, that commits while that call is in flight doesn't stop it. That is accepted:

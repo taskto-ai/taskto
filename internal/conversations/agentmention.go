@@ -13,6 +13,7 @@ func agentMention(content string) (modelRef, bool) {
 }
 
 type SendReply struct {
-	SubmissionID int64     `json:"submission_id"`
-	Model        *modelRef `json:"model,omitempty"`
+	SubmissionID int64      `json:"submission_id"`
+	Model        *modelRef  `json:"model,omitempty"`
+	Skipped      []LinkSkip `json:"skipped,omitempty"`
 }

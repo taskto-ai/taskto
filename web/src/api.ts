@@ -197,7 +197,9 @@ export type Conversation = {
 
 export type ModelRef = { provider: string; model_id: string }
 
-export type SendReply = { submission_id: number; model?: ModelRef }
+export type LinkSkip = { conversation: number; reason: string }
+
+export type SendReply = { submission_id: number; model?: ModelRef; skipped?: LinkSkip[] }
 
 export type CliQuestion = { id: string; turn: string; cli: string; tool: string; input?: string; asked_at: string }
 

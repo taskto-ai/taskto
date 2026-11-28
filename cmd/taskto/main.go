@@ -305,6 +305,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		}
 	}
 	convs := conversations.New(sqlDB, convAgent)
+	convs.SetPublicURL(cfg.PublicURL)
 	liveHub := live.New(live.Config{})
 	convs.SetCapabilities(tools.Capability)
 	if cfg.Agent {
