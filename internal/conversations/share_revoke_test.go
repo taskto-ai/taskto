@@ -175,7 +175,7 @@ func TestARosterReadBelongsToTheConversationThatWasAuthorized(t *testing.T) {
 		conv.ID, reader.id, other.id); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := e.svc.members(t.Context(), read); err != nil || len(got.Members) != 0 {
+	if got, err := e.svc.members(t.Context(), read); !errors.Is(err, errNotFound) || len(got.Members) != 0 {
 		t.Fatalf("the roster of a conversation that took the ID = %+v, %v; want nothing", got, err)
 	}
 }

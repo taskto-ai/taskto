@@ -25,7 +25,7 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	user, workspace := caller(r)
+	user, _ := caller(r)
 	sessionCtx, stopWatch := s.watchSession(r, s.heartbeat)
 	defer stopWatch()
 	if sessionCtx.Err() != nil {
@@ -85,7 +85,7 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case ev := <-events:
 			if c.Role != RoleOwner {
-				if _, err := s.reach(ctx, workspace, user, c.ID); err != nil {
+				if err := s.stillSame(ctx, c); err != nil {
 					if r.Context().Err() == nil {
 						_ = out.event(interrupted)
 					}
@@ -120,7 +120,7 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		case <-heartbeat:
-			switch _, err := s.reach(ctx, workspace, user, c.ID); {
+			switch err := s.stillSame(ctx, c); {
 			case errors.Is(err, errNotFound):
 				_ = out.event(interrupted)
 				return

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"taskto.ai/taskto/internal/agentrt"
 )
 
 var ownerOnlyCLI = []string{"asks to use", "private-notes", "not allowed", "the owner said no", "work laptop", "account 2", "usage limit"}
@@ -98,5 +100,65 @@ func TestAViewerNeverReceivesTheOwnersCLIPermissionsOrAccountNotices(t *testing.
 	}
 	if mine := owner.expect(http.StatusOK, http.MethodGet, one, nil).Body.String(); !strings.Contains(mine, "asks to use") || !strings.Contains(mine, "work laptop") {
 		t.Fatalf("the owner's history lost its transcript: %s", mine)
+	}
+}
+
+const stoppedNote = "[error] Tool cli_turn was aborted"
+
+func stoppedCLIEntry(id int) map[string]any {
+	text := func(s string) map[string]any { return map[string]any{"type": "text", "text": s} }
+	return map[string]any{"id": id, "kind": "pi.tool-result", "model": []any{
+		map[string]any{"role": "toolResult", "toolCallId": "c1", "toolName": "cli_turn", "isError": true,
+			"content": []any{text(cliTranscript()), text("<harness>\n" + stoppedNote + "\n</harness>")}},
+	}, "data": map[string]any{"diagnostics": []any{map[string]any{"severity": "error", "code": "aborted", "message": "Tool cli_turn was aborted"}}}}
+}
+
+func TestAViewerNeverReceivesTheOwnersCLIPromptAfterATurnStops(t *testing.T) {
+	e, srv, owner, ws, conv := newStreamEnv(t)
+	reader := e.invite(owner, ws, "reader@example.com")
+	e.shareWith(owner, ws, conv.ID, reader)
+	e.svc.heartbeat = time.Hour
+	e.svc.heartbeatTicks = func() (<-chan time.Time, func()) { return make(chan time.Time), func() {} }
+	agent := conv.agentIDForTest(t, e)
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: {json.RawMessage(line(stoppedCLIEntry(1)))}}
+	e.rt.replies = map[int64][]agentrt.Message{agent: {
+		{Role: "toolResult", Text: cliTranscript() + "<harness>\n" + stoppedNote + "\n</harness>"},
+		{Role: "assistant", Text: cliAnswer},
+	}}
+	noSecrets := func(where, body string) {
+		t.Helper()
+		for _, secret := range ownerOnlyCLI {
+			if strings.Contains(body, secret) {
+				t.Fatalf("the viewer's %s carries %q: %s", where, secret, body)
+			}
+		}
+	}
+
+	snapshot := line(map[string]any{"type": "value", "value": map[string]any{"entries": []any{stoppedCLIEntry(1)}, "docs": map[string]any{}}})
+	appended := line(map[string]any{"type": "ops", "ops": []any{[]any{"p", []any{"entries"}, 1, 0, []any{stoppedCLIEntry(2)}}}})
+	theirs := reader.openEvents(srv, ws, conv.ID)
+	watch := e.rt.watch(t, 0)
+	for _, l := range []string{snapshot, appended} {
+		watch.send(t, l)
+		got := theirs.next()
+		noSecrets("stream", got.data)
+		if !strings.Contains(got.data, stoppedNote) {
+			t.Fatalf("the viewer lost the note that the turn stopped: %s", got.data)
+		}
+	}
+
+	history := reader.expect(http.StatusOK, http.MethodGet, path(ws, fmt.Sprintf("/%d/entries", conv.ID)), nil).Body.String()
+	noSecrets("history", history)
+	if !strings.Contains(history, stoppedNote) {
+		t.Fatalf("the viewer's history lost the note that the turn stopped: %s", history)
+	}
+	messages := reader.expect(http.StatusOK, http.MethodGet, path(ws, fmt.Sprintf("/%d/messages", conv.ID)), nil).Body.String()
+	noSecrets("messages", messages)
+	if !strings.Contains(messages, cliAnswer) {
+		t.Fatalf("the viewer's messages lost the answer: %s", messages)
+	}
+	mine := owner.expect(http.StatusOK, http.MethodGet, path(ws, fmt.Sprintf("/%d/messages", conv.ID)), nil).Body.String()
+	if !strings.Contains(mine, "asks to use") {
+		t.Fatalf("the owner's messages lost the transcript: %s", mine)
 	}
 }

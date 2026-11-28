@@ -100,9 +100,16 @@ func (s *Service) writable(w http.ResponseWriter, r *http.Request) (Conversation
 	return c, ok
 }
 
-func (s *Service) stillReadable(w http.ResponseWriter, r *http.Request) bool {
-	_, ok := s.conversationInPath(w, r)
-	return ok
+func (s *Service) stillReadable(w http.ResponseWriter, r *http.Request, c Conversation) bool {
+	switch err := s.stillSame(r.Context(), c); {
+	case errors.Is(err, errNotFound):
+		writeError(w, http.StatusNotFound, apierr.CodeConversationNotFound, errNotFound.Error())
+		return false
+	case err != nil:
+		serverError(w, r, err)
+		return false
+	}
+	return true
 }
 
 func (s *Service) stillWritable(w http.ResponseWriter, r *http.Request) bool {
@@ -551,8 +558,11 @@ func (s *Service) handleMessages(w http.ResponseWriter, r *http.Request) {
 		conversationError(w, r, c, err)
 		return
 	}
-	if !s.stillReadable(w, r) {
+	if !s.stillReadable(w, r, c) {
 		return
+	}
+	if c.Role != RoleOwner {
+		msgs = withoutToolResults(msgs)
 	}
 	if msgs == nil {
 		msgs = []agentrt.Message{}
@@ -613,7 +623,7 @@ func (s *Service) handleEntries(w http.ResponseWriter, r *http.Request) {
 		conversationError(w, r, c, err)
 		return
 	}
-	if !s.stillReadable(w, r) {
+	if !s.stillReadable(w, r, c) {
 		return
 	}
 	if c.Role != RoleOwner {
@@ -639,7 +649,7 @@ func (s *Service) handleModel(w http.ResponseWriter, r *http.Request) {
 		conversationError(w, r, c, err)
 		return
 	}
-	if !s.stillReadable(w, r) {
+	if !s.stillReadable(w, r, c) {
 		return
 	}
 	writeJSON(w, http.StatusOK, modelRef{Provider: m.Provider, ModelID: m.ModelID})

@@ -157,6 +157,7 @@ type Conversation struct {
 	Owner          Person  `json:"owner"`
 
 	agentID int64
+	viewer  int64
 }
 
 var errNotFound = errors.New("conversation not found")
@@ -187,7 +188,19 @@ func (s *Service) reach(ctx context.Context, workspace, user, id int64) (Convers
 	if errors.Is(err, sql.ErrNoRows) {
 		return Conversation{}, errNotFound
 	}
+	c.viewer = user
 	return c, err
+}
+
+func (s *Service) stillSame(ctx context.Context, c Conversation) error {
+	now, err := s.reach(ctx, c.WorkspaceID, c.viewer, c.ID)
+	if err != nil {
+		return err
+	}
+	if now.Owner.ID != c.Owner.ID || now.agentID != c.agentID {
+		return errNotFound
+	}
+	return nil
 }
 
 func (s *Service) list(ctx context.Context, workspace, user int64, archived, shared bool) ([]Conversation, error) {

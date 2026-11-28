@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"slices"
+	"strings"
+
+	"taskto.ai/taskto/internal/agentrt"
 )
 
 const cliTool = "cli_turn"
@@ -59,6 +62,7 @@ func scrub(v any) bool {
 	switch v := v.(type) {
 	case map[string]any:
 		if v["role"] == "toolResult" && v["toolName"] == cliTool {
+			changed = keepHarnessNotes(v) || changed
 			if details, ok := v["details"].(map[string]any); ok {
 				if _, kept := details["transcript"]; kept {
 					delete(details, "transcript")
@@ -81,4 +85,34 @@ func scrub(v any) bool {
 		}
 	}
 	return changed
+}
+
+const harnessNotes = "<harness>\n"
+
+func keepHarnessNotes(result map[string]any) bool {
+	content, ok := result["content"].([]any)
+	if !ok {
+		return false
+	}
+	isNote := func(item any) bool {
+		part, ok := item.(map[string]any)
+		text, _ := part["text"].(string)
+		return ok && part["type"] == "text" && strings.HasPrefix(text, harnessNotes)
+	}
+	if !slices.ContainsFunc(content, isNote) {
+		return false
+	}
+	kept := slices.DeleteFunc(slices.Clone(content), func(item any) bool {
+		part, ok := item.(map[string]any)
+		return ok && part["type"] == "text" && !isNote(item)
+	})
+	if len(kept) == len(content) {
+		return false
+	}
+	result["content"] = kept
+	return true
+}
+
+func withoutToolResults(msgs []agentrt.Message) []agentrt.Message {
+	return slices.DeleteFunc(slices.Clone(msgs), func(m agentrt.Message) bool { return m.Role == "toolResult" })
 }

@@ -55,7 +55,15 @@ func stillReaches(ctx context.Context, tx *sql.Tx, c Conversation, actor int64) 
 }
 
 func (s *Service) members(ctx context.Context, c Conversation) (Members, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT u.id, u.name, m.role, m.added_at
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return Members{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := stillReaches(ctx, tx, c, c.viewer); err != nil {
+		return Members{}, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT u.id, u.name, m.role, m.added_at
 		FROM conversation_members m
 		JOIN conversations c ON c.id = m.conversation_id
 		JOIN users u ON u.id = m.user_id
@@ -197,6 +205,10 @@ func (s *Service) handleMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	list, err := s.members(r.Context(), c)
+	if errors.Is(err, errNotFound) {
+		writeError(w, http.StatusNotFound, apierr.CodeConversationNotFound, errNotFound.Error())
+		return
+	}
 	if err != nil {
 		serverError(w, r, err)
 		return
