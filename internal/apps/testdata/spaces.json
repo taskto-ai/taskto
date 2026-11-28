@@ -1,0 +1,28 @@
+{
+  "cases": [
+    { "type": "string", "input": "  hi\t", "stored": "hi" },
+    { "type": "string", "input": "\u0085hi\u0085", "stored": "hi" },
+    { "type": "string", "input": " hi ", "stored": "hi" },
+    { "type": "string", "input": " hi ", "stored": "hi" },
+    { "type": "string", "input": " hi ", "stored": "hi" },
+    { "type": "string", "input": " hi 　", "stored": "hi" },
+    { "type": "string", "input": "﻿hi﻿", "stored": "﻿hi﻿" },
+    { "type": "string", "input": "​hi​", "stored": "​hi​" },
+    { "type": "string", "input": "᠎hi", "stored": "᠎hi" },
+    { "type": "string", "input": "a\u0085b", "stored": "a\u0085b" },
+    { "type": "string", "input": "\u0085 　", "stored": null },
+    { "type": "string", "input": "﻿", "stored": "﻿" },
+    { "type": "choice", "input": "\u0085 ", "stored": null },
+    { "type": "number", "input": " 5　", "stored": 5 },
+    { "type": "number", "input": "\u00855\u0085", "stored": 5 },
+    { "type": "number", "input": "﻿5", "refused": true },
+    { "type": "number", "input": "5﻿", "refused": true },
+    { "type": "time", "input": " 09:30 ", "stored": "09:30" },
+    { "type": "time", "input": "﻿09:30", "refused": true },
+    { "type": "barcode", "input": "\u0085 ", "stored": null },
+    { "type": "barcode", "input": " 123 ", "stored": "123" },
+    { "type": "barcode", "input": "\u0085123", "refused": true },
+    { "type": "barcode", "input": "123\u0085", "refused": true },
+    { "type": "barcode", "input": "﻿123", "stored": "﻿123" }
+  ]
+}

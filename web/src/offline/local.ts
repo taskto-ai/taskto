@@ -2,6 +2,7 @@ import { ApiError, type OfflineApp } from '../api'
 import { holds, type Rule } from '../apps/rules'
 import { isCalendarDate, isInMonth } from './dates'
 import { type ChangeKind, type Download, kindOf, type OutboxItem } from './store'
+import { numberFromText, trimSpace } from './text'
 
 type Definition = OfflineApp['definition']
 type Field = Definition['collection']['fields'][number] & {
@@ -75,7 +76,7 @@ export function applyUpdate(
 }
 
 export function parseField(f: Field, raw: unknown): unknown {
-  if (f.type === 'barcode' && typeof raw === 'string' && raw.trim() !== '' && CONTROL.test(raw)) {
+  if (f.type === 'barcode' && typeof raw === 'string' && trimSpace(raw) !== '' && CONTROL.test(raw)) {
     throw refused('app_field_not_barcode', { field: f.name, format: f.format ?? '' })
   }
   let v = raw
@@ -85,7 +86,7 @@ export function parseField(f: Field, raw: unknown): unknown {
     v = v[0]
   }
   if (typeof v === 'string') {
-    v = v.trim()
+    v = trimSpace(v)
     if (v === '') return undefined
   }
   if (v === undefined || v === null) return undefined
@@ -97,7 +98,7 @@ export function parseField(f: Field, raw: unknown): unknown {
       return v
     }
     case 'number': {
-      const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : Number.NaN
+      const n = typeof v === 'number' ? v : typeof v === 'string' ? numberFromText(v) : Number.NaN
       if (!Number.isFinite(n)) throw refused('app_field_not_number', { field: f.name })
       if (f.min !== undefined && n < f.min) throw refused('app_field_too_small', { field: f.name, min: f.min })
       if (f.max !== undefined && n > f.max) throw refused('app_field_too_large', { field: f.name, max: f.max })

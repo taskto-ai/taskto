@@ -4246,7 +4246,7 @@ explorer offers to filter or sort by none of those three, and offers a filter on
 type takes.
 
 A barcode's text is taken as it was read: a line break, a tab or any other control character in it, even around
-it, is `422 app_field_not_barcode` (only spaces are trimmed). A `captured_at` must have a real zone: `Z` or an
+it, is `422 app_field_not_barcode` (only the spaces that are not control characters, such as the space and the no-break space, are trimmed from its ends; a text of nothing but spaces and line breaks, such as a lone tab, is left out like an empty one and is not refused). A `captured_at` must have a real zone: `Z` or an
 offset of at most `23:59` (`+24:60` is no time).
 
 The agent sees these values in `list_app_rows` (a signature as the picture's metadata, never its bytes) and has no
