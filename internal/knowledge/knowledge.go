@@ -22,6 +22,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/whiteboard/shapes"
 )
 
 const (
@@ -339,6 +340,9 @@ func (s *Store) Put(_ context.Context, sp access.Space, name string, content []b
 	if err := checkVersion(base); err != nil {
 		return Result{}, err
 	}
+	if err := checkWhiteboard(name, content); err != nil {
+		return Result{}, err
+	}
 	if _, isPtr := parsePointer(content); s.unversioned(name, int64(len(content))) || (isPtr && !IsMarkdown(name)) {
 		sg, err := s.stage(sp, name, bytes.NewReader(content), s.opts.MaxFileSize)
 		if err != nil {
@@ -412,6 +416,9 @@ func (s *Store) PutFile(ctx context.Context, sp access.Space, name string, src i
 		content, err := sg.bytes()
 		if err != nil {
 			return Result{}, s.refusedIfRemoved(sp, err)
+		}
+		if err := checkWhiteboard(name, content); err != nil {
+			return Result{}, err
 		}
 		if _, isPtr := parsePointer(content); !isPtr {
 			return s.put(sp, name, int64(len(content)), base, by, message, func(r *repo, _ *object.TreeEntry) (plumbing.Hash, error) {
@@ -908,6 +915,14 @@ func (s *Store) checkWrite(sp access.Space, name string, content []byte, by Auth
 		return fmt.Errorf("%w: a change needs its author's name and email", ErrInvalid)
 	}
 	return checkMessage(message)
+}
+
+func checkWhiteboard(name string, content []byte) error {
+	if !shapes.IsPath(name) {
+		return nil
+	}
+	_, err := shapes.Parse(content)
+	return err
 }
 
 func IsMarkdown(name string) bool { return strings.EqualFold(path.Ext(name), ".md") }

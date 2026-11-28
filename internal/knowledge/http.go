@@ -353,7 +353,13 @@ func queryLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 	return n, true
 }
 
+func Fail(w http.ResponseWriter, r *http.Request, err error) { fail(w, r, err) }
+
 func fail(w http.ResponseWriter, r *http.Request, err error) {
+	if refusal := (*apierr.Error)(nil); errors.As(err, &refusal) {
+		apierr.WriteError(w, refusal)
+		return
+	}
 	var status int
 	var code apierr.Code
 	msg := err.Error()

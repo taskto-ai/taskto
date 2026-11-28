@@ -421,4 +421,8 @@ const (
 	CodeIntegrationLinkNotConfirmable       Code = "integration_link_not_confirmable"
 	CodeIntegrationConditionChanged         Code = "integration_condition_changed"
 	CodeIntegrationConditionChangedLinkKept Code = "integration_condition_changed_link_kept"
+
+	CodeWhiteboardInvalid     Code = "whiteboard_invalid"
+	CodeWhiteboardLimit       Code = "whiteboard_limit"
+	CodeWhiteboardRateLimited Code = "whiteboard_rate_limited"
 )
