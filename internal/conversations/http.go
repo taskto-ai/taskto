@@ -31,6 +31,7 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	mux.Handle("GET "+base+"/{conversation}", member(s.handleGet))
 	mux.Handle("PATCH "+base+"/{conversation}", member(s.handleUpdate))
 	mux.Handle("POST "+base+"/{conversation}/messages", member(s.handleSend))
+	mux.Handle("POST "+base+"/{conversation}/notes", member(s.handleNote))
 	mux.Handle("GET "+base+"/{conversation}/messages", member(s.handleMessages))
 	mux.Handle("GET "+base+"/{conversation}/model", member(s.handleModel))
 	mux.Handle("PUT "+base+"/{conversation}/model", member(s.handleSetModel))
@@ -318,6 +319,11 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	if s.capability != nil {
 		in.Capability = s.capability(c.ID, c.agentID)
 	}
+	model, _ := rt.Model(r.Context(), c.agentID)
+	if err := s.ensureUsageMark(r.Context(), rt, c.ID, c.agentID); err != nil {
+		conversationError(w, r, c, err)
+		return
+	}
 	sub, err := rt.Submit(r.Context(), c.agentID, in)
 	if err != nil {
 		conversationError(w, r, c, err)
@@ -326,7 +332,8 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	if err := s.touch(context.WithoutCancel(r.Context()), c.ID, c.agentID); err != nil {
 		slog.WarnContext(r.Context(), "conversations: marking a conversation updated", "conversation", c.ID, "err", err)
 	}
-	s.markWhenSettled(rt, c.ID, c.agentID, sub)
+	user, _ := caller(r)
+	s.markWhenSettled(rt, Principal{Conversation: c.ID, AgentConversation: c.agentID, Workspace: c.WorkspaceID, User: user}, model.Provider, sub)
 	writeJSON(w, http.StatusAccepted, map[string]int64{"submission_id": sub})
 }
 

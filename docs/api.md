@@ -194,6 +194,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `home_limit` | 409 | A person has at most `max` widgets (or pins) in a workspace, and a space at most `max` default widgets (or pins). |
 | `home_order_invalid` | 400 | The ids to put in order aren't all the caller's own placements of that kind, or one is listed twice. |
 | `home_defaults_shared` | 409 | Defaults are only for the apps of shared spaces. |
+| `desk_changed` | 409 | The desk's `version` is not the stored one; `current` holds the stored desk. |
+| `desk_invalid` | 400 | The layout breaks a rule of the format; `reason` is a closed word such as `too_many_tabs`. |
 | `audit_time_invalid` | 400 | The audit log's `from` or `to` is outside the years 1000 to 9999. |
 | `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
 | `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
@@ -318,6 +320,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `search_query_no_words` | 400 | The search has no words to search for. |
 | `conversation_not_found` | 404 | No such conversation of the caller's in the workspace. |
 | `conversation_archived` | 409 | The conversation is archived: unarchive it first. |
+| `conversation_note_invalid` | 400 | A note must have 1 to `max` characters. |
 | `conversation_title_invalid` | 400 | A title must have at most `max` printable characters. |
 | `conversation_lost` | 410 | The agent runtime no longer has the conversation's content. |
 | `conversation_no_model` | 409 | The conversation has no model: choose one. |
@@ -383,6 +386,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `cli_workers_no_boundary` | 409 | CLI workers run in local mode, which allows a single user only (also a list's `reason_code`). |
 | `cli_not_installed` | 503 | The CLI, `cli`, isn't installed on this server. |
 | `cli_worker_closing` | 503 | The CLI worker is shutting down. |
+| `cli_worker_not_ready` | 503 | The CLI worker can't be reached (it is starting, or restarting). This comes before any other answer about the CLIs or the agent browser: the settings' list, a sign-in, a turn and its stop, the browser's routes and its live view. Try again in a moment. |
 | `cli_account_removing` | 409 | The account's CLI files are being removed (it is being disconnected): a sign-in or a check can't start on it meanwhile. |
 | `cli_account_busy` | 409 | A process of the account's CLI is still running after it was stopped: nothing was removed, try again. |
 | `cli_account_forgotten` | 410 | The CLI worker removed this account's files (a purge) and refuses it; after a restore of the server's data it says so until the server has told the worker who is here again, a moment after it starts. |
@@ -2231,6 +2235,35 @@ Read access to the space (`404` for one the caller can't read). Query: `q`, `lim
 Any member. The same, across the apps of every space of the workspace the caller can read.
 Both routes also take an access token.
 
+### `GET /api/workspaces/{workspace}/search/palette`
+
+Any workspace member with a session. Access tokens are not accepted. Query: required `q`
+(up to 500 bytes) and optional `limit` (5 by default, at most 10). Returns matching spaces,
+apps, boards, documents, cards, records and the caller's own conversations in one reply.
+Name matches ignore case and accents, rank names that start with the query first, then
+shorter names. Private space labels are supplied by the web app and are not searched here.
+Document search is full text only, so typing in the palette never sends a query to an
+embeddings endpoint. `incomplete` is true when card, record or conversation indexing is
+still catching up.
+
+```json
+{
+  "places": {
+    "spaces": [{"id": 3, "name": "Operations", "kind": "shared"}],
+    "apps": [{"space_id": 3, "space_name": "Operations", "app_id": 9, "name": "Expenses"}],
+    "boards": [{"space_id": 3, "space_name": "Operations", "board_id": 4, "name": "Roadmap", "kind": "team"}]
+  },
+  "docs": [],
+  "cards": [],
+  "records": [],
+  "conversations": [],
+  "incomplete": false
+}
+```
+
+Each kind is limited independently by `limit`; document, card, record and conversation
+results use the same access checks as their individual search routes.
+
 ### Searching conversations
 
 A person's own conversations with the agent are searched apart too, by full text only: a
@@ -3078,10 +3111,12 @@ and kind included.
   "components": [{"id": "root", "component": "Column", "children": ["title", "items", "form"]}, …],
   "collection": {"fields": [
     {"name": "description", "type": "string", "required": true, "max_length": 200},
-    {"name": "amount", "type": "number", "required": true, "min": 0}
+    {"name": "amount", "type": "number", "required": true, "min": 0},
+    {"name": "spent_on", "type": "date"}
   ]},
   "actions": {"add_expense": {"kind": "insert"}, "delete_expense": {"kind": "delete"}},
-  "summaries": {"total": {"kind": "sum", "field": "amount"}}
+  "summaries": {"total": {"kind": "sum", "field": "amount"}},
+  "series": {"by_month": {"kind": "sum", "field": "amount", "group_by": "spent_on", "bucket": "month", "last": 12}}
 }
 ```
 
@@ -3095,9 +3130,19 @@ saying what is wrong) unless:
   (one screen; `string`, `number`, `boolean` and `date` fields; `insert`, `update` and
   `delete`) is still read, checked and drawn exactly as it was; a definition that says `1` can't
   use anything of version 2 (`400`), which is everything in [Screens](#screens-and-navigation),
-  [time and choice fields](#fields-and-rules) and [rules](#fields-and-rules). **Version 3** adds
+  [time and choice fields](#fields-and-rules), [rules](#fields-and-rules), series, and
+  contributions. **Version 3** adds
   [integrations](#integrations-of-an-app): a definition that says `1` or `2` can't declare them or use
   the `create_payment_link` effect (`400`).
+- **series** declares up to 10 count, sum or average aggregates grouped by a choice, boolean, text or
+  date field. A date group needs a `day`, `week` or `month` bucket; it keeps the latest 12 buckets by
+  default, or 1–90 when `last` is set. A series can filter rows with `where` and split into one line
+  per choice option or boolean value. The model at `/<name>` is `{"x":[{"key":"2026-11","label":"2026-11"}],"series":[{"key":"","label":"","values":[3]}]}`.
+  Choice groups follow their declared option order and labels; boolean groups are false then true;
+  text groups keep the 20 most frequent values and combine the rest as `other`. Buckets use UTC and
+  weeks start Monday. Empty averages are `null`. The server computes series over all records the
+  viewer may read, independently of the bounded `/items` list, and reports the `data.series`
+  capability in `requires`.
 - **requires** lists the catalog **capabilities** the screen needs: `component.<Name>` for
   each component it draws and `function.<name>` for each function it calls. The server works
   it out from the screen and replaces whatever was sent, so a definition can't claim less than
@@ -3113,7 +3158,7 @@ saying what is wrong) unless:
   (`internal/apps/catalog.go`): A2UI's basic catalog without `Image`, `Video`,
   `AudioPlayer` and the `openUrl` function (an app is shared, and a picture from
   elsewhere would tell that server who opens it, and could carry the app's data in its
-  address), plus `Stat` (a labelled value), `Markdown` (formatted text from a literal or a
+  address), plus `Stat` (a labelled value), `Table` (a sortable table of the records, below), `Markdown` (formatted text from a literal or a
   binding, drawn by the web app's own renderer, which never makes HTML: links show as text
   and are never followed, and images show as links, so an app opens nothing outside),
   `Show` (draws its child while a rule holds,
@@ -3127,6 +3172,22 @@ saying what is wrong) unless:
   component may contain itself, and every button's event must be one of the app's
   actions. The web app's renderer runs with A2UI's strict validation too, against the
   same catalog.
+- **Table** lists the records as a table: `{"id", "component": "Table", "items": {"path": "/items"}, "columns": [{"field", "label"}], "label", "open"?, "sort"?, "dir"?}`.
+  `items` is exactly the data binding `/items` (the records the viewer may read, so a table shows no
+  one else's). `columns` are 1–12 entries, each a `field` (a string, number, boolean, date, time,
+  choice or barcode field of the collection, never a photo, signature or location) and its
+  `label`, a dynamic string. `label` is the table's caption, which screen readers read. `open`
+  names a `navigate` action to a screen with `"record": true`: the first column then holds a button
+  that runs the action with the row's `id`, as a `Button`'s event does (the same path: an update's
+  `expectedRevision` is added, a conflict is reloaded, an error is shown), so the app needs no
+  event of its own for it. `sort` is a field of the same types and `dir` is `asc` (the default) or
+  `desc`: how the table starts; people click a column's header to sort by it. Choice fields show
+  their labels, dates the viewer's format, numbers their locale's, booleans a translated yes or no,
+  and a row with no value comes last whichever way it sorts. The table draws the first 200 rows
+  (after sorting) and says how many there are; a filter or paging is not part of it. Each column
+  that the server sends to a client carries its field's `type`, added to the surface only, never
+  stored in the definition. `app_catalog` describes `Table` and the two kinds of prop it
+  introduces: a field's name of given types and an action's name of given kinds.
 - **Icons**: an `Icon`'s `name` is `{"svgPath": "<path data>"}`, A2UI's own form, and a path is
   the way to give an icon: one SVG path, drawn on a fixed 24 by 24 view box (`0 0 24 24`) and
   filled in the text's colour (nonzero fill). It is written by a model or by whoever edits the app
@@ -4394,6 +4455,51 @@ reads the space may list them; they are seen only for the apps they may view.
 - `DELETE …/spaces/{space}/home/defaults/{default}`: `204`, with the same rights; `404` for a
   default of another space.
 
+## Desks
+
+Each member has a main desk in each workspace. A desk stores only a window layout and route paths;
+the pages named by those paths load their own data and apply their usual access checks. Layouts are
+per person and workspace, so they follow the person across devices. The main desk is created on its
+first save. Reading it never writes to the database. A desk id belonging to another person or
+workspace is `404 not_found`.
+
+These routes need a browser session and workspace membership. Access tokens are refused.
+
+### `GET /api/workspaces/{workspace}/desks`
+
+Lists the main desk first, then any named desks. Before the main desk has been saved, it is returned
+as `{"id":0,"name":"","updated_at":""}`; after its first save it is listed with its own id, which
+stays. A read does not create a row.
+
+### `GET /api/workspaces/{workspace}/desks/{desk}`
+
+`{desk}` is `main` or a desk id. Before its first save, `main` returns
+`{"id":0,"name":"","layout":{"v":1,"focus":"","root":null},"version":0,"updated_at":""}`.
+
+### `PUT /api/workspaces/{workspace}/desks/{desk}/layout`
+
+Saves a layout using optimistic concurrency. The request is `{"version":0,"layout":{...}}` for a
+new main desk, and each successful save increments the version. If another save has changed the
+version, the server returns `409` with code `desk_changed` and the current desk in `current`.
+
+A version 1 layout has `v: 1`, a `focus` group id and a `root` node. A node is either a group with
+`group`, `tabs` and `active`, or a split with `split` (`row` or `column`), `sizes` and `children`.
+Groups contain 1 to 20 tabs; there are at most 6 groups and 60 tabs, and at most 3 levels of nodes.
+Splits have 2 to 4 children and each size is from 0.1 to 0.9, with the sizes adding to 1 within
+0.01. Group and tab ids are distinct lowercase letters and digits, 1 to 16 characters. Paths are
+at most 512 bytes and must stay under the request's workspace, with one of `home`, `conversations`,
+`knowledge`, `boards`, `apps`, `notifications` or `settings` as the first route, optionally followed
+by one segment that has no slash, backslash, `?`, `#` or control character as written, and is
+neither `.` nor `..`; after percent-decoding it still has no backslash or control character and is
+still neither `.` nor `..`, and (except under `knowledge`) no slash. A percent-encoded `?`, `#` or
+other character stays inside its segment, so it is allowed. Under `knowledge` the segment is what
+the web app builds for a document, `<space>:<path>` percent-encoded as a whole, so a document in a
+folder (`3%3Afolder%2Fnotes.md`) is allowed: after the `<space>:` prefix every folder or file name
+in the decoded path must be non-empty and neither `.` nor `..`, so a leading, trailing or doubled
+slash and `..` are refused. Unknown fields, other workspace paths, malformed layouts, and layouts
+larger than 32 KiB, as sent or as stored, are refused; invalid layouts return `400` with code
+`desk_invalid` and a closed `reason` code.
+
 ## Integrations
 
 An integration is a workspace admin's connection to an account at an outside service. The
@@ -5014,6 +5120,31 @@ an access token); other admins get `403` `operator_only`. The status, error incl
 scheduled time they were for. A success doesn't clear `last_error`: it is current only if
 `last_error_at` is after `last_success`. With `health` `none`, the other fields are absent.
 A user or a URL's password in an error is replaced by `***`.
+
+### `GET /api/workspaces/{workspace}/cli-worker`
+
+[Operators](#operators) only (an admin of a workspace someone made later gets `403`
+`operator_only`, a member `403`), with a browser session. Whether the CLI worker needs an
+operator ([cli-workers.md](cli-workers.md#authority-lost)):
+
+```json
+{
+  "mode": "container",
+  "reachable": true,
+  "authority_lost": false,
+  "other_installation": true,
+  "boot": "4f…",
+  "installation": "9c…"
+}
+```
+
+`mode` is `off`, `local`, `local-unsafe` (development only) or `container`. `reachable` is false when the worker couldn't be asked;
+the other fields are then false or absent. `authority_lost`: the worker lost its history of
+server boots, and refuses every census and deletion until an operator hands it over.
+`other_installation`: the worker's volume belongs to another taskto installation (another data
+directory). `boot` and `installation` are this server's, present only when the worker needs
+handing over: what `taskto cli-worker trust-server -boot … -installation …` takes (Settings →
+About shows the command with both).
 
 ### `GET /api/workspaces/{workspace}/updates`
 
@@ -5638,6 +5769,25 @@ the message ends up as if it had been sent a moment earlier. Archiving doesn't s
 turn either, and someone removed can't read the conversation any more. Closing the window
 would mean holding the database's write lock across the call, which would stall every write
 on the server whenever the agent runtime is slow.
+
+### `POST /api/workspaces/{workspace}/conversations/{conversation}/notes`
+
+Adds a note: `{"content": "…", "request_id": "…"}`. A note stays in the conversation's history, in
+order, and is shown to whoever reads the conversation, but the agent never sees it: it isn't a
+message, so it is not part of the model's context, a CLI turn is not handed it, and
+`GET …/messages` and the conversation search don't contain it. It is an entry of kind
+`taskto.note` in `…/entries` and the events stream, with no `model`, and its `data` is
+`{"v": 1, "author": <user ID>, "text": "…"}`; the author is always the caller. The conversation's
+export carries notes for its owner like any other entry. A note can't be edited or removed.
+
+- `content`: 1 to 8000 characters, not only whitespace; otherwise `400 conversation_note_invalid`
+  (with `max`).
+- `request_id`: optional, up to 128 printable ASCII characters. A retry with the same ID in the
+  same conversation doesn't write the note again.
+
+`202 {"submission_id": 12}`; the note is stored at once, also while the agent is working, and
+doesn't interrupt the run. `404` for a conversation that isn't the caller's, `409` for an
+archived one. Adding a note marks the conversation updated, so the list shows the activity.
 
 ### `GET /api/workspaces/{workspace}/conversations/{conversation}/messages`
 

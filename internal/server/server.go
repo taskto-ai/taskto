@@ -20,6 +20,7 @@ import (
 	"taskto.ai/taskto/internal/checklist"
 	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/desk"
 	"taskto.ai/taskto/internal/dictation"
 	"taskto.ai/taskto/internal/export"
 	"taskto.ai/taskto/internal/integrations"
@@ -84,6 +85,7 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 			return ok, err
 		},
 	}).Routes(mux, accounts)
+	desk.New(sqlDB).Routes(mux, accounts)
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)
 	boardSvc := boards.New(sqlDB, spaces)
@@ -141,6 +143,7 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	if opts.CLIAccounts != nil {
 		opts.CLIAccounts.Routes(mux, accounts)
 		opts.CLIAccounts.SharedRoutes(mux, accounts)
+		opts.CLIAccounts.OperatorRoutes(mux, accounts)
 		opts.CLIAccounts.SwitchingRoutes(mux, accounts)
 	}
 	if opts.Dictation != nil {

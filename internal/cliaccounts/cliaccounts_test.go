@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/auth"
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/cliworker/clitest"
 	"taskto.ai/taskto/internal/db"
@@ -88,8 +89,29 @@ func newEnv(t *testing.T, mode Mode, tune func(*cliworker.Config)) *env {
 	e.svc.Routes(mux, a)
 	e.svc.SharedRoutes(mux, a)
 	e.svc.SwitchingRoutes(mux, a)
+	e.svc.OperatorRoutes(mux, a)
 	e.h = auth.CSRF(mux)
 	return e
+}
+
+func (e *env) acct(user int64) cliowner.Account {
+	e.t.Helper()
+	a, err := e.svc.Account(context.Background(), user)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return a
+}
+
+func (e *env) dirs(user int64) cliworker.Dirs { return e.dirsSlot(user, "", "") }
+
+func (e *env) dirsSlot(user int64, cli cliworker.CLI, slot cliworker.Slot) cliworker.Dirs {
+	e.t.Helper()
+	d, err := e.worker.AccountDirs(e.acct(user), cli, slot)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return d
 }
 
 type client struct {
@@ -239,7 +261,7 @@ func (c *client) connectAccount(id string) {
 	if a.cli == cliworker.Claude {
 		expect(c.e.t, c.do(http.MethodPost, base+"/"+id+"/login/code", map[string]string{"code": clitest.GoodCode}), http.StatusAccepted)
 	} else {
-		clitest.Approve(c.e.t, c.e.layout.User(c.id).ConfigOf(a.cli, a.slot))
+		clitest.Approve(c.e.t, c.e.dirs(c.id).ConfigOf(a.cli, a.slot))
 	}
 	eventually(c.e.t, "the account didn't connect", func() bool { return c.accountByID(id).State == Connected })
 }
@@ -319,7 +341,7 @@ func TestDeviceLoginRecordedWithoutPolling(t *testing.T) {
 	if info.Code != "GR0K-FAKE" || !info.URLTrusted {
 		t.Fatalf("login = %+v", info)
 	}
-	clitest.Approve(t, e.layout.User(owner.id).Config(cliworker.Grok))
+	clitest.Approve(t, e.dirs(owner.id).Config(cliworker.Grok))
 	eventually(t, "the login wasn't recorded", func() bool {
 		var state string
 		err := e.db.QueryRow(`SELECT state FROM cli_accounts WHERE user_id = ? AND cli = 'grok'`, owner.id).Scan(&state)
@@ -393,10 +415,10 @@ func TestAnotherUsersAccounts(t *testing.T) {
 	if a := owner.account(cliworker.Claude); a.State != Connected {
 		t.Errorf("the owner's account after the other user's disconnect: %+v", a)
 	}
-	if _, err := os.Stat(filepath.Join(e.layout.User(owner.id).Config(cliworker.Claude), ".credentials.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(e.dirs(owner.id).Config(cliworker.Claude), ".credentials.json")); err != nil {
 		t.Errorf("the owner's login is gone: %v", err)
 	}
-	if st, _ := e.worker.Status(context.Background(), other.id, cliworker.Claude, ""); st.LoggedIn {
+	if st, _ := e.worker.Status(context.Background(), e.acct(other.id), cliworker.Claude, ""); st.LoggedIn {
 		t.Error("the other user is signed in with the owner's login")
 	}
 }
@@ -405,7 +427,7 @@ func TestCheckFindsAnExpiredLogin(t *testing.T) {
 	e := newEnv(t, Local, nil)
 	owner, _ := e.setup()
 	owner.connect(cliworker.Claude)
-	if err := os.Remove(filepath.Join(e.layout.User(owner.id).Config(cliworker.Claude), ".credentials.json")); err != nil {
+	if err := os.Remove(filepath.Join(e.dirs(owner.id).Config(cliworker.Claude), ".credentials.json")); err != nil {
 		t.Fatal(err)
 	}
 	rec := owner.do(http.MethodPost, base+"/claude/check", map[string]any{})
@@ -441,7 +463,7 @@ func TestDisconnect(t *testing.T) {
 	if a := owner.account(cliworker.Codex); a.State != Disconnected {
 		t.Errorf("account = %+v", a)
 	}
-	if st, _ := e.worker.Status(context.Background(), owner.id, cliworker.Codex, ""); st.LoggedIn {
+	if st, _ := e.worker.Status(context.Background(), e.acct(owner.id), cliworker.Codex, ""); st.LoggedIn {
 		t.Error("still signed in")
 	}
 }
@@ -512,9 +534,9 @@ func TestDisconnectStopsALoginInProgress(t *testing.T) {
 	owner, _ := e.setup()
 	owner.startLogin(cliworker.Codex)
 	expect(t, owner.do(http.MethodDelete, base+"/codex", nil), http.StatusNoContent)
-	clitest.Approve(t, e.layout.User(owner.id).Config(cliworker.Codex))
+	clitest.Approve(t, e.dirs(owner.id).Config(cliworker.Codex))
 	time.Sleep(200 * time.Millisecond)
-	if st, _ := e.worker.Status(context.Background(), owner.id, cliworker.Codex, ""); st.LoggedIn {
+	if st, _ := e.worker.Status(context.Background(), e.acct(owner.id), cliworker.Codex, ""); st.LoggedIn {
 		t.Fatal("the cancelled login signed in")
 	}
 	if a := owner.account(cliworker.Codex); a.State != Disconnected {

@@ -51,7 +51,7 @@ func TestRealCLIsThroughTheProxy(t *testing.T) {
 			if !strings.Contains(strings.ToLower(d.Text), "proxied-ok") {
 				t.Logf("answer %q (the model's wording, not checked strictly)", d.Text)
 			}
-			dir := e.layout.User(e.other.id).ConfigOf(cli, sharedSlot(a.ID))
+			dir := e.dirs(e.other.id).ConfigOf(cli, sharedSlot(a.ID))
 			_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 				if err == nil && !d.IsDir() {
 					if b, err := os.ReadFile(path); err == nil && strings.Contains(string(b), key) {

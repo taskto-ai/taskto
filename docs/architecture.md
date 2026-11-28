@@ -49,6 +49,13 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   naming their conversation with a capability the server issued for it; the server acts
   for the conversation's owner, checking their access on every call
   ([agent-tools.md](agent-tools.md)).
+- **Agent usage:** `internal/usage` records each person's daily input and output token totals by
+  workspace, source and engine. CLI turns are recorded by the Go turn handler; sidecar turns are
+  read from the assistant message usage stored in Pi Durable. Each turn and each durable entry is
+  counted once: a CLI turn's ID is claimed in the same transaction as its totals, so a replayed or
+  overlapping request adds nothing, and a conversation keeps the last entry counted
+  (`usage_mark`), advanced in the transaction that records the entries after it. Rows contain no
+  conversation text or cost and are kept for 400 days.
 - **Spaces and access:** a workspace contains spaces: a private one per member, and shared
   ones with editors and viewers. Everything people store lives in a space, and one
   package, `internal/access`, decides who may read and write each, for the API and for
@@ -128,6 +135,12 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   [api.md](api.md#access-tokens)). The routes that read an app and its rows, and `POST …/actions`, take a token too,
   with a budget of actions; building, publishing, roles, the offline download and uploads stay
   behind a session.
+- **Conversation notes:** a person can add a note to a conversation that stays in its history
+  for the people who read it but is never part of the model's context. A note is a passive
+  `taskto.note` entry the sidecar writes (`kind` and `data` only, no `model`), so Pi Durable
+  appends it at once, even in the middle of a run; the messages view, the CLI hand-off and the
+  conversation search, which read the model's context, never contain it
+  ([api.md](api.md#post-apiworkspacesworkspaceconversationsconversationnotes)).
 - **CLI workers:** a conversation can run on the official Claude Code, Codex or Grok Build
   CLI, signed in with the user's own subscription. Go runs the CLIs: in a worker container
   where each user is a Unix user of their own, or, on a one-user install, in the server

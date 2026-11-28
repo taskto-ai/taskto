@@ -29,6 +29,7 @@ func (x *Index) Routes(mux *http.ServeMux, a *auth.Service, c *access.Checker) {
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search/records", auth.AcceptTokens(c.RequireSpace(access.Read, x.handleSpaceRecords(c))))
 	mux.Handle("GET /api/workspaces/{workspace}/search/records", auth.AcceptTokens(a.RequireMember(x.handleWorkspaceRecords(c))))
 	mux.Handle("GET /api/workspaces/{workspace}/search/conversations", a.RequireMember(http.HandlerFunc(x.handleConversations)))
+	mux.Handle("GET /api/workspaces/{workspace}/search/palette", a.RequireMember(x.handlePalette(c)))
 	mux.Handle("GET /api/workspaces/{workspace}/search/settings", a.RequireMember(http.HandlerFunc(x.handleSettings)))
 	mux.Handle("PUT /api/workspaces/{workspace}/search/settings", a.RequireAdmin(http.HandlerFunc(x.handleSetSettings)))
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search/embedding", c.RequireSpace(access.Read, http.HandlerFunc(x.handleConsent)))
@@ -110,6 +111,67 @@ func (x *Index) handleConversations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+type PaletteResults struct {
+	Places        PlaceResults         `json:"places"`
+	Docs          []Result             `json:"docs"`
+	Cards         []CardResult         `json:"cards"`
+	Records       []RecordResult       `json:"records"`
+	Conversations []ConversationResult `json:"conversations"`
+	Incomplete    bool                 `json:"incomplete"`
+}
+
+func (x *Index) handlePalette(c *access.Checker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, _ := auth.UserFrom(r.Context())
+		m, _ := auth.MembershipFrom(r.Context())
+		q := Query{Text: r.URL.Query().Get("q"), Limit: 5}
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 0 || n > 10 {
+				apierr.Write(w, http.StatusBadRequest, apierr.CodeBadRequest, "limit must be a number from 1 to 10")
+				return
+			}
+			if n > 0 {
+				q.Limit = n
+			}
+		}
+		if _, err := checkQuery(&q); searchFailed(w, r, err) {
+			return
+		}
+		spaces, err := c.Readable(r.Context(), u.ID, m.WorkspaceID)
+		if err != nil {
+			serverError(w, r, err)
+			return
+		}
+		places, err := x.SearchPlaces(r.Context(), c, u.ID, m.WorkspaceID, spaces, q.Text, q.Limit)
+		if searchFailed(w, r, err) {
+			return
+		}
+		q.FullTextOnly = true
+		docs, err := x.Search(r.Context(), c, u.ID, m.WorkspaceID, spaces, q)
+		if searchFailed(w, r, err) {
+			return
+		}
+		cards, err := x.SearchCards(r.Context(), c, u.ID, m.WorkspaceID, spaces, q)
+		if searchFailed(w, r, err) {
+			return
+		}
+		records, err := x.SearchRecords(r.Context(), c, u.ID, m.WorkspaceID, spaces, q)
+		if searchFailed(w, r, err) {
+			return
+		}
+		conversations, err := x.SearchConversations(r.Context(), u.ID, m.WorkspaceID, q)
+		if searchFailed(w, r, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, PaletteResults{
+			Places: places, Docs: docs.Results, Cards: cards.Results, Records: records.Results,
+			Conversations: conversations.Results,
+			Incomplete:    cards.Incomplete || records.Incomplete || conversations.Incomplete,
+		})
+	}
 }
 
 func (x *Index) search(w http.ResponseWriter, r *http.Request, c *access.Checker, userID, workspaceID int64, spaces []access.Space) {
