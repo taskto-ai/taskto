@@ -1296,3 +1296,145 @@ test('older history that is already being loaded is not asked for again by Chang
   expect(calls.filter((c) => c.path.includes('before='))).toHaveLength(1)
   expect(within(doc).getAllByText('Edit c1')).toHaveLength(1)
 })
+
+test('Changes that needs the page Older is already loading opens its comparison when that page arrives', async () => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const calls = kb(
+    'read',
+    versions({
+      [`GET ${S}/history/notes/plan.md`]: {
+        body: { commits: [entry('c3', 3, 'update', V1), entry('c2', 2, 'update', V2)], next: 'c2' },
+      },
+      [`GET ${S}/history/notes/plan.md?before=c2`]: async () => {
+        await held
+        return { body: { commits: [entry('c1', 1, 'create', V3)] } }
+      },
+    }),
+  )
+  render(<KnowledgePage workspace={1} />)
+  const doc = await openPlan()
+  fireEvent.click(await within(doc).findByRole('button', { name: 'History' }))
+  await within(doc).findByText('Edit c2')
+  fireEvent.click(within(doc).getByRole('button', { name: /^Older/ }))
+  fireEvent.click(within(doc).getAllByRole('button', { name: 'Changes' })[1])
+  release()
+  await within(doc).findByText('Edit c1')
+  expect(await within(doc).findByRole('region', { name: /^Changes on/ })).toBeTruthy()
+  expect(calls.filter((c) => c.path.includes('before='))).toHaveLength(1)
+  expect(within(doc).getAllByRole('button', { name: 'Changes' })[1].getAttribute('aria-pressed')).toBe('true')
+})
+
+test('Changes that needs the page Older is loading shows no comparison when that page fails', async () => {
+  let fail: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    fail = resolve
+  })
+  kb(
+    'read',
+    versions({
+      [`GET ${S}/history/notes/plan.md`]: {
+        body: { commits: [entry('c3', 3, 'update', V1), entry('c2', 2, 'update', V2)], next: 'c2' },
+      },
+      [`GET ${S}/history/notes/plan.md?before=c2`]: async () => {
+        await held
+        return { status: 500, body: { error: 'no history', code: 'x' } }
+      },
+    }),
+  )
+  render(<KnowledgePage workspace={1} />)
+  const doc = await openPlan()
+  fireEvent.click(await within(doc).findByRole('button', { name: 'History' }))
+  await within(doc).findByText('Edit c2')
+  fireEvent.click(within(doc).getByRole('button', { name: /^Older/ }))
+  fireEvent.click(within(doc).getAllByRole('button', { name: 'Changes' })[1])
+  fail()
+  expect(await within(doc).findByRole('alert')).toBeTruthy()
+  expect(within(doc).queryByRole('region', { name: /^Changes on/ })).toBeNull()
+  expect(within(doc).getAllByRole('button', { name: 'Changes' })[1].getAttribute('aria-busy')).not.toBe('true')
+})
+
+test('a removed predecessor is reported only after the later pages have no readable one', async () => {
+  const calls = kb(
+    'read',
+    versions({
+      [`GET ${S}/history/notes/plan.md`]: {
+        body: {
+          commits: [entry('c3', 3, 'update', V1), entry('c2', 2, 'update', V2, { versioned: false })],
+          next: 'c2',
+        },
+      },
+      [`GET ${S}/history/notes/plan.md?before=c2`]: { body: { commits: [entry('c1', 1, 'create', V3)] } },
+    }),
+  )
+  render(<KnowledgePage workspace={1} />)
+  const doc = await openPlan()
+  fireEvent.click(await within(doc).findByRole('button', { name: 'History' }))
+  await within(doc).findByText('Edit c2')
+  fireEvent.click(within(doc).getAllByRole('button', { name: 'Changes' })[0])
+  expect(await within(doc).findByRole('region', { name: /^Changes on/ })).toBeTruthy()
+  expect(within(doc).queryByText(/before this one was removed from history/)).toBeNull()
+  expect(calls.filter((c) => c.path.includes('before='))).toHaveLength(1)
+})
+
+test('a removed predecessor with nothing readable on any later page is still reported', async () => {
+  const calls = kb(
+    'read',
+    versions({
+      [`GET ${S}/history/notes/plan.md`]: {
+        body: {
+          commits: [entry('c3', 3, 'update', V1), entry('c2', 2, 'update', V2, { versioned: false })],
+          next: 'c2',
+        },
+      },
+      [`GET ${S}/history/notes/plan.md?before=c2`]: {
+        body: { commits: [entry('c1', 1, 'update', V3, { versioned: false })] },
+      },
+    }),
+  )
+  render(<KnowledgePage workspace={1} />)
+  const doc = await openPlan()
+  fireEvent.click(await within(doc).findByRole('button', { name: 'History' }))
+  await within(doc).findByText('Edit c2')
+  fireEvent.click(within(doc).getAllByRole('button', { name: 'Changes' })[0])
+  expect(await within(doc).findByText(/before this one was removed from history/)).toBeTruthy()
+  expect(within(doc).queryByRole('region', { name: /^Changes on/ })).toBeNull()
+  expect(calls.filter((c) => c.path.includes('before='))).toHaveLength(1)
+})
+
+test('closing a comparison with Changes clears the busy mark of a lookup it invalidated', async () => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  kb(
+    'read',
+    versions({
+      [`GET ${S}/history/notes/plan.md`]: {
+        body: { commits: [entry('c3', 3, 'update', V1), entry('c2', 2, 'update', V2)], next: 'c2' },
+      },
+      [`GET ${S}/history/notes/plan.md?before=c2`]: async () => {
+        await held
+        return { body: { commits: [entry('c1', 1, 'create', V3)] } }
+      },
+    }),
+  )
+  render(<KnowledgePage workspace={1} />)
+  const doc = await openPlan()
+  fireEvent.click(await within(doc).findByRole('button', { name: 'History' }))
+  await within(doc).findByText('Edit c2')
+  const changes = (index: number) => within(doc).getAllByRole('button', { name: /^Changes/ })[index]
+  fireEvent.click(changes(0))
+  await within(doc).findByRole('region', { name: /^Changes on/ })
+  fireEvent.click(changes(1))
+  await waitFor(() => expect(changes(1).getAttribute('aria-busy')).toBe('true'))
+  fireEvent.click(changes(0))
+  expect(changes(1).getAttribute('aria-busy')).not.toBe('true')
+  release()
+  await within(doc).findByText('Edit c1')
+  await act(async () => {})
+  expect(changes(1).getAttribute('aria-busy')).not.toBe('true')
+  expect(within(doc).queryByRole('region', { name: /^Changes on/ })).toBeNull()
+})

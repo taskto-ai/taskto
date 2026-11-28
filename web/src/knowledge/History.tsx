@@ -72,34 +72,44 @@ export function History({
   const t = useT()
   const f = useFormat()
 
-  const loadingOlder = useRef<AbortController | null>(null)
+  const loadingOlder = useRef<{
+    request: AbortController
+    token: string
+    made: number
+    page: Promise<Page | null>
+  } | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const now = useLatest(generation)
   const choice = useRef(0)
-  useEffect(() => () => loadingOlder.current?.abort(), [])
-  const fetchOlder = async (token: string): Promise<Page | null> => {
-    if (loadingOlder.current) return null
+  useEffect(() => () => loadingOlder.current?.request.abort(), [])
+  const fetchOlder = (token: string): Promise<Page | null> => {
+    const active = loadingOlder.current
+    if (active) return active.token === token && active.made === generation ? active.page : Promise.resolve(null)
     const made = generation
     const request = new AbortController()
-    loadingOlder.current = request
-    setLoadingMore(true)
-    try {
-      const page = await api<Page>(`${historyUrl}?before=${encodeURIComponent(token)}`, {
-        signal: request.signal,
-      })
-      if (request.signal.aborted || now.current !== made) return null
-      setOlder((o) => [...o, page])
-      return page
-    } catch (err) {
-      if (request.signal.aborted || now.current !== made) return null
-      setError({ error: err, reload: reloadHistory, reloadable: isStale(err) })
-      return null
-    } finally {
-      if (loadingOlder.current === request) {
-        loadingOlder.current = null
-        setLoadingMore(false)
+    const load = async (): Promise<Page | null> => {
+      setLoadingMore(true)
+      try {
+        const page = await api<Page>(`${historyUrl}?before=${encodeURIComponent(token)}`, {
+          signal: request.signal,
+        })
+        if (request.signal.aborted || now.current !== made) return null
+        setOlder((o) => [...o, page])
+        return page
+      } catch (err) {
+        if (request.signal.aborted || now.current !== made) return null
+        setError({ error: err, reload: reloadHistory, reloadable: isStale(err) })
+        return null
+      } finally {
+        if (loadingOlder.current?.request === request) {
+          loadingOlder.current = null
+          setLoadingMore(false)
+        }
       }
     }
+    const page = load()
+    loadingOlder.current = { request, token, made, page }
+    return page
   }
   const more = async () => {
     if (next) await fetchOlder(next)
@@ -112,8 +122,7 @@ export function History({
       const older = list.slice(list.findIndex((x) => x.commit === c.commit) + 1)
       const found = older.find(readable)
       if (found) return found
-      if (older.some((x) => !!x.version)) return 'removed'
-      if (!token) return null
+      if (!token) return older.some((x) => !!x.version) ? 'removed' : null
       const page = await fetchOlder(token)
       if (!page) return 'failed'
       list = [...list, ...page.commits]
@@ -124,6 +133,7 @@ export function History({
     const mine = ++choice.current
     if (open?.commit === c && open.mode === 'diff' && open.against.kind === 'previous') {
       setOpen(null)
+      setFinding(null)
       return
     }
     setNotice(null)
@@ -154,7 +164,7 @@ export function History({
     setOpen(open?.commit === c && open.mode === 'view' ? null : { commit: c, mode: 'view' })
   }
   const reloadHistory = () => {
-    loadingOlder.current?.abort()
+    loadingOlder.current?.request.abort()
     loadingOlder.current = null
     setLoadingMore(false)
     setOpen(null)
