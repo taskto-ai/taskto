@@ -556,6 +556,11 @@ export type Conversation = {
   cli_permissions: string
 }
 
+export type ConversationsLinkSkip = {
+  conversation: number
+  reason: string
+}
+
 export type ConversationsModelRef = {
   provider: string
   model_id: string
@@ -910,6 +915,7 @@ export type SearchSegment = {
 export type SendReply = {
   submission_id: number
   model?: ConversationsModelRef
+  skipped?: ConversationsLinkSkip[]
 }
 
 export type Space = {

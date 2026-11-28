@@ -1,5 +1,6 @@
 import { useT } from '../i18n'
 import { Markdown } from '../markdown'
+import { Link, routePath } from '../router'
 import { AgentDot } from '../ui/AgentDot'
 import { Notice } from '../ui/Notice'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
@@ -49,6 +50,20 @@ export function Message({
               message.text
             )}
           </div>
+        )}
+        {message.attached && message.attached.length > 0 && (
+          <ul className="ui-chat-attached" aria-label={t('conversations.attachedLabel')}>
+            {message.attached.map((a) => (
+              <li key={a.conversation}>
+                <Link
+                  className="ui-chat-attached-chip"
+                  href={routePath({ workspace, section: 'conversations', item: String(a.conversation) })}
+                >
+                  {t('conversations.attached', { title: a.title || `#${a.conversation}` })}
+                </Link>
+              </li>
+            ))}
+          </ul>
         )}
         {message.error && <Notice tone="danger">{message.error}</Notice>}
       </article>

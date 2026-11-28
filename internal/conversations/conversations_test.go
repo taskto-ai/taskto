@@ -53,6 +53,8 @@ type fakeRuntime struct {
 	stallPutBack bool
 	onEntries    func()
 	onContinue   func()
+	onMessages   func(conv int64)
+	messagesErr  error
 }
 
 var setupToken = auth.NewSetupToken()
@@ -134,9 +136,18 @@ func (f *fakeRuntime) Note(_ context.Context, conv int64, n agentrt.NoteInput) (
 
 func (f *fakeRuntime) Messages(_ context.Context, conv int64) ([]agentrt.Message, error) {
 	f.mu.Lock()
+	hook := f.onMessages
+	f.mu.Unlock()
+	if hook != nil {
+		hook(conv)
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.messagesErr != nil {
+		return nil, f.messagesErr
 	}
 	var out []agentrt.Message
 	for _, in := range f.inputs[conv] {

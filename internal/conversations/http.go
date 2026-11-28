@@ -333,7 +333,13 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	if !s.stillWritable(w, r) {
 		return
 	}
-	user, _ := caller(r)
+	user, workspace := caller(r)
+	content, data, skipped, err := s.messageWithLinks(r.Context(), workspace, user, c.ID, req.Content)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, apierr.CodeInternal, "could not prepare conversation message")
+		return
+	}
+	reply.Skipped = skipped
 	var before agentrt.ModelRef
 	ctx := r.Context()
 	if switchTo != nil {
@@ -357,16 +363,8 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.InfoContext(r.Context(), "conversation model changed by a mention", "conversation", c.ID, "provider", switchTo.Provider, "by", user)
 	}
-	data, err := json.Marshal(struct {
-		V      int   `json:"v"`
-		Author int64 `json:"author"`
-	}{V: 1, Author: user})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, apierr.CodeInternal, "could not prepare conversation message")
-		return
-	}
 	in := agentrt.Input{
-		Content: req.Content, WhenBusy: busy, RequestID: req.RequestID,
+		Content: content, WhenBusy: busy, RequestID: req.RequestID,
 		Entry: &agentrt.InputEntry{Kind: "taskto.input", Data: data},
 	}
 	if s.language != nil {

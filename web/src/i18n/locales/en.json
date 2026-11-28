@@ -2799,6 +2799,12 @@
     "agentWorking": "The agent is working.",
     "agentReplied": "The agent replied.",
     "mentionAgent": "Hand this conversation to an agent",
+    "attached": "Attached: {title}",
+    "attachedLabel": "Conversations attached to this message",
+    "linkSkipped": {
+      "unavailable": "The agent didn’t get the linked conversation {ids}: it can’t be read, or it has no text.",
+      "too_large": "The agent didn’t get the linked conversation {ids}: the message or the linked conversations are too long."
+    },
     "agentChip": "This conversation was handed to {agent}",
     "agentWorkingLive": "The agent is working…",
     "loadEarlier": "Load earlier messages",
