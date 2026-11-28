@@ -774,6 +774,37 @@ func TestDocsOfTheRollbackAndTheReleaseSayWhatIsTrue(t *testing.T) {
 			t.Errorf("the Rollback doesn't have %q", want)
 		}
 	}
+	homes := rollback[strings.Index(rollback, "HOMES="):]
+	if strings.Contains(homes, "docker compose ps") || strings.Contains(homes, "docker compose down") {
+		t.Error("the Rollback's worker-volume step looks for a container step 2 removed, or takes the stack down again")
+	}
+	for _, want := range []string{`if [ -z "$HOMES" ]; then`, `docker compose --profile cli config --format json | jq -r '.volumes["cli-homes"].name // empty'`, `docker volume inspect "$HOMES"`} {
+		if !strings.Contains(homes, want) {
+			t.Errorf("the Rollback's worker-volume step doesn't have %q", want)
+		}
+	}
+	guide := readRepoFile(t, "docs/install.md")
+	for name, text := range map[string]string{"the runbook's Rollback": rollback, "docs/install.md": guide} {
+		for _, promise := range []string{"copy\n   the kept volume back into it", "put it back the same way", "give the new version\nthe volume you kept"} {
+			if strings.Contains(text, promise) {
+				t.Errorf("%s promises the kept worker volume back on the next upgrade (%q)", name, promise)
+			}
+		}
+		if !strings.Contains(text, "from right before") {
+			t.Errorf("%s doesn't say the kept volume goes back only with the upgraded server's own backup", name)
+		}
+	}
+	flat := strings.Join(strings.Fields(guide), " ")
+	for _, wrong := range []string{"move `<data>/cli` aside"} {
+		if strings.Contains(flat, wrong) {
+			t.Errorf("docs/install.md tells a local-mode rollback to %s, which throws away the restored sign-ins", wrong)
+		}
+	}
+	for _, want := range []string{"In local mode, leave the restored `<data>/cli` as it is", "`HOMES=1` is for container mode only"} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("docs/install.md doesn't say %q", want)
+		}
+	}
 	if i, j := strings.Index(rollback, `RECORDED=`), strings.Index(rollback, `[ -z "$VOLUME" ]`); i < 0 || j < i {
 		t.Error("the Rollback doesn't take the recorded volume first, and the server's own when there is none")
 	}
@@ -790,5 +821,56 @@ func TestDocsOfTheRollbackAndTheReleaseSayWhatIsTrue(t *testing.T) {
 		if !strings.Contains(text, "`http://`") || !strings.Contains(text, "in the clear") {
 			t.Errorf("%s doesn't say that an http:// alert address sends its secret in the clear", name)
 		}
+	}
+}
+
+func TestTheInstallGuidesRollbackStopsWhenTheCopyFails(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("needs bash")
+	}
+	guide := readRepoFile(t, "docs/install.md")
+	start := strings.Index(guide, "HOMES=0   # 1: back")
+	end := strings.Index(guide[start:], "\nEOF\n") + start + len("\nEOF\n")
+	if start < 0 || end <= start {
+		t.Fatal("the rollback's script isn't in docs/install.md")
+	}
+	script := strings.Replace(guide[start:end], "HOMES=0", "HOMES=1", 1)
+	for name, failCopy := range map[string]bool{"the copy fails": true, "the copy succeeds": false} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := filepath.Join(dir, "bin")
+			if err := os.Mkdir(bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			log := filepath.Join(dir, "calls")
+			fake := "#!/bin/sh\necho \"$*\" >> " + log + "\ncase \"$*\" in *'taskto backup -'*) echo data | gzip -c ;; esac\n"
+			if failCopy {
+				fake += "case \"$*\" in *'cp -a'*) exit 1 ;; esac\n"
+			}
+			for _, prog := range []string{"docker", "git"} {
+				if err := os.WriteFile(filepath.Join(bin, prog), []byte(fake), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(dir, "before-v0.2.0.tar.gz"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash", "-c", script)
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+			out, err := cmd.CombinedOutput()
+			calls, _ := os.ReadFile(log)
+			emptied := strings.Contains(string(calls), "find /homes")
+			started := strings.Contains(string(calls), " up -d")
+			if failCopy {
+				if err == nil || emptied || started {
+					t.Errorf("after a failed copy: err %v, emptied %v, started %v\n%s%s", err, emptied, started, calls, out)
+				}
+				return
+			}
+			if err != nil || !emptied || !started || !strings.Contains(string(calls), "taskto_cli-homes_kept_") {
+				t.Errorf("after a good copy: err %v, emptied %v, started %v\n%s%s", err, emptied, started, calls, out)
+			}
+		})
 	}
 }

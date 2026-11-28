@@ -4,6 +4,7 @@ package cliaccounts
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -228,7 +229,7 @@ func TestTurnOnASharedAccount(t *testing.T) {
 	if err := e.db.QueryRow(`SELECT input_tokens, output_tokens FROM agent_usage_daily WHERE user_id = ? AND workspace_id = ? AND source = 'cli' AND engine = 'claude'`, e.other.id, e.ws).Scan(&input, &output); err != nil || input != 10 || output != 5 {
 		t.Fatalf("shared account usage for the turn's owner = %d input, %d output, %v", input, output, err)
 	}
-	config := e.layout.User(e.other.id).ConfigOf(cliworker.Claude, sharedSlot(a.ID))
+	config := e.dirs(e.other.id).ConfigOf(cliworker.Claude, sharedSlot(a.ID))
 	calls := turnCalls(t, config)
 	if len(calls) != 1 {
 		t.Fatalf("turns in the shared account's directory = %d", len(calls))
@@ -250,7 +251,7 @@ func TestTurnOnASharedAccount(t *testing.T) {
 		t.Fatalf("an ended turn's token: %d", res.StatusCode)
 	}
 
-	claims := proxyClaims{Account: a.ID, User: e.other.id, Conversation: conv, Turn: "c1-live"}
+	claims := proxyClaims{Account: a.ID, User: e.other.id, Identity: e.acct(e.other.id).Identity, Workspace: e.ws, Conversation: conv, Turn: "c1-live"}
 	live, err := e.svc.mintToken(claims)
 	if err != nil {
 		t.Fatal(err)
@@ -269,10 +270,24 @@ func TestTurnOnASharedAccount(t *testing.T) {
 	if res := proxyCall(t, e, live+"x", "/cli-proxy/v1/messages"); res.StatusCode != http.StatusUnauthorized {
 		t.Errorf("forged token: %d", res.StatusCode)
 	}
+	elsewhere := claims
+	elsewhere.Workspace, elsewhere.Turn = e.ws+1, "c1-elsewhere"
+	if token, err := e.svc.mintToken(elsewhere); err != nil {
+		t.Fatal(err)
+	} else if res := proxyCall(t, e, token, "/cli-proxy/v1/messages"); res.StatusCode != http.StatusForbidden {
+		t.Errorf("a token of another workspace's conversation: %d", res.StatusCode)
+	}
+	before := claims
+	before.Identity, before.Turn = strings.Repeat("ab", 16), "c1-before"
+	if earlier, err := e.svc.mintToken(before); err != nil {
+		t.Fatal(err)
+	} else if res := proxyCall(t, e, earlier, "/cli-proxy/v1/messages"); res.StatusCode != http.StatusForbidden {
+		t.Errorf("a token of the number's earlier account: %d", res.StatusCode)
+	}
 	if res := proxyCall(t, e, live, "/cli-proxy/admin"); res.StatusCode != http.StatusNotFound {
 		t.Errorf("outside /v1: %d", res.StatusCode)
 	}
-	foreign, _ := e.svc.mintToken(proxyClaims{Account: a.ID, User: e.owner.id, Conversation: conv, Turn: "c1-foreign"})
+	foreign, _ := e.svc.mintToken(proxyClaims{Account: a.ID, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: "c1-foreign"})
 	if res := proxyCall(t, e, foreign, "/cli-proxy/v1/messages"); res.StatusCode != http.StatusForbidden {
 		t.Errorf("another user's conversation: %d", res.StatusCode)
 	}
@@ -295,7 +310,7 @@ func TestProxyRecordsALimit(t *testing.T) {
 	p.status = http.StatusTooManyRequests
 	a := e.owner.addShared(e.ws, cliworker.Codex, p.URL)
 	conv := e.conversation(e.owner)
-	token, err := e.svc.mintToken(proxyClaims{Account: a.ID, User: e.owner.id, Conversation: conv, Turn: "c1-t"})
+	token, err := e.svc.mintToken(proxyClaims{Account: a.ID, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: "c1-t"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,8 +334,8 @@ func TestModeChoosesTheAccount(t *testing.T) {
 	a := e.owner.addShared(e.ws, cliworker.Grok, p.URL)
 	e.other.connect(cliworker.Grok)
 	conv := e.conversation(e.other)
-	own := e.layout.User(e.other.id).Config(cliworker.Grok)
-	shared := e.layout.User(e.other.id).ConfigOf(cliworker.Grok, sharedSlot(a.ID))
+	own := e.dirs(e.other.id).Config(cliworker.Grok)
+	shared := e.dirs(e.other.id).ConfigOf(cliworker.Grok, sharedSlot(a.ID))
 	setMode := func(m any) {
 		t.Helper()
 		expect(t, e.owner.do(http.MethodPatch, sharedPath(e.ws)+"/modes", map[string]any{"members": map[string]any{itoa(e.other.id): m}}), http.StatusOK)
@@ -358,10 +373,8 @@ func TestSharedKeyRefused(t *testing.T) {
 	p := newProvider(t)
 	a := e.owner.addShared(e.ws, cliworker.Claude, p.URL)
 	conv := e.conversation(e.other)
-	config := e.layout.User(e.other.id).ConfigOf(cliworker.Claude, sharedSlot(a.ID))
-	if _, err := e.layout.EnsureSlot(e.other.id, cliworker.Claude, sharedSlot(a.ID)); err != nil {
-		t.Fatal(err)
-	}
+	config := e.dirs(e.other.id).ConfigOf(cliworker.Claude, sharedSlot(a.ID))
+	e.dirsSlot(e.other.id, cliworker.Claude, sharedSlot(a.ID))
 	clitest.WriteScenario(t, config, clitest.Scenario{Expired: true})
 	events := e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "hello"})
 	d := done(events)
@@ -408,7 +421,7 @@ func TestReplayRetiresTheEarlierToken(t *testing.T) {
 	p := newProvider(t)
 	a := e.owner.addShared(e.ws, cliworker.Claude, p.URL)
 	conv := e.conversation(e.owner)
-	claims := proxyClaims{Account: a.ID, User: e.owner.id, Conversation: conv, Turn: "c1-replayed"}
+	claims := proxyClaims{Account: a.ID, User: e.owner.id, Identity: e.acct(e.owner.id).Identity, Workspace: e.ws, Conversation: conv, Turn: "c1-replayed"}
 	first, err := e.svc.mintToken(claims)
 	if err != nil {
 		t.Fatal(err)
@@ -482,5 +495,47 @@ func TestDisabledAdminChangesNoSharedAccountSettings(t *testing.T) {
 	list := decode[sharedList](t, admin.do(http.MethodGet, sharedPath(ws), nil))
 	if len(list.Accounts) != 1 || list.Accounts[0].Label != existing.Label || list.DefaultMode != OwnElseShared {
 		t.Fatalf("a disabled admin changed something: %+v", list)
+	}
+}
+
+func identityIn(v, identity string) bool {
+	if strings.Contains(v, identity) {
+		return true
+	}
+	for _, part := range strings.FieldsFunc(v, func(r rune) bool { return r == '.' || r == '=' || r == ' ' }) {
+		for _, enc := range []*base64.Encoding{base64.RawURLEncoding, base64.URLEncoding, base64.StdEncoding, base64.RawStdEncoding} {
+			if b, err := enc.DecodeString(part); err == nil && strings.Contains(string(b), identity) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestATurnsTokensDoNotShowTheIdentity(t *testing.T) {
+	e := newTurnEnv(t)
+	e.svc.SetTools(Tools{Handler: http.NotFoundHandler()})
+	p := newProvider(t)
+	a := e.owner.addShared(e.ws, cliworker.Claude, p.URL)
+	conv := e.conversation(e.other)
+	if d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "hello"})); d.Status != cliworker.StatusOK {
+		t.Fatalf("turn = %+v", d)
+	}
+	calls := turnCalls(t, e.dirs(e.other.id).ConfigOf(cliworker.Claude, sharedSlot(a.ID)))
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d", len(calls))
+	}
+	identity := e.acct(e.other.id).Identity
+	var tokens int
+	for _, kv := range calls[0].Env {
+		if strings.HasPrefix(kv, "ANTHROPIC_AUTH_TOKEN=") || strings.HasPrefix(kv, "TASKTO_TOOLS_TOKEN=") {
+			tokens++
+		}
+		if identityIn(kv, identity) {
+			t.Errorf("the CLI's environment shows the account's identity: %s", kv)
+		}
+	}
+	if tokens != 2 {
+		t.Fatalf("fixture: the CLI got %d of the two tokens: %v", tokens, calls[0].Env)
 	}
 }

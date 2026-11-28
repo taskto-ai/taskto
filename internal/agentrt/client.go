@@ -30,11 +30,17 @@ func New(socketPath string) *Client {
 }
 
 type Input struct {
-	Content    string `json:"content"`
-	WhenBusy   string `json:"whenBusy,omitempty"`
-	RequestID  string `json:"requestId,omitempty"`
-	Capability string `json:"capability,omitempty"`
-	Language   string `json:"language"`
+	Content    string      `json:"content"`
+	WhenBusy   string      `json:"whenBusy,omitempty"`
+	RequestID  string      `json:"requestId,omitempty"`
+	Capability string      `json:"capability,omitempty"`
+	Language   string      `json:"language"`
+	Entry      *InputEntry `json:"entry,omitempty"`
+}
+
+type InputEntry struct {
+	Kind string          `json:"kind"`
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 type Message struct {

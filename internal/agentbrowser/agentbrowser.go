@@ -18,25 +18,35 @@ import (
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/browser"
 	"taskto.ai/taskto/internal/cliaccounts"
+	"taskto.ai/taskto/internal/cliowner"
+	"taskto.ai/taskto/internal/cliworker"
 )
 
 var ErrOff = errors.New("the agent browser is off on this server (-browser)")
 
 type Service struct {
-	b      browser.Browsers
-	usable func(context.Context) error
+	b       browser.Browsers
+	usable  func(ctx context.Context, user int64) error
+	account func(ctx context.Context, user int64) (cliowner.Account, error)
 }
 
-func New(b browser.Browsers, usable func(context.Context) error) *Service {
-	return &Service{b: b, usable: usable}
+func New(b browser.Browsers, usable func(ctx context.Context, user int64) error, account func(ctx context.Context, user int64) (cliowner.Account, error)) *Service {
+	return &Service{b: b, usable: usable, account: account}
 }
 
-func (s *Service) Usable(ctx context.Context) error {
+func (s *Service) acct(ctx context.Context, user int64) (cliowner.Account, error) {
+	if s.account == nil {
+		return cliowner.Account{}, errors.New("agent browser: no account resolver")
+	}
+	return s.account(ctx, user)
+}
+
+func (s *Service) Usable(ctx context.Context, user int64) error {
 	if s == nil || s.b == nil {
 		return ErrOff
 	}
 	if s.usable != nil {
-		return s.usable(ctx)
+		return s.usable(ctx, user)
 	}
 	return nil
 }
@@ -80,11 +90,20 @@ func unusable(err error) apierr.Code {
 
 func (s *Service) status(ctx context.Context, user int64) (Status, error) {
 	out := Status{Browsers: map[browser.Kind]browser.State{}}
-	if why := s.Usable(ctx); why != nil {
+	why := s.Usable(ctx, user)
+	var e *apierr.Error
+	if errors.As(why, &e) && e.Status >= http.StatusInternalServerError {
+		return out, why
+	}
+	if why != nil {
 		out.Reason, out.ReasonCode = why.Error(), unusable(why)
 		return out, nil
 	}
-	st, err := s.b.Status(ctx, user)
+	acct, err := s.acct(ctx, user)
+	if err != nil {
+		return out, err
+	}
+	st, err := s.b.Status(ctx, acct)
 	if err != nil {
 		return out, err
 	}
@@ -97,19 +116,30 @@ func (s *Service) status(ctx context.Context, user int64) (Status, error) {
 
 func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 	st, err := s.status(r.Context(), caller(r))
+	var e *apierr.Error
+	if errors.As(err, &e) {
+		apierr.WriteError(w, e)
+		return
+	}
 	if err != nil {
-		serverError(w, r, err)
+		browserError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
 }
 
 func (s *Service) usableOr409(w http.ResponseWriter, r *http.Request) bool {
-	if err := s.Usable(r.Context()); err != nil {
-		writeError(w, http.StatusConflict, unusable(err), err.Error())
+	err := s.Usable(r.Context(), caller(r))
+	if err == nil {
+		return true
+	}
+	var e *apierr.Error
+	if errors.As(err, &e) {
+		apierr.WriteError(w, e)
 		return false
 	}
-	return true
+	writeError(w, http.StatusConflict, unusable(err), err.Error())
+	return false
 }
 
 func readKind(w http.ResponseWriter, r *http.Request) (browser.Kind, bool) {
@@ -141,7 +171,12 @@ func (s *Service) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := caller(r)
-	if err := s.b.Start(r.Context(), user, kind); err != nil {
+	acct, err := s.acct(r.Context(), user)
+	if err != nil {
+		browserError(w, r, err)
+		return
+	}
+	if err := s.b.Start(r.Context(), acct, kind); err != nil {
 		browserError(w, r, err)
 		return
 	}
@@ -157,7 +192,12 @@ func (s *Service) handleStop(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.b.Stop(r.Context(), caller(r), kind); err != nil {
+	acct, err := s.acct(r.Context(), caller(r))
+	if err != nil {
+		browserError(w, r, err)
+		return
+	}
+	if err := s.b.Stop(r.Context(), acct, kind); err != nil {
 		browserError(w, r, err)
 		return
 	}
@@ -187,7 +227,12 @@ func (s *Service) live(a *auth.Service, w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
 		return
 	}
-	live, err := s.b.OpenLive(ctx, user)
+	acct, err := s.acct(ctx, user)
+	if err != nil {
+		browserError(w, r, err)
+		return
+	}
+	live, err := s.b.OpenLive(ctx, acct)
 	if err != nil {
 		browserError(w, r, err)
 		return
@@ -264,8 +309,10 @@ func browserError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeBrowserBusy, err.Error())
 	case errors.Is(err, browser.ErrClosed):
 		writeError(w, http.StatusServiceUnavailable, apierr.CodeBrowserShuttingDown, err.Error())
-	case errors.Is(err, browser.ErrAccountClosing):
+	case errors.Is(err, browser.ErrAccountClosing), errors.Is(err, cliworker.ErrForgotten):
 		writeError(w, http.StatusConflict, apierr.CodeBrowserAccountClosing, err.Error())
+	case errors.Is(err, browser.ErrUnreachable):
+		writeError(w, http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, cliaccounts.ErrNotReady.Error())
 	default:
 		serverError(w, r, err)
 	}

@@ -1003,6 +1003,16 @@ export type UpdateAvailable = {
 export type UpdateRequested = { requested_at: string }
 
 export const updatesPath = (workspace: number) => `${ws(workspace)}/updates`
+
+export type CLIWorkerStatus = {
+  mode: string
+  reachable: boolean
+  authority_lost: boolean
+  other_installation: boolean
+  boot?: string
+  installation?: string
+}
+export const cliWorkerPath = (workspace: number) => `${ws(workspace)}/cli-worker`
 export const updateRequestPath = (workspace: number) => `${ws(workspace)}/updates/request`
 
 export type StorageLimits = { workspace: number; user: number }

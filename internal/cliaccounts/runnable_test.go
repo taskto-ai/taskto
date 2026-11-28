@@ -191,7 +191,11 @@ func TestAPinnedTurnIsNotMovedToAnotherAccountByALimit(t *testing.T) {
 			t.Fatalf("a pinned turn switched: %+v", ev)
 		}
 	}
-	if n := len(clitest.Calls(t, e.layout.User(e.owner.id).Config(cliworker.Codex))); n != 0 || len(models.list()) != 0 {
+	dirs, err := e.worker.AccountDirs(e.acct(e.owner.id), cliworker.Codex, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(clitest.Calls(t, dirs.Config(cliworker.Codex))); n != 0 || len(models.list()) != 0 {
 		t.Fatalf("a pinned turn ran %d turns on Codex and wrote the model %v", n, models.list())
 	}
 }

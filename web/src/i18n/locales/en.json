@@ -1131,6 +1131,7 @@
     "cli_workers_no_boundary": "CLI workers run in local mode on this server, with no boundary between users, so they work only while the server has a single user. An operator can run the CLI worker container instead.",
     "cli_not_installed": "{cli} isn't installed on this server.",
     "cli_worker_closing": "The CLI worker is shutting down: try again in a moment.",
+    "cli_worker_not_ready": "The CLI worker isn't ready yet: try again in a moment.",
     "cli_account_removing": "This account is being disconnected: try again in a moment.",
     "cli_account_busy": "A process of this account's CLI is still running, so nothing was removed: try again in a moment.",
     "cli_account_forgotten": "The CLI files of this account were removed from the worker. If you did not ask for that, try again in a moment: taskto.ai is still telling the worker who is here.",
@@ -1613,6 +1614,12 @@
       "credits": "Credits",
       "noCredits": "Nothing this workspace uses now asks for a credit here.",
       "credit": "<work>{name}</work> by {by}, under <licenceLink>{licence}</licenceLink>.",
+      "cliWorker": {
+        "title": "CLI worker",
+        "otherInstallation": "The CLI worker's volume belongs to another taskto installation (another data directory). It takes no census, deletion or new account from this server until an operator hands it over: never run two installations, or two copies of one data directory, against one worker.",
+        "authorityLost": "The CLI worker lost its history of this server's starts. Until an operator hands it over to this server, it removes nothing: account deletions, and the tidying of the accounts a restore left, wait. Everything else goes on.",
+        "handOver": "Stop every other server that may still talk to the worker, then stop the worker and run this on its volume, and start the worker again (docs/cli-workers.md explains why):"
+      },
       "backups": {
         "title": "Backups",
         "health": {

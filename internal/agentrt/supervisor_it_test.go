@@ -3,6 +3,7 @@
 package agentrt
 
 import (
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -51,12 +52,57 @@ func TestSupervisorRestartsTheRealSidecar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := c.Submit(ctx, conv, Input{Content: "hello"})
+	first, err := c.Submit(ctx, conv, Input{
+		Content: "hello",
+		Entry:   &InputEntry{Kind: "taskto.input", Data: json.RawMessage(`{"v":1,"author":7}`)},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if settled, err := c.Wait(ctx, first); err != nil || settled.Status != "done" {
 		t.Fatalf("wait = %+v, %v; want done", settled, err)
+	}
+	for _, bad := range []*InputEntry{
+		{Kind: "pi.user", Data: json.RawMessage(`{"v":1}`)},
+		{Kind: "other.input", Data: json.RawMessage(`{"v":1}`)},
+		{Kind: "taskto.input", Data: json.RawMessage(`"text"`)},
+		{Kind: "taskto.input", Data: json.RawMessage(`{"text":"` + strings.Repeat("x", 5000) + `"}`)},
+	} {
+		if _, err := c.Submit(ctx, conv, Input{Content: "refused", Entry: bad}); err == nil {
+			t.Fatalf("submit with entry %.40s was accepted; want a refusal", string(bad.Data))
+		}
+	}
+	entries, err := c.Entries(ctx, conv, 0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page struct {
+		Entries []struct {
+			Kind string `json:"kind"`
+			Data struct {
+				V      int   `json:"v"`
+				Author int64 `json:"author"`
+			} `json:"data"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(entries, &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) == 0 || page.Entries[0].Kind != "taskto.input" || page.Entries[0].Data.V != 1 || page.Entries[0].Data.Author != 7 {
+		t.Fatalf("entries = %s; want taskto.input with author metadata", entries)
+	}
+	messages, err := c.Messages(ctx, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawInput := false
+	for _, m := range messages {
+		if m.Role == "user" && m.Text == "hello" {
+			sawInput = true
+		}
+	}
+	if !sawInput {
+		t.Fatalf("messages = %+v; want the model to see the input hello", messages)
 	}
 	w, err := c.Watch(ctx, conv)
 	if err != nil {

@@ -389,6 +389,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `cli_workers_no_boundary` | 409 | CLI workers run in local mode, which allows a single user only (also a list's `reason_code`). |
 | `cli_not_installed` | 503 | The CLI, `cli`, isn't installed on this server. |
 | `cli_worker_closing` | 503 | The CLI worker is shutting down. |
+| `cli_worker_not_ready` | 503 | The CLI worker can't be reached (it is starting, or restarting). This comes before any other answer about the CLIs or the agent browser: the settings' list, a sign-in, a turn and its stop, the browser's routes and its live view. Try again in a moment. |
 | `cli_account_removing` | 409 | The account's CLI files are being removed (it is being disconnected): a sign-in or a check can't start on it meanwhile. |
 | `cli_account_busy` | 409 | A process of the account's CLI is still running after it was stopped: nothing was removed, try again. |
 | `cli_account_forgotten` | 410 | The CLI worker removed this account's files (a purge) and refuses it; after a restore of the server's data it says so until the server has told the worker who is here again, a moment after it starts. |
@@ -5069,6 +5070,31 @@ scheduled time they were for. A success doesn't clear `last_error`: it is curren
 `last_error_at` is after `last_success`. With `health` `none`, the other fields are absent.
 A user or a URL's password in an error is replaced by `***`.
 
+### `GET /api/workspaces/{workspace}/cli-worker`
+
+[Operators](#operators) only (an admin of a workspace someone made later gets `403`
+`operator_only`, a member `403`), with a browser session. Whether the CLI worker needs an
+operator ([cli-workers.md](cli-workers.md#authority-lost)):
+
+```json
+{
+  "mode": "container",
+  "reachable": true,
+  "authority_lost": false,
+  "other_installation": true,
+  "boot": "4f…",
+  "installation": "9c…"
+}
+```
+
+`mode` is `off`, `local`, `local-unsafe` (development only) or `container`. `reachable` is false when the worker couldn't be asked;
+the other fields are then false or absent. `authority_lost`: the worker lost its history of
+server boots, and refuses every census and deletion until an operator hands it over.
+`other_installation`: the worker's volume belongs to another taskto installation (another data
+directory). `boot` and `installation` are this server's, present only when the worker needs
+handing over: what `taskto cli-worker trust-server -boot … -installation …` takes (Settings →
+About shows the command with both).
+
 ### `GET /api/workspaces/{workspace}/updates`
 
 [Operators](#operators) only (admins of the workspace the server's setup made; an admin of a
@@ -5684,6 +5710,11 @@ Sends a message: `{"content": "…", "when_busy": "steer", "request_id": "…", 
 
 `202 {"submission_id": 12}`; the answer arrives through the events stream. `409` for an
 archived conversation.
+
+Each person-sent message is stored as a `taskto.input` entry. Its `data` includes version `1`
+and the sender's user ID; optional `text` and `attached` fields preserve the original text and
+conversation links separately from the content sent to the model. Exported conversations keep
+these entries and their data unchanged. Older `pi.user` entries remain readable.
 
 Sending and switching the model check access and the archive again just before passing the
 request to the agent runtime, after any wait for it to be ready. An archive, or a removal from

@@ -569,8 +569,20 @@ func TestSend(t *testing.T) {
 	inputs := e.rt.inputs[c.agentIDForTest(t, e)]
 	e.rt.mu.Unlock()
 	want := []agentrt.Input{{Content: "hello"}, {Content: "now this", WhenBusy: "steer", RequestID: "r-1"}, {Content: "later", WhenBusy: "followUp"}}
-	if fmt.Sprint(inputs) != fmt.Sprint(want) {
-		t.Fatalf("the agent runtime got %+v, want %+v", inputs, want)
+	if len(inputs) != len(want) {
+		t.Fatalf("the agent runtime got %+v, want %d messages", inputs, len(want))
+	}
+	for i := range want {
+		if inputs[i].Content != want[i].Content || inputs[i].WhenBusy != want[i].WhenBusy || inputs[i].RequestID != want[i].RequestID {
+			t.Fatalf("the agent runtime got %+v, want %+v", inputs[i], want[i])
+		}
+		var data struct {
+			V      int   `json:"v"`
+			Author int64 `json:"author"`
+		}
+		if inputs[i].Entry == nil || inputs[i].Entry.Kind != "taskto.input" || json.Unmarshal(inputs[i].Entry.Data, &data) != nil || data.V != 1 || data.Author != owner.id {
+			t.Fatalf("the agent runtime got input entry %+v, want taskto.input by %d", inputs[i].Entry, owner.id)
+		}
 	}
 
 	read := decode[struct{ Messages []agentrt.Message }](t, owner.expect(http.StatusOK, http.MethodGet, msgs, nil))

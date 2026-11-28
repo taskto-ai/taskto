@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/providers"
 )
@@ -43,21 +44,22 @@ func ParseMode(s string) (Mode, error) {
 
 type Worker interface {
 	Available(cli cliworker.CLI) bool
-	StartLogin(user int64, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error)
-	LoginInfo(user int64, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, bool)
-	SubmitLoginCode(user int64, cli cliworker.CLI, slot cliworker.Slot, code string) error
-	CancelLogin(user int64, cli cliworker.CLI, slot cliworker.Slot)
-	Status(ctx context.Context, user int64, cli cliworker.CLI, slot cliworker.Slot) (cliworker.AuthStatus, error)
-	Logout(ctx context.Context, user int64, cli cliworker.CLI, slot cliworker.Slot) error
-	Forget(ctx context.Context, user int64) error
-	Reconcile(ctx context.Context, live []int64, next int64, before time.Time) error
+	StartLogin(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error)
+	LoginInfo(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error)
+	SubmitLoginCode(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot, code string) error
+	CancelLogin(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) error
+	Status(ctx context.Context, a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.AuthStatus, error)
+	Logout(ctx context.Context, a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) error
+	Forget(ctx context.Context, a cliowner.Account) error
+	Reconcile(ctx context.Context, census cliworker.Census) error
+	Authority(ctx context.Context) (cliworker.Authority, error)
 
 	StartTurn(spec cliworker.TurnSpec) (t Turn, attached bool, err error)
-	FindTurn(id string) (Turn, bool)
-	StopTurn(id string)
+	FindTurn(a cliowner.Account, id string) (Turn, error)
+	StopTurn(a cliowner.Account, id string) error
 
-	Permissions(ctx context.Context, user, conversation int64) ([]cliworker.PermissionRequest, error)
-	Answer(ctx context.Context, user, conversation int64, id string, allow bool) error
+	Permissions(ctx context.Context, a cliowner.Account, conversation int64) ([]cliworker.PermissionRequest, error)
+	Answer(ctx context.Context, a cliowner.Account, conversation int64, id string, allow bool) error
 }
 
 func RecordWorker(ctx context.Context, sqlDB *sql.DB, mode Mode) error {
@@ -86,33 +88,46 @@ func LocalWorker(w *cliworker.Worker) Worker { return localWorker{w} }
 
 type localWorker struct{ *cliworker.Worker }
 
-func (l localWorker) StartLogin(user int64, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error) {
-	login, err := l.Worker.StartLogin(user, cli, slot)
+func (l localWorker) Authority(context.Context) (cliworker.Authority, error) {
+	return l.Worker.Authority(), nil
+}
+
+func (l localWorker) StartLogin(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error) {
+	login, err := l.Worker.StartLogin(a, cli, slot)
 	if err != nil {
 		return cliworker.LoginInfo{}, err
 	}
 	return login.Info(), nil
 }
 
-func (l localWorker) LoginInfo(user int64, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, bool) {
-	login, ok := l.Login(user, cli, slot)
+func (l localWorker) LoginInfo(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error) {
+	login, ok := l.Login(a, cli, slot)
 	if !ok {
-		return cliworker.LoginInfo{}, false
+		return cliworker.LoginInfo{}, cliworker.ErrNoLogin
 	}
-	return login.Info(), true
+	return login.Info(), nil
 }
 
-func (l localWorker) Permissions(_ context.Context, user, conversation int64) ([]cliworker.PermissionRequest, error) {
-	return l.Worker.Permissions(user, conversation), nil
+func (l localWorker) CancelLogin(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) error {
+	l.Worker.CancelLogin(a, cli, slot)
+	return nil
 }
 
-func (l localWorker) Answer(_ context.Context, user, conversation int64, id string, allow bool) error {
-	return l.Worker.Answer(user, conversation, id, allow)
+func (l localWorker) Permissions(_ context.Context, a cliowner.Account, conversation int64) ([]cliworker.PermissionRequest, error) {
+	return l.Worker.Permissions(a, conversation), nil
+}
+
+func (l localWorker) Answer(_ context.Context, a cliowner.Account, conversation int64, id string, allow bool) error {
+	return l.Worker.Answer(a, conversation, id, allow)
 }
 
 func RemoteWorker(r *cliworker.Remote) Worker { return remoteWorker{r} }
 
 type remoteWorker struct{ *cliworker.Remote }
+
+func (r remoteWorker) Authority(ctx context.Context) (cliworker.Authority, error) {
+	return r.Remote.Authority(ctx)
+}
 
 func (r remoteWorker) StartTurn(spec cliworker.TurnSpec) (Turn, bool, error) {
 	t, attached, err := r.Remote.StartTurn(spec)
@@ -122,18 +137,33 @@ func (r remoteWorker) StartTurn(spec cliworker.TurnSpec) (Turn, bool, error) {
 	return t, attached, nil
 }
 
-func (r remoteWorker) FindTurn(id string) (Turn, bool) {
-	t, ok := r.Remote.FindTurn(id)
-	if !ok {
-		return nil, false
+func (r remoteWorker) FindTurn(a cliowner.Account, id string) (Turn, error) {
+	t, err := r.Remote.FindTurn(a, id)
+	if err != nil {
+		return nil, err
 	}
-	return t, true
+	return t, nil
+}
+
+func (r remoteWorker) LoginInfo(a cliowner.Account, cli cliworker.CLI, slot cliworker.Slot) (cliworker.LoginInfo, error) {
+	info, err := r.Remote.LoginInfo(a, cli, slot)
+	if errors.Is(err, cliworker.ErrNotFound) {
+		return info, cliworker.ErrNoLogin
+	}
+	return info, err
 }
 
 type Service struct {
 	db     *sql.DB
 	mode   Mode
-	worker Worker
+	worker userWorker
+
+	reconcileMu  sync.Mutex
+	attemptMu    sync.Mutex
+	attempt      *reconcileAttempt
+	boot         string
+	identities   map[int64]string
+	installation string
 
 	mu       sync.Mutex
 	watching map[watchKey]bool
@@ -208,7 +238,11 @@ func New(sqlDB *sql.DB, mode Mode, worker Worker) *Service {
 	if mode == Off {
 		worker = nil
 	}
-	return &Service{db: sqlDB, mode: mode, worker: worker, watching: map[watchKey]bool{}, started: map[watchKey]time.Time{}, settled: map[watchKey]time.Time{}, locks: map[watchKey]*sync.Mutex{}, changed: make(chan struct{}), closing: make(chan struct{}), poll: time.Second, ended: map[string]time.Time{}, tokens: map[string]string{}, switches: map[string]string{}, stops: map[string]time.Time{}}
+	s := &Service{db: sqlDB, mode: mode, boot: newBoot(), identities: map[int64]string{}, watching: map[watchKey]bool{}, started: map[watchKey]time.Time{}, settled: map[watchKey]time.Time{}, locks: map[watchKey]*sync.Mutex{}, changed: make(chan struct{}), closing: make(chan struct{}), poll: time.Second, ended: map[string]time.Time{}, tokens: map[string]string{}, switches: map[string]string{}, stops: map[string]time.Time{}}
+	if worker != nil {
+		s.worker = accountWorker{w: worker, s: s}
+	}
+	return s
 }
 
 func (s *Service) Mode() string {
@@ -244,7 +278,11 @@ func (s *Service) Forget(ctx context.Context, user int64) error {
 	if s.worker == nil {
 		return ErrOff
 	}
-	if err := s.worker.Forget(ctx, user); err != nil {
+	err := s.worker.Forget(ctx, user)
+	if errors.Is(err, cliowner.ErrAuthorityLost) {
+		slog.Error("cliaccounts: the CLI worker refuses deletions until an operator hands it over to this server (taskto cli-worker trust-server, docs/cli-workers.md)", "boot", s.boot)
+	}
+	if err != nil {
 		return fmt.Errorf("removing the CLI worker's files of user %d: %w", user, err)
 	}
 	s.mu.Lock()
@@ -268,52 +306,64 @@ func (s *Service) ReconcileForgotten(ctx context.Context) error {
 	if s.worker == nil {
 		return nil
 	}
-	before := time.Now()
-	tx, err := s.db.BeginTx(ctx, nil)
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	inst, err := s.Installation(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM users
+	census := cliworker.Census{Before: time.Now(), Owners: map[int64]string{}, Boot: s.boot, Installation: inst}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, cli_identity FROM users
 		WHERE id NOT IN (SELECT user_id FROM account_deletions WHERE purge_started_at IS NOT NULL)`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	var live []int64
 	for rows.Next() {
 		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var identity string
+		if err := rows.Scan(&id, &identity); err != nil {
 			return err
 		}
-		live = append(live, id)
+		census.Owners[id] = identity
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 	rows.Close()
-	var next int64
-	if err := tx.QueryRowContext(ctx, `SELECT max(coalesce((SELECT max(id) FROM users), 0), coalesce((SELECT high FROM user_ids WHERE id = 1), 0)) + 1`).Scan(&next); err != nil {
-		return err
-	}
-	_ = tx.Rollback()
-	return s.worker.Reconcile(ctx, live, next, before)
+	return s.worker.Reconcile(ctx, census)
 }
+
+const reconcileTimeout = 2 * time.Minute
+
+const reconcileWarnEvery = 10
 
 func (s *Service) StartReconcile() {
 	if s.worker == nil {
 		return
 	}
+	inst, _ := s.Installation(context.Background())
+	slog.Info("cliaccounts: this server's boot and installation, for the CLI worker", "boot", s.boot, "installation", inst)
 	try := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		return s.ReconcileForgotten(ctx)
+		a := s.startAttempt()
+		<-a.done
+		return a.err
+	}
+	stale := func(err error) bool {
+		if errors.Is(err, cliworker.ErrStaleBoot) {
+			slog.Error("cliaccounts: the CLI worker has heard from a later start of the server: this server's census is ignored; is an older server still running?")
+			return true
+		}
+		return false
 	}
 	err := try()
-	if err == nil {
+	if err == nil || stale(err) {
 		return
 	}
-	slog.Warn("cliaccounts: telling the CLI worker which users exist failed; trying again", "err", err)
+	warn := func(tries int, err error) {
+		slog.Warn("cliaccounts: telling the CLI worker which users exist failed; trying again", "tries", tries, "err", err)
+	}
+	warn(1, err)
 	s.mu.Lock()
 	select {
 	case <-s.closing:
@@ -326,14 +376,22 @@ func (s *Service) StartReconcile() {
 	go func() {
 		defer s.wg.Done()
 		delay := time.Second
-		for {
+		for tries := 2; ; tries++ {
 			select {
 			case <-s.closing:
 				return
 			case <-time.After(delay):
 			}
-			if err := try(); err == nil {
+			err := try()
+			if err == nil {
+				slog.Info("cliaccounts: the CLI worker was told which users exist", "tries", tries)
 				return
+			}
+			if stale(err) {
+				return
+			}
+			if tries%reconcileWarnEvery == 0 {
+				warn(tries, err)
 			}
 			delay = min(delay*2, 30*time.Second)
 		}
@@ -449,8 +507,16 @@ func (s *Service) own(ctx context.Context, user int64, cli cliworker.CLI) ([]row
 func (s *Service) account(ctx context.Context, user int64, a ref) (Account, error) {
 	out := Account{ID: a.handle(), CLI: a.cli, Slot: a.number(), Name: a.cli.Name(), State: Disconnected, Limits: []cliworker.Limit{}}
 	if s.worker != nil {
-		out.Available = s.worker.Available(a.cli)
-		if info, ok := s.worker.LoginInfo(user, a.cli, a.slot); ok {
+		available, err := s.cliAvailable(a.cli)
+		if err != nil {
+			return Account{}, err
+		}
+		out.Available = available
+		info, ok, err := s.worker.LoginInfo(user, a.cli, a.slot)
+		if err != nil {
+			return Account{}, fmt.Errorf("%w: %w", ErrNotReady, err)
+		}
+		if ok {
 			if err := s.settle(ctx, user, info, false); err != nil {
 				return Account{}, err
 			}
@@ -673,7 +739,10 @@ func (s *Service) watch(user int64, a ref) {
 				return
 			case <-tick.C:
 			}
-			info, ok := s.worker.LoginInfo(user, a.cli, a.slot)
+			info, ok, err := s.worker.LoginInfo(user, a.cli, a.slot)
+			if err != nil {
+				continue
+			}
 			if !ok || !info.State.Final() {
 				if !ok {
 					return

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -12,17 +13,34 @@ import (
 	"strings"
 )
 
-type Paths struct{ Root string }
+type Paths struct {
+	Root  string
+	Short string
+}
+
+func HomePaths(home string) Paths {
+	return Paths{Root: filepath.Join(home, "browser"), Short: filepath.Join(home, "r")}
+}
 
 func (p Paths) Home() string { return filepath.Join(p.Root, "home") }
 
-func (p Paths) Tmp() string { return filepath.Join(p.Root, "tmp") }
+func (p Paths) Tmp() string {
+	if p.Short != "" {
+		return p.Short
+	}
+	return filepath.Join(p.Root, "tmp")
+}
 
 func (p Paths) Profile() string { return filepath.Join(p.Root, "profile") }
 
 func (p Paths) Testing() string { return filepath.Join(p.Root, "testing") }
 
-func (p Paths) Run() string { return filepath.Join(p.Root, "run") }
+func (p Paths) Run() string {
+	if p.Short != "" {
+		return p.Short
+	}
+	return filepath.Join(p.Root, "run")
+}
 
 func (p Paths) Xauthority() string { return filepath.Join(p.Run(), "xauthority") }
 
@@ -68,7 +86,7 @@ func Prepare(p Paths, spec ProcSpec) error {
 	if err := spec.check(); err != nil {
 		return err
 	}
-	for _, dir := range []string{p.Root, p.Home(), p.Tmp(), p.Run()} {
+	for _, dir := range []string{p.Root, p.Home(), p.Run(), p.Tmp()} {
 		if err := ownerOnlyDir(dir); err != nil {
 			return err
 		}
@@ -94,9 +112,44 @@ func Prepare(p Paths, spec ProcSpec) error {
 	return nil
 }
 
-func Clean(p Paths) error { return os.RemoveAll(p.Testing()) }
+func Clean(p Paths) error { return removeAll(p.Testing()) }
 
-func Purge(p Paths) error { return os.RemoveAll(p.Root) }
+func Purge(p Paths) error {
+	if p.Short != "" {
+		if err := removeAll(p.Short); err != nil {
+			return err
+		}
+	}
+	return removeAll(p.Root)
+}
+
+func removeAll(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return os.Remove(path)
+	}
+	if info.Mode().Perm()&0o700 != 0o700 {
+		if err := os.Chmod(path, 0o700); err != nil {
+			return err
+		}
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := removeAll(filepath.Join(path, e.Name())); err != nil {
+			return err
+		}
+	}
+	return os.Remove(path)
+}
 
 func ownerOnlyDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
