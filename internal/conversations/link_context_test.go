@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"taskto.ai/taskto/internal/agentrt"
@@ -129,6 +130,42 @@ func TestALinkToAnotherUsersConversationIsSkippedLikeAMissingOne(t *testing.T) {
 	in := l.lastInput(current)
 	if strings.Contains(in.Content, "secret plan") || strings.Contains(in.Content, "Theirs") || len(entryOf(t, in).Attached) != 0 {
 		t.Fatalf("someone else's conversation reached the agent: %q", in.Content)
+	}
+}
+
+func TestNoTranscriptIsReadForAConversationTheSenderDoesNotOwn(t *testing.T) {
+	l, owner := newLinkEnv(t)
+	other := l.invite(owner, l.ws, "other@example.com")
+	theirs := l.withTranscript(other, "Theirs", "the other person's secret plan")
+	mine := l.withTranscript(owner, "Mine", "my own earlier line")
+	current := owner.create(l.ws, nil)
+	theirsAgent := theirs.agentIDForTest(t, l.env)
+	mineAgent := mine.agentIDForTest(t, l.env)
+
+	var mu sync.Mutex
+	reads := map[int64]int{}
+	l.rt.mu.Lock()
+	l.rt.onMessages = func(conv int64) {
+		mu.Lock()
+		defer mu.Unlock()
+		reads[conv]++
+	}
+	l.rt.mu.Unlock()
+
+	own := l.send(owner, current, "from "+l.link(mine.ID))
+	foreign := l.send(owner, current, "from "+l.link(theirs.ID))
+	missing := l.send(owner, current, "from "+l.link(999999))
+
+	mu.Lock()
+	defer mu.Unlock()
+	if reads[mineAgent] == 0 || len(own.Skipped) != 0 {
+		t.Fatalf("the sender's own conversation was read %d times, skipped %+v: the count proves nothing if an owned link is not read", reads[mineAgent], own.Skipped)
+	}
+	if reads[theirsAgent] != 0 {
+		t.Fatalf("another member's transcript was read %d times for a link its reader does not own: the ownership check must come before any read", reads[theirsAgent])
+	}
+	if len(foreign.Skipped) != 1 || len(missing.Skipped) != 1 || foreign.Skipped[0].Reason != missing.Skipped[0].Reason || foreign.Skipped[0].Reason != skipUnavailable {
+		t.Fatalf("foreign skipped %+v, missing skipped %+v: want the same unavailable reason", foreign.Skipped, missing.Skipped)
 	}
 }
 
