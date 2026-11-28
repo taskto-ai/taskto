@@ -1,5 +1,6 @@
 import { ApiError, type OfflineApp } from '../api'
 import { holds, type Rule } from '../apps/rules'
+import { isCalendarDate, isInMonth } from './dates'
 import { type ChangeKind, type Download, kindOf, type OutboxItem } from './store'
 
 type Definition = OfflineApp['definition']
@@ -107,9 +108,7 @@ export function parseField(f: Field, raw: unknown): unknown {
       if (v === false || v === 'false') return false
       throw refused('bad_request', { field: f.name })
     case 'date':
-      if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(`${v}T00:00:00Z`))) {
-        throw refused('app_field_not_date', { field: f.name })
-      }
+      if (!isCalendarDate(v)) throw refused('app_field_not_date', { field: f.name })
       return v
     case 'time':
       if (typeof v !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) {
@@ -237,11 +236,11 @@ export function itemsOf(download: Download, queue: OutboxItem[]): Item[] {
     if (q.operation in (download.operations ?? {})) continue
     const kind = kindOf(q)
     if (kind === 'insert') {
-      let values: Record<string, unknown> = {}
+      let values: Record<string, unknown>
       try {
         values = parseInsert(download.definition, q.action.context)
       } catch {
-        values = {}
+        continue
       }
       created.push({ id: q.record.id, ...values })
     } else {
@@ -340,12 +339,7 @@ function dataModelOf(messages: unknown[]): Record<string, unknown> | undefined {
 
 function summarize(s: { kind: string; field?: string; where?: unknown; month_of?: string }, rows: Item[]): string {
   const month = new Date().toISOString().slice(0, 7)
-  const dated = s.month_of
-    ? rows.filter(
-        (r) =>
-          typeof r[s.month_of as string] === 'string' && (r[s.month_of as string] as string).startsWith(`${month}-`),
-      )
-    : rows
+  const dated = s.month_of ? rows.filter((r) => isInMonth(r[s.month_of as string], month)) : rows
   const kept = s.where ? dated.filter((r) => holds(s.where as Rule, r)) : dated
   if (s.kind === 'count') return String(kept.length)
   if (s.kind === 'sum') {
@@ -357,6 +351,148 @@ function summarize(s: { kind: string; field?: string; where?: unknown; month_of?
     return total.toFixed(2)
   }
   return ''
+}
+
+type SeriesDefinition = {
+  kind: string
+  field?: string
+  group_by: string
+  bucket?: 'day' | 'week' | 'month'
+  last?: number
+  split_by?: string
+  where?: unknown
+}
+
+const utf8 = new TextEncoder()
+
+function compareBytes(a: string, b: string): number {
+  const x = utf8.encode(a)
+  const y = utf8.encode(b)
+  const shared = Math.min(x.length, y.length)
+  for (let i = 0; i < shared; i++) if (x[i] !== y[i]) return x[i] - y[i]
+  return x.length - y.length
+}
+
+function ownLabel(labels: Record<string, string> | undefined, key: string): string {
+  return labels && Object.hasOwn(labels, key) ? labels[key] : key
+}
+
+function meanOf(total: { count: number; sum: number; half: number }): number {
+  const mean = total.sum / total.count
+  return Number.isFinite(mean) ? mean : (total.half / total.count) * 2
+}
+
+function computeSeries(s: SeriesDefinition, def: Definition, rows: Item[], now: Date): unknown {
+  const fields = def.collection.fields as Field[]
+  const byName = new Map(fields.map((f) => [f.name, f]))
+  const groupField = byName.get(s.group_by)
+  if (!groupField) return { x: [], series: [] }
+  const keeps = (row: Item): boolean => !s.where || holds(s.where as Rule, row)
+  const groups: { key: string; label: string }[] = []
+  const groupIndex = new Map<string, number>()
+  const addGroup = (key: string, label = key): void => {
+    groupIndex.set(key, groups.length)
+    groups.push({ key, label })
+  }
+  const dateKey = (date: Date): string => {
+    const y = date.getUTCFullYear()
+    const m = String(date.getUTCMonth() + 1).padStart(2, '0')
+    const d = String(date.getUTCDate()).padStart(2, '0')
+    if (s.bucket === 'month') return `${y}-${m}`
+    if (s.bucket === 'week') {
+      const day = new Date(Date.UTC(y, date.getUTCMonth(), date.getUTCDate()))
+      day.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7))
+      const thursday = new Date(day)
+      thursday.setUTCDate(day.getUTCDate() + 3)
+      const isoYear = thursday.getUTCFullYear()
+      const jan4 = new Date(Date.UTC(isoYear, 0, 4))
+      const week1 = new Date(jan4)
+      week1.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() + 6) % 7))
+      const week = Math.floor((day.getTime() - week1.getTime()) / 604800000) + 1
+      return `${isoYear}-W${String(week).padStart(2, '0')}`
+    }
+    return `${y}-${m}-${d}`
+  }
+  const shiftDate = (date: Date, amount: number): Date => {
+    const result = new Date(date)
+    if (s.bucket === 'month') result.setUTCMonth(result.getUTCMonth() + amount)
+    else result.setUTCDate(result.getUTCDate() + amount * (s.bucket === 'week' ? 7 : 1))
+    return result
+  }
+  if (groupField.type === 'date') {
+    const current = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+    if (s.bucket === 'week') current.setUTCDate(current.getUTCDate() - ((current.getUTCDay() + 6) % 7))
+    if (s.bucket === 'month') current.setUTCDate(1)
+    const last = s.last || 12
+    for (let i = last - 1; i >= 0; i--) addGroup(dateKey(shiftDate(current, -i)))
+  } else if (groupField.type === 'choice') {
+    for (const key of groupField.options ?? []) addGroup(key, ownLabel(groupField.option_labels, key))
+  } else if (groupField.type === 'boolean') {
+    addGroup('false')
+    addGroup('true')
+  } else if (groupField.type === 'string') {
+    const counts = new Map<string, number>()
+    for (const row of rows) {
+      const value = row[s.group_by]
+      if (keeps(row) && typeof value === 'string') counts.set(value, (counts.get(value) ?? 0) + 1)
+    }
+    const keys = [...counts.keys()]
+      .filter((key) => key !== 'other')
+      .sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || compareBytes(a, b))
+      .slice(0, 20)
+    for (const key of keys) addGroup(key)
+    addGroup('other')
+  }
+  const splitField = s.split_by ? byName.get(s.split_by) : undefined
+  const splits =
+    splitField?.type === 'choice'
+      ? (splitField.options ?? []).map((key) => ({ key, label: ownLabel(splitField.option_labels, key) }))
+      : splitField?.type === 'boolean'
+        ? [
+            { key: 'false', label: 'false' },
+            { key: 'true', label: 'true' },
+          ]
+        : [{ key: '', label: '' }]
+  const totals = splits.map(() => groups.map(() => ({ count: 0, sum: 0, half: 0 })))
+  for (const row of rows) {
+    const raw = row[s.group_by]
+    if (!keeps(row)) continue
+    let key: string | undefined
+    if (groupField.type === 'date' && isCalendarDate(raw)) key = dateKey(new Date(`${raw}T00:00:00.000Z`))
+    else if (groupField.type === 'choice' && typeof raw === 'string' && groupIndex.has(raw)) key = raw
+    else if (groupField.type === 'boolean' && typeof raw === 'boolean') key = String(raw)
+    else if (groupField.type === 'string' && typeof raw === 'string') key = groupIndex.has(raw) ? raw : 'other'
+    const group = key === undefined ? undefined : groupIndex.get(key)
+    if (group === undefined) continue
+    const amount = s.kind === 'count' ? undefined : row[s.field ?? '']
+    if (s.kind !== 'count' && typeof amount !== 'number') continue
+    let split = 0
+    if (splitField) {
+      const rawSplit = row[s.split_by as string]
+      if (splitField.type === 'boolean' && typeof rawSplit !== 'boolean') continue
+      if (splitField.type === 'choice' && (typeof rawSplit !== 'string' || !splits.some((v) => v.key === rawSplit)))
+        continue
+      const splitKey = String(rawSplit)
+      split = splits.findIndex((v) => v.key === splitKey)
+      if (split < 0) continue
+    }
+    const total = totals[split][group]
+    total.count++
+    if (s.kind !== 'count') {
+      total.sum += amount as number
+      total.half += (amount as number) / 2
+    }
+  }
+  return {
+    x: groups,
+    series: splits.map((split, i) => ({
+      ...split,
+      values: totals[i].map((v) => {
+        const value = s.kind === 'count' ? v.count : s.kind === 'sum' ? v.sum : v.count ? meanOf(v) : null
+        return value !== null && Number.isFinite(value) ? value : null
+      }),
+    })),
+  }
 }
 
 function dataMessage(surface: string, path: string, value: unknown): Message {
@@ -374,11 +510,14 @@ function surfaceOf(messages: unknown[]): string {
 export function viewOf(download: Download, queue: OutboxItem[]): unknown[] {
   const surface = surfaceOf(download.messages)
   const items = itemsOf(download, queue)
+  const now = new Date()
   return (download.messages as Message[]).map((m) => {
     const update = m.updateDataModel as { path?: string; value?: unknown } | undefined
     if (update?.path !== '/' || !update.value || typeof update.value !== 'object') return m
     const value: Record<string, unknown> = { ...(update.value as Record<string, unknown>), items }
     for (const [name, s] of Object.entries(download.definition.summaries ?? {})) value[name] = summarize(s, items)
+    for (const [name, s] of Object.entries(download.definition.series ?? {}))
+      value[name] = computeSeries(s, download.definition, items, now)
     return dataMessage(surface, '/', value)
   })
 }
@@ -393,10 +532,14 @@ export function answerChange(
   const surface = surfaceOf(download.messages)
   const items = itemsOf(download, queue)
   const def = download.definition
+  const now = new Date()
   if (!def.screens?.length) return viewOf(download, queue).filter((m) => (m as Message).updateDataModel)
   const out: Message[] = [dataMessage(surface, '/items', items)]
   for (const [name, s] of Object.entries(def.summaries ?? {}).sort(([a], [b]) => (a < b ? -1 : 1))) {
     out.push(dataMessage(surface, `/${name}`, summarize(s, items)))
+  }
+  for (const [name, s] of Object.entries(def.series ?? {}).sort(([a], [b]) => (a < b ? -1 : 1))) {
+    out.push(dataMessage(surface, `/${name}`, computeSeries(s, def, items, now)))
   }
   if (kind === 'insert') out.push(dataMessage(surface, '/draft', {}))
   if (kind === 'update') out.push(dataMessage(surface, '/record', items.find((i) => i.id === id) ?? {}))

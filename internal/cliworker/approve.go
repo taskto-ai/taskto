@@ -124,14 +124,14 @@ func (w *Worker) serveApproval(conn net.Conn) {
 	deny := func(reason string) {
 		_ = json.NewEncoder(conn).Encode(approveReply{Reason: reason})
 	}
-	var user int64
+	var home int64
 	if iso := w.cfg.Isolation; iso != nil {
 		uid, err := peerUID(conn)
-		if err != nil || uid < iso.UIDBase+1 {
+		if err != nil || uid < iso.UIDBase+firstHome || uid >= iso.UIDBase+maxHome {
 			deny("only a CLI user may ask")
 			return
 		}
-		user = int64(uid - iso.UIDBase)
+		home = int64(uid - iso.UIDBase)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	line, err := bufio.NewReaderSize(io.LimitReader(conn, 1<<20), 64<<10).ReadBytes('\n')
@@ -146,7 +146,7 @@ func (w *Worker) serveApproval(conn net.Conn) {
 		deny("unreadable request")
 		return
 	}
-	t := w.waitTurnForHook(user, req.CLI, h.Session)
+	t := w.waitTurnForHook(home, req.CLI, h.Session)
 	if t == nil {
 		deny("no running turn of this user has this session")
 		return
@@ -158,14 +158,14 @@ func (w *Worker) serveApproval(conn net.Conn) {
 
 const sessionWait = 10 * time.Second
 
-func (w *Worker) waitTurnForHook(user int64, cli CLI, session string) *Turn {
+func (w *Worker) waitTurnForHook(home int64, cli CLI, session string) *Turn {
 	deadline := time.NewTimer(sessionWait)
 	defer deadline.Stop()
 	for {
 		w.mu.Lock()
 		named, freed := w.named, w.freed
 		w.mu.Unlock()
-		t, unnamed := w.turnForHook(user, cli, session)
+		t, unnamed := w.turnForHook(home, cli, session)
 		if t != nil || !unnamed {
 			return t
 		}
@@ -178,13 +178,13 @@ func (w *Worker) waitTurnForHook(user int64, cli CLI, session string) *Turn {
 	}
 }
 
-func (w *Worker) turnForHook(user int64, cli CLI, session string) (turn *Turn, unnamed bool) {
+func (w *Worker) turnForHook(home int64, cli CLI, session string) (turn *Turn, unnamed bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var only *Turn
 	count := 0
 	for _, t := range w.turns {
-		if user != 0 && t.spec.User != user {
+		if home != 0 && t.acct.home != home {
 			continue
 		}
 		running, has, waiting := t.running(session)
@@ -221,7 +221,7 @@ func (w *Worker) decide(t *Turn, h hookInput) (bool, string) {
 	if t.spec.Tools.readOnly(t.spec.CLI, h.Tool, h.Input) {
 		return true, ""
 	}
-	if h.Event == hookPreToolUse && readOnly(h.Tool, h.Input, w.cfg.Layout.User(t.spec.User).Conversation(t.spec.Conversation)) {
+	if h.Event == hookPreToolUse && readOnly(h.Tool, h.Input, w.cfg.Layout.Home(t.acct.home).Conversation(t.spec.Conversation)) {
 		return true, ""
 	}
 	return w.ask(t, h.Tool, describeInput(h.Input))

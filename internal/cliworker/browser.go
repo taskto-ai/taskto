@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -15,10 +16,11 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/browser"
+	"taskto.ai/taskto/internal/cliowner"
 )
 
-func (l Layout) BrowserPaths(user int64) browser.Paths {
-	return browser.Paths{Root: filepath.Join(l.User(user).Root, "browser")}
+func (l Layout) BrowserPaths(home int64) browser.Paths {
+	return browser.HomePaths(l.Home(home).Root)
 }
 
 func (w *Worker) BrowserHost(bins map[browser.Program]string) browser.Host {
@@ -32,12 +34,19 @@ type browserHost struct {
 
 func (h *browserHost) Bin(prog browser.Program) string { return h.bins[prog] }
 
-func (h *browserHost) Start(user int64, spec browser.ProcSpec, extra []*os.File) (*exec.Cmd, error) {
+func (h *browserHost) Start(a cliowner.Account, spec browser.ProcSpec, extra []*os.File) (*exec.Cmd, error) {
 	bin := h.bins[spec.Program]
 	if bin == "" {
 		return nil, browser.ErrUnavailable
 	}
-	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: "browser", Bin: bin, Browser: &spec})
+	acct, err := h.w.resolve(a, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.w.browserGate(acct); err != nil {
+		return nil, err
+	}
+	cmd, header, err := h.w.helperCommand(acct, helperRequest{Op: "browser", Bin: bin, Browser: &spec})
 	if err != nil {
 		return nil, err
 	}
@@ -54,8 +63,26 @@ func (h *browserHost) Start(user int64, spec browser.ProcSpec, extra []*os.File)
 		r.Close()
 		return nil, err
 	}
-	go logLines(r, user, spec.Program)
+	go logLines(r, a.User, spec.Program)
 	return cmd, nil
+}
+
+func (w *Worker) browserGate(acct account) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.admissible(acct, "", "")
+}
+
+func (w *Worker) BrowserAllowed(a cliowner.Account) error {
+	if !a.Valid() {
+		return browser.ErrAccountClosing
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.retired(a.Identity) || w.gated(a.Identity, "", "") {
+		return browser.ErrAccountClosing
+	}
+	return nil
 }
 
 func logLines(r io.ReadCloser, user int64, prog browser.Program) {
@@ -72,8 +99,35 @@ func logLines(r io.ReadCloser, user int64, prog browser.Program) {
 	}
 }
 
-func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteCloser, error) {
-	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: "browser-vnc"})
+func (h *browserHost) DialVNC(ctx context.Context, a cliowner.Account) (io.ReadWriteCloser, error) {
+	acct, err := h.w.resolve(a, false)
+	if err != nil {
+		return nil, err
+	}
+	held, release, err := h.w.admit(context.Background(), acct, "", "")
+	if err != nil {
+		return nil, err
+	}
+	if hook := h.w.dialHookForTest; hook != nil {
+		hook()
+	}
+	c, err := h.dialVNC(ctx, held, acct)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	if hook := h.w.handOffHookForTest; hook != nil {
+		hook()
+	}
+	c.mu.Lock()
+	c.release = release
+	c.stopWatch = context.AfterFunc(held, func() { _ = c.Close() })
+	c.mu.Unlock()
+	return c, nil
+}
+
+func (h *browserHost) dialVNC(ctx, held context.Context, acct account) (*helperConn, error) {
+	cmd, header, err := h.w.helperCommand(acct, helperRequest{Op: "browser-vnc"})
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +142,11 @@ func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteClos
 	cmd.Stdout = childOut
 	stderr := &tailBuffer{max: 2 << 10}
 	cmd.Stderr = stderr
+	if err := held.Err(); err != nil {
+		childOut.Close()
+		stdout.Close()
+		return nil, ErrRemoving
+	}
 	err = cmd.Start()
 	childOut.Close()
 	if err != nil {
@@ -116,10 +175,13 @@ func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteClos
 		if err != nil {
 			c.Close()
 			if s := strings.TrimSpace(stderr.String()); s != "" {
-				slog.Warn("browser: the live view's helper", "user", user, "said", cut(s, 500))
+				slog.Warn("browser: the live view's helper", "user", acct.user, "said", cut(s, 500))
 			}
 			return nil, err
 		}
+	case <-held.Done():
+		c.Close()
+		return nil, ErrRemoving
 	case <-ctx.Done():
 		select {
 		case err := <-status:
@@ -136,11 +198,14 @@ func (h *browserHost) DialVNC(ctx context.Context, user int64) (io.ReadWriteClos
 }
 
 type helperConn struct {
-	cmd  *exec.Cmd
-	w    io.WriteCloser
-	out  *os.File
-	r    *bufio.Reader
-	once sync.Once
+	cmd       *exec.Cmd
+	w         io.WriteCloser
+	out       *os.File
+	r         *bufio.Reader
+	once      sync.Once
+	mu        sync.Mutex
+	release   func()
+	stopWatch func() bool
 }
 
 func (c *helperConn) Read(p []byte) (int, error)  { return c.r.Read(p) }
@@ -152,20 +217,60 @@ func (c *helperConn) Close() error {
 		_ = signalGroup(c.cmd.Process.Pid, sigKill)
 		_ = c.cmd.Wait()
 		_ = c.out.Close()
+		c.mu.Lock()
+		stop, release := c.stopWatch, c.release
+		c.mu.Unlock()
+		if stop != nil {
+			stop()
+		}
+		if release != nil {
+			release()
+		}
 	})
 	return nil
 }
 
-func (h *browserHost) Clean(user int64) error {
-	return h.quickOp(user, "browser-clean", "removing the testing profile")
+func (h *browserHost) Clean(a cliowner.Account) error {
+	acct, err := h.w.resolve(a, false)
+	if errors.Is(err, ErrUnknownAccount) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	held, release, err := h.w.admit(context.Background(), acct, "", "")
+	if err != nil {
+		return err
+	}
+	defer release()
+	return h.quickOpCtx(held, acct, "browser-clean", "removing the testing profile")
 }
 
-func (h *browserHost) Purge(user int64) error {
-	return h.quickOp(user, "browser-purge", "removing the browser's files")
+func (h *browserHost) Purge(a cliowner.Account) error {
+	if a.Identity == "" {
+		return nil
+	}
+	r, ok, err := h.w.find(a.Identity)
+	if err != nil || !ok || r.Home == 0 {
+		return err
+	}
+	end, err := h.w.beginGate(context.Background(), scope{id: a.Identity, all: true})
+	if err != nil {
+		return err
+	}
+	defer end()
+	if _, err := os.Lstat(h.w.cfg.Layout.Home(r.Home).Root); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return h.quickOp(account{id: a.Identity, user: a.User, home: r.Home}, "browser-purge", "removing the browser's files")
 }
 
-func (h *browserHost) quickOp(user int64, op, what string) error {
-	cmd, header, err := h.w.helperCommand(user, helperRequest{Op: op})
+func (h *browserHost) quickOp(acct account, op, what string) error {
+	return h.quickOpCtx(context.Background(), acct, op, what)
+}
+
+func (h *browserHost) quickOpCtx(ctx context.Context, acct account, op, what string) error {
+	cmd, header, err := h.w.helperCommand(acct, helperRequest{Op: op})
 	if err != nil {
 		return err
 	}
@@ -173,6 +278,9 @@ func (h *browserHost) quickOp(user int64, op, what string) error {
 	stderr := &tailBuffer{max: 2 << 10}
 	cmd.Stderr = stderr
 	done := make(chan error, 1)
+	if err := ctx.Err(); err != nil {
+		return ErrRemoving
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -183,6 +291,9 @@ func (h *browserHost) quickOp(user int64, op, what string) error {
 			return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 		}
 		return nil
+	case <-ctx.Done():
+		_ = signalGroup(cmd.Process.Pid, sigKill)
+		return fmt.Errorf("%w: %w", ErrRemoving, <-done)
 	case <-time.After(30 * time.Second):
 		_ = signalGroup(cmd.Process.Pid, sigKill)
 		return fmt.Errorf("%s took too long, and was stopped: %w", what, <-done)
@@ -190,7 +301,7 @@ func (h *browserHost) quickOp(user int64, op, what string) error {
 }
 
 func runBrowserOp(req helperRequest, layout Layout, stdout io.Writer) error {
-	p := layout.BrowserPaths(req.User)
+	p := layout.BrowserPaths(req.Home)
 	switch req.Op {
 	case "browser":
 		if req.Browser == nil || !filepath.IsAbs(req.Bin) {

@@ -197,6 +197,8 @@ func newWorld(t *testing.T) *world {
 	exec(t, sqlDB, `INSERT INTO push_subscriptions (user_id, session_id, endpoint, p256dh, auth_sealed) VALUES (?, ?, 'https://push.example.test/x', x'01', x'02')`, w.leaver, sess)
 	exec(t, sqlDB, `INSERT INTO access_tokens (user_id, workspace_id, name, token_hash) VALUES (?, ?, 'laptop', 'th1')`, w.leaver, w.ws)
 	exec(t, sqlDB, `INSERT INTO cli_accounts (user_id, cli, slot, state) VALUES (?, 'claude', 1, 'connected')`, w.leaver)
+	exec(t, sqlDB, `INSERT INTO agent_usage_daily (user_id, workspace_id, day, source, engine, input_tokens, output_tokens, turns) VALUES (?, ?, '2026-11-27', 'cli', 'claude', 12, 4, 1)`, w.leaver, w.ws)
+	exec(t, sqlDB, `INSERT INTO agent_usage_turns (user_id, turn, day) VALUES (?, 'c1-t1', '2026-11-27')`, w.leaver)
 	exec(t, sqlDB, `INSERT INTO user_totp (user_id, secret, enabled_at) VALUES (?, x'01', '2026-01-01T00:00:00.000Z')`, w.leaver)
 	exec(t, sqlDB, `INSERT INTO user_identities (issuer, subject, user_id) VALUES ('https://idp.example.test', 'sub-1', ?)`, w.leaver)
 	exec(t, sqlDB, `INSERT INTO conversations (workspace_id, owner_id, agent_id, title) VALUES (?, ?, 101, 'about my diary')`, w.ws, w.leaver)
@@ -321,6 +323,8 @@ func TestPurgeDeletesWhatWasTheirsAndKeepsWhatWasShared(t *testing.T) {
 		`SELECT count(*) FROM push_subscriptions`,
 		`SELECT count(*) FROM access_tokens`,
 		`SELECT count(*) FROM cli_accounts`,
+		`SELECT count(*) FROM agent_usage_daily`,
+		`SELECT count(*) FROM agent_usage_turns`,
 		`SELECT count(*) FROM user_totp`,
 		`SELECT count(*) FROM user_identities`,
 		`SELECT count(*) FROM invites WHERE email = '` + leaverEmail + `'`,

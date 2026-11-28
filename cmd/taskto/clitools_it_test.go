@@ -4,8 +4,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
@@ -169,7 +171,7 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 		return "(no call)"
 	}
 
-	ownerClaude := layout.User(ownerID).Config(cliworker.Claude)
+	ownerClaude := homeOf(t, layout, ownerID).Config(cliworker.Claude)
 	clitest.WriteScenario(t, ownerClaude, clitest.Scenario{MCP: []clitest.MCPCall{
 		{Tool: "list_spaces"},
 		{Tool: "write_doc", Args: map[string]any{"space_id": ownerPrivate, "path": "from-claude.md", "content": "# Written by the CLI\n"}},
@@ -261,7 +263,7 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 		t.Fatalf("the ended turn's token = %d %s", res.StatusCode, body)
 	}
 
-	clitest.WriteScenario(t, layout.User(memberID).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{
+	clitest.WriteScenario(t, homeOf(t, layout, memberID).Config(cliworker.Claude), clitest.Scenario{MCP: []clitest.MCPCall{
 		{Tool: "list_spaces"},
 		{Tool: "read_doc", Args: map[string]any{"space_id": ownerPrivate, "path": "from-claude.md"}},
 		{Tool: "read_doc", Args: map[string]any{"space_id": memberPrivate, "path": "secret.md"}},
@@ -303,11 +305,50 @@ func TestCLIToolsThroughTheServer(t *testing.T) {
 		t.Fatalf("the turn didn't keep the request: %s", body)
 	}
 
-	memberCalls := clitest.Calls(t, layout.User(memberID).Config(cliworker.Claude))
+	memberCalls := clitest.Calls(t, homeOf(t, layout, memberID).Config(cliworker.Claude))
 	if len(memberCalls) == 0 {
 		t.Fatal("the member's CLI never ran")
 	}
 	if env := strings.Join(memberCalls[len(memberCalls)-1].Env, "\n"); strings.Contains(env, ended) || !strings.Contains(env, "TASKTO_TOOLS_TOKEN=ttm1.") {
 		t.Fatal("the member's CLI didn't get a token of its own")
 	}
+}
+
+func homeOf(t *testing.T, layout cliworker.Layout, user int64) cliworker.Dirs {
+	t.Helper()
+	d, ok := homeIfAny(t, layout, user)
+	if !ok {
+		t.Fatalf("the CLI worker has no account of user %d", user)
+	}
+	return d
+}
+
+func homeIfAny(t *testing.T, layout cliworker.Layout, user int64) (cliworker.Dirs, bool) {
+	t.Helper()
+	dir := filepath.Join(layout.Root, ".worker", "accounts")
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return cliworker.Dirs{}, false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var r struct {
+			Home    int64 `json:"home"`
+			User    int64 `json:"user"`
+			Retired bool  `json:"retired"`
+		}
+		if err := json.Unmarshal(b, &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.User == user && !r.Retired {
+			return layout.Home(r.Home), true
+		}
+	}
+	return cliworker.Dirs{}, false
 }

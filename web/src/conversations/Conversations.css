@@ -215,6 +215,27 @@
     background: var(--color-bg-sunken);
   }
 
+  .ui-chat-msg[data-role="note"] {
+    display: grid;
+    gap: var(--space-1);
+    max-inline-size: min(36rem, 85%);
+    padding: var(--space-2) var(--space-4);
+    border: var(--line-thin) dashed var(--color-border);
+    border-radius: var(--radius-lg);
+    background: transparent;
+    color: var(--color-text-muted);
+  }
+
+  .ui-chat-note-label {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-chat-box[data-mode="note"] {
+    border-style: dashed;
+  }
+
   .ui-chat-msg-text {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -305,6 +326,57 @@
 
   .ui-chat-tool-link {
     color: var(--color-link);
+  }
+
+  .ui-chat-changes {
+    display: grid;
+    gap: var(--space-2);
+    inline-size: 100%;
+    padding: var(--space-3);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    font: var(--type-small);
+  }
+
+  .ui-chat-changes-title {
+    cursor: pointer;
+    font-weight: 500;
+    color: var(--color-text-soft);
+  }
+
+  .ui-chat-changes-title:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
+  .ui-chat-changes-list {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ui-chat-changes-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .ui-chat-changes-icon {
+    flex: none;
+    color: var(--color-text-soft);
+  }
+
+  .ui-chat-changes-name {
+    min-inline-size: 0;
+    flex: 1;
+    overflow-wrap: anywhere;
+  }
+
+  .ui-chat-changes-folder {
+    margin-inline-start: var(--space-2);
+    color: var(--color-text-soft);
   }
 
   .ui-chat-tool-output {
@@ -514,7 +586,8 @@
       padding-block-end: calc(var(--space-3) + env(safe-area-inset-bottom));
     }
 
-    .ui-chat-msg[data-role="user"] {
+    .ui-chat-msg[data-role="user"],
+    .ui-chat-msg[data-role="note"] {
       max-inline-size: 90%;
     }
 

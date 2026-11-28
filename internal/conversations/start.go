@@ -100,6 +100,10 @@ func (s *Service) Start(ctx context.Context, st Start) (Started, error) {
 	if st.Tools && s.capability != nil {
 		in.Capability = s.capability(conversation.ID, conversation.agentID)
 	}
+	model, _ := rt.Model(ctx, conversation.agentID)
+	if err := s.ensureUsageMark(ctx, rt, conversation.ID, conversation.agentID); err != nil {
+		return Started{}, runtimeError(ctx, err)
+	}
 	submission, err := rt.Submit(ctx, conversation.agentID, in)
 	if err != nil {
 		return Started{}, runtimeError(ctx, err)
@@ -107,7 +111,7 @@ func (s *Service) Start(ctx context.Context, st Start) (Started, error) {
 	if err := s.recordSubmission(context.WithoutCancel(ctx), conversation.ID, conversation.agentID, submission); err != nil {
 		return Started{}, err
 	}
-	s.markWhenSettled(rt, conversation.ID, conversation.agentID, submission)
+	s.markWhenSettled(rt, Principal{Conversation: conversation.ID, AgentConversation: conversation.agentID, Workspace: conversation.WorkspaceID, User: st.User}, model.Provider, submission)
 	return Started{Conversation: conversation, Submission: submission}, nil
 }
 

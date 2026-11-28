@@ -1,7 +1,9 @@
 import { applyImmutable, type Op } from '@earendil-works/chord/delta'
 import { expect, test } from 'vitest'
+import { turnChanges } from './changes'
 import stream from './testdata/stream.json'
-import { type ConversationView, transcript } from './transcript'
+import turn from './testdata/turn-changes.json'
+import { type ConversationView, pendingHelp, transcript } from './transcript'
 
 type Event = { type: string; value?: ConversationView; ops?: Op[] }
 
@@ -69,6 +71,38 @@ test('passes over what it does not know', () => {
   expect(transcript({ entries: [{ id: 1, kind: 'x' }], docs: { 'pi.live': 'odd' } }).messages).toEqual([])
 })
 
+test('uses taskto input metadata and leaves old pi user entries unchanged', () => {
+  const t = transcript({
+    entries: [
+      {
+        id: 1,
+        kind: 'taskto.input',
+        data: { v: 1, author: 7, text: 'what the person typed', attached: [{ conversation: 12, title: 'Earlier' }] },
+        model: [{ role: 'user', content: [{ type: 'text', text: 'what the model saw' }] }],
+      },
+      {
+        id: 2,
+        kind: 'taskto.input',
+        data: { author: 'bad', text: 3, attached: [{ conversation: 0, title: 4 }] },
+        model: [{ role: 'user', content: 'fallback' }],
+      },
+      { id: 3, kind: 'pi.user', data: { text: 'ignored' }, model: [{ role: 'user', content: 'legacy' }] },
+    ],
+  })
+  expect(t.messages).toEqual([
+    {
+      key: '1.0',
+      role: 'user',
+      text: 'what the person typed',
+      tools: [],
+      author: 7,
+      attached: [{ conversation: 12, title: 'Earlier' }],
+    },
+    { key: '2.0', role: 'user', text: 'fallback', tools: [] },
+    { key: '3.0', role: 'user', text: 'legacy', tools: [] },
+  ])
+})
+
 test('a tool use names the app only from a saved result, never from its arguments', () => {
   const call = (id: string, name: string, args: unknown = { space_id: 9, app_id: 9 }) => ({
     type: 'toolCall',
@@ -108,7 +142,13 @@ test('a tool use names the app only from a saved result, never from its argument
     ],
   })
   expect(t.messages[0].tools).toEqual([
-    { id: 'ok', key: '1.0.0', name: 'create_app', app: { space: 2, app: 1 } },
+    {
+      id: 'ok',
+      key: '1.0.0',
+      name: 'create_app',
+      app: { space: 2, app: 1 },
+      changed: { kind: 'app', space: 2, app: 1, name: 'Expenses', change: 'created' },
+    },
     { id: 'refused', key: '1.0.1', name: 'create_app' },
     { id: 'odd', key: '1.0.2', name: 'update_app' },
     { id: 'other', key: '1.0.3', name: 'show_app' },
@@ -132,8 +172,24 @@ test('a result answers the latest call with its id: ids can repeat across turns'
     ],
   })
   expect(t.messages.map((m) => m.tools)).toEqual([
-    [{ id: 'call_0', key: '1.0.0', name: 'create_app', app: { space: 2, app: 1 } }],
-    [{ id: 'call_0', key: '3.0.0', name: 'update_app', app: { space: 2, app: 5 } }],
+    [
+      {
+        id: 'call_0',
+        key: '1.0.0',
+        name: 'create_app',
+        app: { space: 2, app: 1 },
+        changed: { kind: 'app', space: 2, app: 1, name: 'x', change: 'created' },
+      },
+    ],
+    [
+      {
+        id: 'call_0',
+        key: '3.0.0',
+        name: 'update_app',
+        app: { space: 2, app: 5 },
+        changed: { kind: 'app', space: 2, app: 5, name: 'x', change: 'edited' },
+      },
+    ],
   ])
 })
 
@@ -191,4 +247,142 @@ test('an app a CLI turn saved is the app of its cli_turn call, from the result i
     ],
   })
   expect(none.messages[0].tools[0].app).toBeUndefined()
+})
+
+test('shows a note between the messages around it, in entry order, and never as a model message', () => {
+  const t = transcript({
+    entries: [
+      { id: 1, kind: 'pi.user', model: [{ role: 'user', content: 'What are the numbers?' }] },
+      { id: 2, kind: 'taskto.note', data: { v: 1, author: 7, text: 'checked with finance' } },
+      { id: 3, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'Fine.' }] }] },
+      { id: 4, kind: 'taskto.note', data: { v: 1, author: 7, text: 'second' } },
+    ],
+  })
+  expect(t.messages.map((m) => [m.role, m.text])).toEqual([
+    ['user', 'What are the numbers?'],
+    ['note', 'checked with finance'],
+    ['assistant', 'Fine.'],
+    ['note', 'second'],
+  ])
+  expect(t.messages[1]).toMatchObject({ key: '2', author: 7, tools: [] })
+})
+
+test('leaves out a note entry that has no text', () => {
+  const t = transcript({
+    entries: [
+      { id: 1, kind: 'taskto.note', data: { v: 1, author: 7, text: '   ' } },
+      { id: 2, kind: 'taskto.note', data: { v: 1, author: 7 } },
+      { id: 3, kind: 'taskto.note' },
+      { id: 4, kind: 'other.note', data: { text: 'not ours' } },
+    ],
+  })
+  expect(t.messages).toEqual([])
+})
+
+test('a note does not clear what the agent is waiting for', () => {
+  const entries = [
+    {
+      id: 1,
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'toolCall', id: 'h1', name: 'browser_help', arguments: { reason: 'captcha', message: 'Solve it' } },
+          ],
+        },
+      ],
+    },
+    { id: 2, kind: 'taskto.note', data: { v: 1, author: 1, text: 'on it' } },
+  ]
+  expect(pendingHelp(transcript({ entries }).messages)).toEqual({ reason: 'captcha', message: 'Solve it' })
+})
+
+test('an entry that is not a note never becomes one, whatever its data holds', () => {
+  const t = transcript({
+    entries: [
+      { id: 1, kind: 'pi.user', model: [{ role: 'user', content: 'hi' }], data: { text: 'sneaky', author: 1 } },
+    ],
+  })
+  expect(t.messages.map((m) => [m.role, m.text])).toEqual([['user', 'hi']])
+})
+
+test('keeps what each call that changed something changed, and nothing for readers or failed calls', () => {
+  const t = transcript({ entries: turn })
+  const used = t.messages.flatMap((m) => m.tools).map((u) => [u.name, u.changed])
+  expect(used).toEqual([
+    ['list_docs', undefined],
+    ['write_doc', { kind: 'doc', space: 3, path: 'notes/a.md', change: 'created' }],
+    ['create_card', { kind: 'card', space: 3, board: 4, card: 9, title: 'Call the bank', change: 'created' }],
+    ['write_doc', undefined],
+    ['run_app_action', { kind: 'record', space: 2, app: 5, record: 12, change: 'created' }],
+  ])
+  expect([...turnChanges(t.messages)]).toEqual([
+    [
+      '9.0',
+      [
+        { kind: 'doc', space: 3, path: 'notes/a.md', change: 'created' },
+        { kind: 'card', space: 3, board: 4, card: 9, title: 'Call the bank', change: 'created' },
+        { kind: 'record', space: 2, app: 5, record: 12, change: 'created' },
+      ],
+    ],
+  ])
+})
+
+test('a result that arrives for a call of another name is not taken for a change', () => {
+  const t = transcript({
+    entries: [
+      {
+        id: 1,
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'assistant',
+            content: [{ type: 'toolCall', id: 'x', name: 'read_doc', arguments: { space_id: 3, path: 'a.md' } }],
+          },
+          {
+            role: 'toolResult',
+            toolCallId: 'x',
+            toolName: 'write_doc',
+            content: [{ type: 'text', text: '{"commit":"c"}' }],
+          },
+        ],
+      },
+    ],
+  })
+  expect(t.messages.flatMap((m) => m.tools).map((u) => u.changed)).toEqual([undefined])
+})
+
+function write(...rest: unknown[]): ConversationView {
+  return {
+    entries: [
+      {
+        id: 1,
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'assistant',
+            content: [{ type: 'toolCall', id: 'w', name: 'write_doc', arguments: { space_id: 3, path: 'a.md' } }],
+          },
+          ...rest,
+        ],
+      },
+    ],
+  }
+}
+
+const saved = { content: [{ type: 'text', text: '{"commit":"c","doc":{"path":"a.md"}}' }] }
+
+test('a failed call lists nothing, even when its text reads like a result', () => {
+  const t = transcript(write({ role: 'toolResult', toolCallId: 'w', toolName: 'write_doc', isError: true, ...saved }))
+  expect(t.messages.flatMap((m) => m.tools).map((u) => u.changed)).toEqual([undefined])
+  const ok = transcript(write({ role: 'toolResult', toolCallId: 'w', toolName: 'write_doc', ...saved }))
+  expect(ok.messages.flatMap((m) => m.tools).map((u) => u.changed)).toEqual([
+    { kind: 'doc', space: 3, path: 'a.md', change: 'created' },
+  ])
+})
+
+test('a result for a call the transcript has not seen is not given to another call', () => {
+  const t = transcript(write({ role: 'toolResult', toolCallId: 'other', toolName: 'write_doc', ...saved }))
+  expect(t.messages.flatMap((m) => m.tools).map((u) => u.changed)).toEqual([undefined])
 })

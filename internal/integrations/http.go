@@ -37,8 +37,9 @@ type Service struct {
 	clientOpts      []ClientOption
 	beforeBeginRef  func()
 	afterWriteAhead func() error
-	beforeCall      func()
 	afterCall       func() error
+	beforeSettle    func(objectID string)
+	beforeCall      func()
 
 	now            func() time.Time
 	hookIP, hookID *ratelimit.Limiter

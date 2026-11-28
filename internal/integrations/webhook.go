@@ -105,7 +105,7 @@ func (s *Service) handleHook(w http.ResponseWriter, r *http.Request) {
 	if m, modeless := sub.provider.(modeOfAccount); ok && modeless && m.EventsCarryNoMode() {
 		ev.Livemode = sub.target.mode == ModeLive
 	}
-	if !ok || ev.Livemode != (sub.target.mode == ModeLive) {
+	if !ok {
 		if err := s.store.noteEvent(ctx, sub.target.id, guard); err != nil {
 			s.hookWriteFailed(w, r, err)
 			return

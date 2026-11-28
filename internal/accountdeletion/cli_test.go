@@ -11,6 +11,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"taskto.ai/taskto/internal/cliowner"
+	"taskto.ai/taskto/internal/cliworker"
 )
 
 func (w *world) cliSteps() []string {
@@ -260,5 +263,55 @@ func TestTheLocalCLIStepWaitsForTheBrowserStep(t *testing.T) {
 	}
 	if got := w.cliSteps(); len(got) != 0 {
 		t.Fatalf("steps = %v", got)
+	}
+}
+
+func TestThePurgeRemovesALocalAccountHomeWithTheWorkersOff(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	w.history(cliLocal)
+	layout := cliworker.Layout{Root: filepath.Join(w.dir, "cli")}
+	worker, err := cliworker.New(cliworker.Config{Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	homes, accounts := map[int64]string{}, map[int64]cliowner.Account{}
+	for _, user := range []int64{w.leaver, w.carol} {
+		var identity string
+		if err := w.db.QueryRow(`SELECT cli_identity FROM users WHERE id = ?`, user).Scan(&identity); err != nil {
+			t.Fatal(err)
+		}
+		accounts[user] = cliowner.Account{User: user, Identity: identity}
+		dirs, err := worker.AccountDirs(accounts[user], "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dirs.Home, "login"), []byte("a login"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		homes[user] = dirs.Root
+	}
+	worker.Close()
+	w.cli.kind = ""
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(homes[w.leaver]); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("their local CLI home remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(homes[w.carol], "home", "login")); err != nil {
+		t.Errorf("someone else's local CLI home: %v", err)
+	}
+	if got := w.cliSteps(); len(got) != 0 {
+		t.Errorf("steps left = %v", got)
+	}
+	again, err := cliworker.New(cliworker.Config{Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if _, err := again.AccountDirs(accounts[w.leaver], "", ""); !errors.Is(err, cliworker.ErrForgotten) {
+		t.Errorf("the deleted account on a local worker started later: %v, want ErrForgotten", err)
 	}
 }

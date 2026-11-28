@@ -1,27 +1,28 @@
 import { chmodSync, rmSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { connect } from 'node:net'
-import { DatabaseSync } from 'node:sqlite'
 import { format } from 'node:util'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
 import {
   type ConversationId,
   type Cursor,
+  configure,
   createRegistry,
-  defineDoc,
   type EntryId,
   Harness,
   type SubmissionId,
 } from '@earendil-works/pi-durable'
-import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { cliTools } from './cli.js'
+import { InputError, type NoteInput, noteEntry, parseNote, type TasktoInputEntry, validInputEntry } from './input.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
+import { Lifecycle } from './lifecycle.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
+import { purgeInFlight, purgeOnce, startCheckpointer, WalBusyError } from './purge.js'
+import { compactOnce, openHarnessStorage, recordFresh } from './storage.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
 import { SpikeTools } from './tools.js'
-import { truncateWal, truncateWalAt, WalBusyError } from './wal.js'
 
 for (const level of ['error', 'warn', 'log', 'info', 'debug'] as const) {
   const write = console[level].bind(console)
@@ -73,8 +74,10 @@ if (toolsSocket) {
   )
 }
 
+const compaction = compactOnce(dbPath as string)
+if (compaction === 'compacted') console.error('agent.db compacted once, so content deleted before is gone from it')
 const harness = await Harness.open(
-  await openNodeSqliteStorage(dbPath),
+  await openHarnessStorage(dbPath as string),
   {
     models,
     registry,
@@ -83,22 +86,14 @@ const harness = await Harness.open(
   },
   context,
 )
+if (compaction === 'fresh') recordFresh(dbPath as string)
 harness.resume()
+startCheckpointer(dbPath as string)
 void harness.closed.then((end) => {
   if (end.kind === 'failed') {
     console.error('harness failed; exiting for a restart', end.error)
     process.exit(1)
   }
-})
-
-const Lifecycle = defineDoc<{ createdAt: number; retiredAt: number | null }>({
-  kind: 'taskto.lifecycle',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({ createdAt: 0, retiredAt: null }),
-  checkpointWhen: () => true,
 })
 
 class HttpError extends Error {
@@ -180,60 +175,6 @@ async function listConversations() {
     cursor = page.next
   } while (cursor)
   return out
-}
-
-function purgeRecords(root: number): void {
-  const db = new DatabaseSync(dbPath as string, { timeout: walBusyMs })
-  try {
-    db.exec('PRAGMA secure_delete = ON')
-    db.exec('BEGIN IMMEDIATE')
-    try {
-      const ids = new Set<number>([root])
-      const taskIds = new Set<number>()
-      const list = (set: Set<number>) => [...set].join(',') || 'NULL'
-      for (let grew = true; grew; ) {
-        grew = false
-        const tasks = db.prepare(`SELECT id FROM tasks WHERE conversation_id IN (${list(ids)})`).all() as {
-          id: number
-        }[]
-        for (const t of tasks) taskIds.add(Number(t.id))
-        const subs = db.prepare(`SELECT id FROM conversations WHERE owner_task_id IN (${list(taskIds)})`).all() as {
-          id: number
-        }[]
-        for (const c of subs) {
-          if (!ids.has(Number(c.id))) {
-            ids.add(Number(c.id))
-            grew = true
-          }
-        }
-      }
-      const docs = `SELECT id FROM documents WHERE (scope_kind = 'conversation' AND owner_id IN (${list(ids)}))
-        OR (scope_kind = 'task' AND owner_id IN (${list(taskIds)}))`
-      const records = [
-        `SELECT id FROM entries WHERE conversation_id IN (${list(ids)})`,
-        `SELECT id FROM submissions WHERE conversation_id IN (${list(ids)})`,
-        docs,
-      ]
-      const gone = new Set<number>([...ids, ...taskIds])
-      for (const q of records) for (const r of db.prepare(q).all() as { id: number }[]) gone.add(Number(r.id))
-      db.exec(`DELETE FROM document_revisions WHERE document_id IN (${docs})`)
-      db.exec(`DELETE FROM documents WHERE id IN (${docs})`)
-      db.exec(`DELETE FROM submissions WHERE conversation_id IN (${list(ids)})`)
-      db.exec(`DELETE FROM entries WHERE conversation_id IN (${list(ids)})`)
-      db.exec(`DELETE FROM tasks WHERE conversation_id IN (${list(ids)})`)
-      db.exec(`DELETE FROM conversations WHERE id IN (${list(ids)})`)
-      const all = [...gone]
-      for (let i = 0; i < all.length; i += 500)
-        db.exec(`DELETE FROM record_ids WHERE id IN (${all.slice(i, i + 500).join(',')})`)
-      db.exec('COMMIT')
-    } catch (error) {
-      db.exec('ROLLBACK')
-      throw error
-    }
-    truncateWal(db)
-  } finally {
-    db.close()
-  }
 }
 
 const PAGE_ENTRIES = 50
@@ -336,7 +277,9 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (resource === 'conversations' && parts.length === 3) {
     if (req.method === 'POST' && action === 'submit') {
       const body = await readJson(req)
+      let entry: TasktoInputEntry | undefined
       if (typeof body.content !== 'string') throw new HttpError(400, 'content must be a string')
+      const content = body.content
       const whenBusy = body.whenBusy
       if (whenBusy !== undefined && whenBusy !== 'steer' && whenBusy !== 'followUp' && whenBusy !== 'reject') {
         throw new HttpError(400, 'whenBusy must be steer, followUp or reject')
@@ -350,27 +293,43 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       if (body.language !== undefined && !validLanguage(body.language)) {
         throw new HttpError(400, 'language must be a BCP 47 tag such as "pt-BR", or ""')
       }
+      if (body.entry !== undefined) {
+        if (!validInputEntry(body.entry)) throw new HttpError(400, 'entry must be a bounded taskto.input entry')
+        entry = body.entry
+      }
       const conv = await conversation(id)
       const { capability, language } = body as { capability?: string; language?: string }
-      if (capability !== undefined || language !== undefined) {
-        await conv.commit(async (tx) => {
-          if (capability !== undefined) {
-            const access = await tx.doc(ToolAccess, conv.id)
-            if (access.capability !== capability) access.capability = capability
-          }
-          if (language !== undefined) {
-            const lang = await tx.doc(Language, conv.id)
-            if (lang.tag !== language) lang.tag = language
-          }
-        }, context)
-      }
-      const submission = await conv.submit(
-        {
+      let submissionId: SubmissionId | undefined
+      await conv.commit(async (tx) => {
+        if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
+        submissionId = await conv.submit(tx, {
           type: 'input',
-          content: body.content,
+          content,
+          ...(entry !== undefined ? { entry } : {}),
           ...(whenBusy ? { whenBusy } : {}),
           ...(typeof body.requestId === 'string' ? { requestId: body.requestId } : {}),
-        },
+        })
+        if (capability !== undefined) {
+          const access = await tx.doc(ToolAccess, conv.id)
+          if (access.capability !== capability) access.capability = capability
+        }
+        if (language !== undefined) {
+          const lang = await tx.doc(Language, conv.id)
+          if (lang.tag !== language) lang.tag = language
+        }
+      }, context)
+      return send(res, 202, { submissionId })
+    }
+    if (req.method === 'POST' && action === 'note') {
+      let note: NoteInput
+      try {
+        note = parseNote(await readJson(req))
+      } catch (error) {
+        if (error instanceof InputError) throw new HttpError(400, error.message)
+        throw error
+      }
+      const submission = await (await conversation(id)).submit(
+        { type: 'write', entry: noteEntry(note), ...(note.requestId ? { requestId: note.requestId } : {}) },
         context,
       )
       return send(res, 202, { submissionId: submission.id })
@@ -380,23 +339,30 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       await found.commit(async (tx) => {
         ;(await tx.doc(Lifecycle, found.id)).retiredAt = Date.now()
       }, context)
-      await found.abort(context)
+      await found.abort(context, { background: true })
       console.error(`conversation ${found.id} retired`)
       res.writeHead(204).end()
       return
     }
     if (req.method === 'POST' && action === 'purge') {
       const num = parseId(id) as ConversationId
+      const running = purgeInFlight(dbPath as string, num)
+      if (running) {
+        console.error(`conversation ${num} purge joins the running one`)
+        await running
+        res.writeHead(204).end()
+        return
+      }
       const found = await harness.conversation(num, context)
       if (found) {
         if ((await harness.snapshot(Lifecycle, num, context))?.retiredAt == null) {
           throw new HttpError(409, 'retire the conversation before purging it')
         }
-        await found.abort(context)
-        purgeRecords(num)
+        await found.abort(context, { background: true })
+        await purgeOnce({ path: dbPath as string, root: num, timeoutMs: walBusyMs })
         console.error(`conversation ${num} purged`)
       } else {
-        truncateWalAt(dbPath as string, walBusyMs)
+        await purgeOnce({ path: dbPath as string, root: num, timeoutMs: walBusyMs })
       }
       res.writeHead(204).end()
       return
@@ -415,7 +381,12 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     }
     if (req.method === 'PUT' && action === 'model') {
       const model = modelRef(await readJson(req))
-      await (await conversation(id)).configure({ model }, context)
+      const conv = await conversation(id)
+      await testHooks.beforeModelWrite?.()
+      await conv.commit(async (tx) => {
+        if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
+        await configure(tx, conv.id, { model })
+      }, context)
       return send(res, 200, model)
     }
     if (req.method === 'GET' && action === 'messages') {
