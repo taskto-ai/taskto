@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import JSZip from 'jszip'
-import { afterEach, expect, test, vi } from 'vitest'
+import { afterEach, expect, onTestFinished, test, vi } from 'vitest'
 import { renderDocx } from './docx'
 
 const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="html" ContentType="text/html"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`
@@ -29,6 +29,38 @@ test('an archive that is small but expands past the budget is refused before the
   const into = document.createElement('div')
   await expect(renderDocx(bomb, into, { expandedBytes: 1_000_000, parts: 100 })).rejects.toThrow(/too large/)
   expect(into.childElementCount).toBe(0)
+})
+
+test('the inflater stops soon after the budget is passed, within one block of the archive reader, not at the end of the part', async () => {
+  const wholePart = 60_000_000
+  const limit = 1_000_000
+  const oneBlockInflated = 18_000_000
+  const bomb = await wordFile((zip) => zip.file('word/media/zeros.bin', new Uint8Array(wholePart)), '')
+  const sample = await JSZip.loadAsync(bomb)
+  interface Counted {
+    on(event: 'data', handler: (chunk: Uint8Array) => void): unknown
+  }
+  const prototype = Object.getPrototypeOf(sample.files['word/media/zeros.bin']) as {
+    internalStream(type: string): Counted
+  }
+  const original = prototype.internalStream
+  let produced = 0
+  prototype.internalStream = function (this: unknown, type: string) {
+    const stream = original.call(this, type)
+    stream.on('data', (chunk) => {
+      produced += chunk.length
+    })
+    return stream
+  }
+  onTestFinished(() => {
+    prototype.internalStream = original
+  })
+  const into = document.createElement('div')
+  await expect(renderDocx(bomb, into, { expandedBytes: limit, parts: 100 })).rejects.toThrow(/too large/)
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  expect(produced).toBeGreaterThan(limit)
+  expect(produced).toBeLessThan(limit + oneBlockInflated)
+  expect(produced).toBeLessThan(wholePart)
 })
 
 test('parts that are each within the budget but together past it are refused', async () => {

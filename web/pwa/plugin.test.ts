@@ -19,6 +19,8 @@ const build = [
   'assets/zxing_reader-jkl012.wasm',
   'assets/zxing_writer-mno345.wasm',
   'assets/docx-preview-pqr678.js',
+  'assets/jszip.min-stu901.js',
+  'assets/jszip.min-vwx234.js',
   'vendor/novnc/core/rfb.js',
   'assets/THIRD_PARTY_NOTICES.txt',
   'sw.js',
@@ -41,8 +43,16 @@ test("leaves out the QR writer's .wasm: drawing the two-factor secret needs the 
 
 test("leaves out the Word preview's chunk: it is fetched the first time a Word file is opened", () => {
   const entries = precacheEntries(build)
-  expect(entries.some((e) => e.includes('docx-preview'))).toBe(false)
+  expect(entries.filter((e) => /docx-preview|jszip/.test(e))).toEqual([])
   expect(entries).toContain('/assets/AppsPage-def456.js')
+})
+
+test('leaves out every chunk the Word preview loads: its library and both copies of the archive reader', () => {
+  const wordChunks = ['assets/docx-preview-pqr678.js', 'assets/jszip.min-stu901.js', 'assets/jszip.min-vwx234.js']
+  for (const chunk of wordChunks) {
+    expect(precacheEntries(build)).not.toContain(`/${chunk}`)
+  }
+  expect(precacheEntries(build)).toEqual(precacheEntries(build.filter((f) => !wordChunks.includes(f))))
 })
 
 test('leaves out the worker itself, source maps, the vendored live view and the licence notices', () => {

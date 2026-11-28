@@ -8,7 +8,7 @@ const SKIP = [
   /\.map$/,
   /^vendor\//,
   /(^|\/)zxing_writer[^/]*\.wasm$/,
-  /(^|\/)docx-preview-[^/]*\.js$/,
+  /(^|\/)(docx-preview|jszip)[^/]*\.js$/,
   /(^|\/)THIRD_PARTY_NOTICES\.txt$/,
 ]
 
