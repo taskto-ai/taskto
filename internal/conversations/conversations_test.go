@@ -27,25 +27,26 @@ import (
 const password = "a-long-enough-password"
 
 type fakeRuntime struct {
-	mu         sync.Mutex
-	next       int64
-	models     map[int64]agentrt.ModelRef
-	created    []agentrt.ModelRef
-	inputs     map[int64][]agentrt.Input
-	notes      map[int64][]agentrt.NoteInput
-	calls      []string
-	watches    []*fakeWatch
-	aborts     map[int64]int
-	err        error
-	onAbort    func(ctx context.Context)
-	replies    map[int64][]agentrt.Message
-	rawEntries map[int64][]json.RawMessage
-	settle     chan struct{}
-	waited     atomic.Int64
-	waitErr    error
-	submitErr  error
-	onSubmit   func()
-	stallSend  bool
+	mu           sync.Mutex
+	next         int64
+	models       map[int64]agentrt.ModelRef
+	created      []agentrt.ModelRef
+	inputs       map[int64][]agentrt.Input
+	notes        map[int64][]agentrt.NoteInput
+	calls        []string
+	watches      []*fakeWatch
+	aborts       map[int64]int
+	err          error
+	onAbort      func(ctx context.Context)
+	replies      map[int64][]agentrt.Message
+	rawEntries   map[int64][]json.RawMessage
+	settle       chan struct{}
+	waited       atomic.Int64
+	waitErr      error
+	submitErr    error
+	onSubmit     func()
+	stallSend    bool
+	stallPutBack bool
 }
 
 var setupToken = auth.NewSetupToken()
@@ -143,8 +144,13 @@ func (f *fakeRuntime) Model(_ context.Context, conv int64) (agentrt.ModelRef, er
 	return f.models[conv], f.err
 }
 
-func (f *fakeRuntime) SetModel(_ context.Context, conv int64, model agentrt.ModelRef) error {
+func (f *fakeRuntime) SetModel(ctx context.Context, conv int64, model agentrt.ModelRef) error {
 	f.mu.Lock()
+	if f.stallPutBack && len(f.calls) > 0 && strings.HasPrefix(f.calls[len(f.calls)-1], "set-model ") {
+		f.mu.Unlock()
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err

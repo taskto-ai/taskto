@@ -373,3 +373,34 @@ func TestAStalledSendEndsAtItsDeadlineAndFreesTheHold(t *testing.T) {
 	}
 	owner.expect(http.StatusOK, http.MethodPut, path(ws, fmt.Sprintf("/%d/model", c.ID)), map[string]any{"provider": chosen.Provider, "model_id": chosen.ModelID})
 }
+
+func TestAStalledPutBackEndsAtItsOwnDeadlineAndFreesTheHold(t *testing.T) {
+	e := newEnv(t, false)
+	e.svc.holdLimit = 50 * time.Millisecond
+	e.svc.putBackLimit = 50 * time.Millisecond
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	send := path(ws, fmt.Sprintf("/%d/messages", c.ID))
+
+	e.rt.mu.Lock()
+	e.rt.stallSend = true
+	e.rt.stallPutBack = true
+	e.rt.mu.Unlock()
+
+	sent := make(chan int, 1)
+	go func() { sent <- owner.do(http.MethodPost, send, mention("cli-codex", "default", "hello")).Code }()
+	select {
+	case code := <-sent:
+		if code != http.StatusServiceUnavailable {
+			t.Fatalf("the send whose put-back stalled answered %d, want 503", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the put-back never ended")
+	}
+	e.svc.mu.Lock()
+	holds := len(e.svc.modelHolds)
+	e.svc.mu.Unlock()
+	if holds != 0 {
+		t.Fatalf("%d model holds are left after the put-back stalled", holds)
+	}
+}

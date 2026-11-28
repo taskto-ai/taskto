@@ -372,7 +372,7 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	sub, err := rt.Submit(ctx, c.agentID, in)
 	if err != nil {
 		if switchTo != nil {
-			backCtx, stop := context.WithTimeout(context.WithoutCancel(r.Context()), putBackLimit)
+			backCtx, stop := context.WithTimeout(context.WithoutCancel(r.Context()), s.putBackLimit)
 			defer stop()
 			if back := rt.SetModel(backCtx, c.agentID, before); back != nil {
 				slog.WarnContext(r.Context(), "conversations: putting back the model after a mention's send failed", "conversation", c.ID, "err", back)
