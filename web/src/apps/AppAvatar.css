@@ -4,6 +4,7 @@
     color: var(--color-text);
     font-size: var(--text-lg);
     font-weight: 400;
+    overflow: hidden;
   }
 
   .ui-avatar-sm.apps-avatar-icon {

@@ -4,6 +4,7 @@ import type { EventSourceFactory } from '../conversations/useConversationStream'
 import { homeChanged } from '../home/store'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
+import { sameSession } from '../session'
 import { spaceLabel } from '../spaces'
 import { ButtonLink } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
@@ -121,10 +122,13 @@ function SpaceApps({
 
   const change = async (app: App, body: { name?: string; icon?: string; archived?: boolean }) => {
     let failed: string | null = null
+    const same = sameSession()
     try {
       await api<App>(`${base}/${app.id}`, { method: 'PATCH', body: { version: app.version, ...body } })
-      setError(null)
-      homeChanged()
+      if (same()) {
+        setError(null)
+        homeChanged()
+      }
     } catch (e) {
       failed = e instanceof ApiError && e.status === 409 ? t('apps.changed', { name: app.name }) : errorText(e)
     }

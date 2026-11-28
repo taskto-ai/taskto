@@ -3338,8 +3338,10 @@ joined by U+200D (a family, a person with a profession), a pair of regional indi
 keycap (`1️⃣`, `#️⃣`, `*️⃣`) or a flag in tag characters (England, Scotland, Wales). A space,
 a control or invisible character anywhere (U+200B, U+202E, a byte order mark, a lone U+200D),
 several emoji, or a letter is `400 app_icon_invalid`, as is anything else. The web app's picker
-holds the same rule, and `internal/apps/testdata/app_icons.json` is the list of values that both
-test. Changing it needs the design capability, bumps the app's
+holds the same rule, with the same table of pictographs (`web/src/apps/pictographs.ts`, never the
+browser's own Unicode data, which differs between versions), and `internal/apps/testdata/app_icons.json`
+is the table and the list of values that both test. An icon of joined pictographs the system has no
+single glyph for is wider than its avatar, so the avatar clips it. Changing it needs the design capability, bumps the app's
 `version` and records no audit event. The agent's `create_app` and `update_app` take it too, a
 copy of an app keeps it, and Home's items (`app_icon`, left out when empty) and its available
 apps (`icon`) carry it.

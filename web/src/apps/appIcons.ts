@@ -1,3 +1,5 @@
+import { PICTOGRAPH_RANGES } from './pictographs'
+
 export const APP_ICONS = [
   '🧾',
   '💰',
@@ -44,7 +46,8 @@ export const APP_ICONS = [
 const MAX_BYTES = 32
 const MAX_CHARACTERS = 8
 
-const pictograph = '\\p{Extended_Pictographic}'
+const codePoint = (n: number) => `\\u{${n.toString(16)}}`
+const pictograph = `[${PICTOGRAPH_RANGES.map((n, i) => (i % 2 === 0 ? codePoint(n) : `-${codePoint(n)}`)).join('')}]`
 const joinable = `${pictograph}(?:\\u{FE0F}|[\\u{1F3FB}-\\u{1F3FF}])?`
 const shape = [
   '[0-9#*]\\u{FE0F}?\\u{20E3}',

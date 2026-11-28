@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { PinnedNav } from '../home/PinnedNav'
 import { parseRoute, usePath } from '../router'
+import { beginSession, endSession } from '../session'
 import { fakeFetch } from '../test/fakes'
 import { AppsPage } from './AppsPage'
 import { forgetOperations } from './operations'
@@ -923,4 +924,50 @@ test('a pin in the sidebar shows the new icon as soon as the icon is saved, with
     expect(within(within(pinned).getByRole('link', { name: 'Expenses' })).getByText('🧾')).toBeTruthy(),
   )
   expect(calls.filter((c) => c.path === '/api/workspaces/1/home')).toHaveLength(2)
+})
+
+test('an icon saved by a login that has ended tells nothing to the sidebar of the next one', async () => {
+  let answer: () => void = () => {}
+  const pin = (id: number, icon: string) => ({
+    id,
+    source: 'personal',
+    kind: 'pin',
+    space_id: 2,
+    app_id: 1,
+    app_name: 'Expenses',
+    app_icon: icon,
+    label: 'Expenses',
+    state: 'ready',
+  })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': { body: { apps: [app({})] } },
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': { body: { apps: [] } },
+    'GET /api/workspaces/1/home': {
+      body: { widgets: [], pins: [pin(11, '')], hidden: [], limits: { widgets: 24, pins: 20 } },
+    },
+    'PATCH /api/workspaces/1/spaces/2/apps/1': () =>
+      new Promise((done) => {
+        answer = () => done({ body: app({ version: 2, icon: '🧾' }) })
+      }),
+  })
+  beginSession(1)
+  const first = render(<Routed />)
+  const mine = await screen.findByRole('region', { name: 'Private' })
+  await choose(mine, 'Expenses', 'Change icon')
+  const dialog = await screen.findByRole('dialog', { name: 'Icon for Expenses' })
+  fireEvent.click(within(dialog).getByRole('radio', { name: '🧾' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(calls.some((c) => c.method === 'PATCH')).toBe(true))
+  first.unmount()
+  endSession()
+  beginSession(2)
+  render(<PinnedNav workspace={1} path="/w/1/apps" />)
+  const pinned = await screen.findByRole('region', { name: 'Pinned apps' })
+  const loads = () => calls.filter((c) => c.method === 'GET' && c.path === '/api/workspaces/1/home').length
+  const before = loads()
+  await act(async () => answer())
+  await new Promise((r) => setTimeout(r, 20))
+  expect(loads()).toBe(before)
+  expect(within(pinned).getByRole('link', { name: 'Expenses' })).toBeTruthy()
 })
