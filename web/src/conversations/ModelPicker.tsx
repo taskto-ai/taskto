@@ -1,11 +1,20 @@
 import { type ReactNode, useId, useState } from 'react'
-import { api, CLI_PRODUCTS, type CliAccounts, cliAccountFor, cliOfProvider, codeText, errorText } from '../api'
+import {
+  api,
+  CLI_PRODUCTS,
+  type CliAccounts,
+  cliAccountFor,
+  cliOfProvider,
+  codeText,
+  errorText,
+  type ModelRef,
+} from '../api'
 import { useT } from '../i18n'
 import { Link, routePath } from '../router'
 import { Select } from '../ui/Select'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 
-export type ModelRef = { provider: string; model_id: string }
+export type { ModelRef }
 export type ModelProvider = { provider: string; name: string; scope: string; models: { id: string; name: string }[] }
 
 const modelKey = (m: ModelRef) => JSON.stringify([m.provider, m.model_id])
