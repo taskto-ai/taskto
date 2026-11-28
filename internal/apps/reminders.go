@@ -283,9 +283,6 @@ func (s *Service) syncAppReminders(ctx context.Context, tx *sql.Tx, appID, forUs
 }
 
 func (s *Service) syncSpaceReminders(ctx context.Context, tx *sql.Tx, spaceID, forUser int64) error {
-	if s.sched == nil {
-		return nil
-	}
 	ids, err := scanIDs(ctx, tx, `SELECT id FROM apps WHERE space_id = ? ORDER BY id`, spaceID)
 	if err != nil {
 		return err
@@ -307,9 +304,6 @@ func (s *Service) SyncSpaceMemberReminders(ctx context.Context, tx *sql.Tx, spac
 }
 
 func (s *Service) SyncWorkspaceMemberReminders(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) error {
-	if s.sched == nil {
-		return nil
-	}
 	return s.syncUserApps(ctx, tx, `
 		SELECT DISTINCT r.app_id FROM app_rows r JOIN apps a ON a.id = r.app_id JOIN spaces sp ON sp.id = a.space_id
 		WHERE sp.workspace_id = ? AND r.created_by = ? AND r.deleted_at IS NULL ORDER BY r.app_id`, userID, workspaceID, userID)
@@ -320,9 +314,6 @@ func (s *Service) SyncAppGrantReminders(ctx context.Context, tx *sql.Tx, _, appI
 }
 
 func (s *Service) SyncUserReminders(ctx context.Context, tx *sql.Tx, userID int64) error {
-	if s.sched == nil {
-		return nil
-	}
 	return s.syncUserApps(ctx, tx, `
 		SELECT DISTINCT app_id FROM app_rows WHERE created_by = ? AND deleted_at IS NULL ORDER BY app_id`, userID, userID)
 }
