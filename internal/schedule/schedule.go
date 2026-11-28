@@ -402,11 +402,10 @@ func (s *Service) Cancel(ctx context.Context, q DBTX, userID int64, kind Kind, k
 }
 
 func (s *Service) Relocate(ctx context.Context, q DBTX, userID int64, kind Kind, key string, spaceID int64) error {
-	_, err := q.ExecContext(ctx, `
-		UPDATE scheduled_jobs SET space_id = ?, updated_at = ?
-		WHERE user_id = ? AND kind = ? AND dedupe_key = ? AND state IN ('pending', 'running')
+	_, err := q.ExecContext(ctx, `UPDATE scheduled_jobs SET space_id = ?, updated_at = ?
+		WHERE user_id = ? AND kind = ? AND dedupe_key = ? AND state IN ('pending', 'running') AND space_id IS NOT ?
 			AND EXISTS (SELECT 1 FROM spaces WHERE id = ? AND workspace_id = scheduled_jobs.workspace_id)`,
-		spaceID, stamp(s.clock()), userID, string(kind), key, spaceID)
+		spaceID, stamp(s.clock()), userID, string(kind), key, spaceID, spaceID)
 	return err
 }
 

@@ -257,11 +257,11 @@ func (s *Service) syncAppReminders(ctx context.Context, tx *sql.Tx, appID, forUs
 	if err != nil || !found {
 		return err
 	}
-	keep := make([]string, len(sc.def.Reminders))
-	for i, r := range sc.def.Reminders {
-		keep[i] = fmt.Sprintf("app:%d:row:*:%s", appID, r.Name)
+	var keep []string
+	for _, r := range sc.def.Reminders {
+		keep = append(keep, fmt.Sprintf("app:%d:row:*:%s", appID, r.Name))
 	}
-	if err := s.sched.CancelMatching(ctx, tx, forUser, KindRecordReminder, fmt.Sprintf("app:%d:row:*", appID), keep...); err != nil || len(keep) == 0 {
+	if err := s.sched.CancelMatching(ctx, tx, forUser, KindRecordReminder, fmt.Sprintf("app:%d:row:*", appID), keep...); err != nil || keep == nil {
 		return err
 	}
 	query := `SELECT id FROM app_rows WHERE app_id = ? AND deleted_at IS NULL AND created_by IS NOT NULL`
@@ -407,10 +407,7 @@ func (s *Service) syncRowReminders(ctx context.Context, tx *sql.Tx, sc *reminder
 		if due {
 			switch existing, err := s.sched.Find(ctx, tx, owner, KindRecordReminder, key); {
 			case err == nil && existing.RunAt.Equal(at) && string(existing.Payload) == string(payload):
-				if existing.SpaceID != sc.spaceID {
-					err = s.sched.Relocate(ctx, tx, owner, KindRecordReminder, key, sc.spaceID)
-				}
-				if err != nil {
+				if err := s.sched.Relocate(ctx, tx, owner, KindRecordReminder, key, sc.spaceID); err != nil {
 					return err
 				}
 				continue
