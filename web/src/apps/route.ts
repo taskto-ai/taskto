@@ -13,6 +13,54 @@ export function appPath(workspace: number, space: number, app: number, screen?: 
   return routePath({ workspace, section: 'apps', item: appItem(space, app, screen) })
 }
 
+export function runPath(workspace: number, space: number, app: number, screen?: string): string {
+  return `/w/${workspace}/run/${appItem(space, app, screen)}`
+}
+
+export function parseRunPath(path: string): { workspace: number; space: number; app: number; screen?: string } | null {
+  const m = /^\/w\/(\d+)\/run\/([^/]+)\/?$/.exec(path)
+  const item = parseItem(m?.[2])
+  return m && item ? { workspace: Number(m[1]), ...item } : null
+}
+
+export function runWindowName(space: number, app: number): string {
+  return `taskto-app-${space}-${app}`
+}
+
+export const RUN_WINDOW_FEATURES = 'popup,width=480,height=800'
+
+const runWindows = new Map<string, Window>()
+
+function stillOurs(popup: Window): boolean {
+  if (popup.closed) return false
+  try {
+    void popup.location.href
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function openRunWindow(workspace: number, space: number, app: number, screen?: string): void {
+  const name = runWindowName(space, app)
+  const path = runPath(workspace, space, app, screen)
+  const held = runWindows.get(name)
+  if (held && stillOurs(held)) {
+    held.location.href = path
+    held.focus()
+    return
+  }
+  const popup = window.open(held && !held.closed ? path : '', name, RUN_WINDOW_FEATURES)
+  if (!popup) {
+    runWindows.delete(name)
+    return
+  }
+  popup.opener = null
+  runWindows.set(name, popup)
+  if (!held || held.closed) popup.location.href = path
+  popup.focus()
+}
+
 export type BuilderRoute =
   | { kind: 'new' }
   | { kind: 'conversation'; conversation: number }

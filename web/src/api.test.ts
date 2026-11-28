@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, expect, test, vi } from 'vitest'
-import { ApiError, api, apiBytes, errorText, forAccount, SESSION_LOST } from './api'
+import { ACCESS_LOST, ApiError, api, apiBytes, errorText, forAccount, SESSION_LOST } from './api'
 import { setPreferences } from './i18n'
 import { fakeFetch } from './test/fakes'
 
@@ -43,6 +43,28 @@ test('a refused request made for an account says whose session ended; one made f
   await expect(api('/api/x', { method: 'POST', body: {} })).rejects.toBeInstanceOf(ApiError)
   window.removeEventListener(SESSION_LOST, listen)
   expect(heard).toEqual([{ user: 5 }, undefined])
+})
+
+test('only a 404 that says the space or the workspace is gone tells the open pages that access was lost', async () => {
+  const heard: Event[] = []
+  const listen = (e: Event) => heard.push(e)
+  window.addEventListener(ACCESS_LOST, listen)
+  try {
+    const refuse = async (status: number, code: string) => {
+      fakeFetch({ 'GET /api/x': { status, body: { error: 'no', code } } })
+      await expect(api('/api/x')).rejects.toBeInstanceOf(ApiError)
+    }
+    await refuse(404, 'space_not_found')
+    expect(heard).toHaveLength(1)
+    await refuse(404, 'workspace_not_found')
+    expect(heard).toHaveLength(2)
+    await refuse(404, 'app_not_found')
+    await refuse(403, 'space_not_found')
+    await refuse(500, 'workspace_not_found')
+    expect(heard).toHaveLength(2)
+  } finally {
+    window.removeEventListener(ACCESS_LOST, listen)
+  }
 })
 
 test('a download of bytes returns them, and a refusal is an ApiError that ends the session like any other', async () => {

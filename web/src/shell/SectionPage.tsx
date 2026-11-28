@@ -51,7 +51,7 @@ export function SectionPage({ route, me, workspace }: { route: Route; me: Me; wo
   }
 }
 
-function Loading() {
+export function Loading() {
   const t = useT()
   return (
     <PageFrame aria-busy="true">

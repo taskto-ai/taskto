@@ -52,6 +52,7 @@ type Service struct {
 	questions    CLIQuestions
 	models       Models
 	language     func(r *http.Request, browser string) string
+	userLanguage func(ctx context.Context, user int64) string
 	watchSession func(r *http.Request, every time.Duration) (context.Context, context.CancelFunc)
 
 	closing    context.Context
@@ -146,24 +147,36 @@ type Person struct {
 }
 
 type Conversation struct {
-	ID             int64   `json:"id"`
-	WorkspaceID    int64   `json:"workspace_id"`
-	Title          string  `json:"title"`
-	ArchivedAt     *string `json:"archived_at"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
-	CLIPermissions string  `json:"cli_permissions"`
-	Role           string  `json:"role"`
-	Owner          Person  `json:"owner"`
+	ID             int64               `json:"id"`
+	WorkspaceID    int64               `json:"workspace_id"`
+	Title          string              `json:"title"`
+	ArchivedAt     *string             `json:"archived_at"`
+	CreatedAt      string              `json:"created_at"`
+	UpdatedAt      string              `json:"updated_at"`
+	CLIPermissions string              `json:"cli_permissions"`
+	Origin         *ConversationOrigin `json:"origin"`
+	Role           string              `json:"role"`
+	Owner          Person              `json:"owner"`
 
 	agentID int64
 	viewer  int64
 }
 
+type ConversationOrigin struct {
+	Kind      string `json:"kind"`
+	SpaceID   int64  `json:"space_id,omitempty"`
+	AppID     int64  `json:"app_id,omitempty"`
+	RoutineID int64  `json:"routine_id,omitempty"`
+}
+
 var errNotFound = errors.New("conversation not found")
 
 const reachColumns = `c.id, c.workspace_id, c.agent_id, c.title, c.archived_at, c.created_at, c.updated_at, c.cli_permissions,
+	CASE WHEN c.origin IS NULL THEN NULL ELSE json_object('kind', c.origin_kind, 'space_id', c.origin_space_id, 'app_id', c.origin_app_id, 'routine_id', c.origin_routine_id) END,
 	CASE WHEN c.owner_id = ?1 THEN 'owner' ELSE m.role END, c.owner_id, o.name`
+
+const columns = `id, workspace_id, agent_id, title, archived_at, created_at, updated_at, cli_permissions,
+	CASE WHEN origin IS NULL THEN NULL ELSE json_object('kind', origin_kind, 'space_id', origin_space_id, 'app_id', origin_app_id, 'routine_id', origin_routine_id) END`
 
 const reachFrom = `FROM conversations c
 	JOIN users o ON o.id = c.owner_id AND o.disabled_at IS NULL
@@ -175,10 +188,36 @@ const reachWhere = `c.workspace_id = ?2
 		AND EXISTS (SELECT 1 FROM memberships um WHERE um.workspace_id = c.workspace_id AND um.user_id = ?1)
 		AND EXISTS (SELECT 1 FROM users cu WHERE cu.id = ?1 AND cu.disabled_at IS NULL)))`
 
+func decodeOrigin(raw sql.NullString, c *Conversation) error {
+	if !raw.Valid {
+		return nil
+	}
+	var value ConversationOrigin
+	if err := json.Unmarshal([]byte(raw.String), &value); err != nil {
+		return err
+	}
+	c.Origin = &value
+	return nil
+}
+
 func scanReach(row interface{ Scan(...any) error }) (Conversation, error) {
 	var c Conversation
-	err := row.Scan(&c.ID, &c.WorkspaceID, &c.agentID, &c.Title, &c.ArchivedAt, &c.CreatedAt, &c.UpdatedAt, &c.CLIPermissions,
+	var origin sql.NullString
+	err := row.Scan(&c.ID, &c.WorkspaceID, &c.agentID, &c.Title, &c.ArchivedAt, &c.CreatedAt, &c.UpdatedAt, &c.CLIPermissions, &origin,
 		&c.Role, &c.Owner.ID, &c.Owner.Name)
+	if err == nil {
+		err = decodeOrigin(origin, &c)
+	}
+	return c, err
+}
+
+func scan(row interface{ Scan(...any) error }) (Conversation, error) {
+	var c Conversation
+	var origin sql.NullString
+	err := row.Scan(&c.ID, &c.WorkspaceID, &c.agentID, &c.Title, &c.ArchivedAt, &c.CreatedAt, &c.UpdatedAt, &c.CLIPermissions, &origin)
+	if err == nil {
+		err = decodeOrigin(origin, &c)
+	}
 	return c, err
 }
 

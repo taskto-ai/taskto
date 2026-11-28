@@ -4252,7 +4252,7 @@ explorer offers to filter or sort by none of those three, and offers a filter on
 type takes.
 
 A barcode's text is taken as it was read: a line break, a tab or any other control character in it, even around
-it, is `422 app_field_not_barcode` (only spaces are trimmed). A `captured_at` must have a real zone: `Z` or an
+it, is `422 app_field_not_barcode` (only the spaces that are not control characters, such as the space and the no-break space, are trimmed from its ends; a text of nothing but spaces and line breaks, such as a lone tab, is left out like an empty one and is not refused). A `captured_at` must have a real zone: `Z` or an
 offset of at most `23:59` (`+24:60` is no time).
 
 The agent sees these values in `list_app_rows` (a signature as the picture's metadata, never its bytes) and has no
@@ -5651,7 +5651,7 @@ conversation's content`) on those routes. The server logs it, and an operator ca
 A conversation as the API shows it:
 
 ```json
-{"id": 7, "workspace_id": 1, "title": "Plans", "archived_at": null, "created_at": "…", "updated_at": "…", "cli_permissions": "ask",
+{"id": 7, "workspace_id": 1, "title": "Plans", "archived_at": null, "created_at": "…", "updated_at": "…", "cli_permissions": "ask", "origin": null,
  "role": "owner", "owner": {"id": 3, "name": "Ana"}}
 ```
 
@@ -5662,6 +5662,9 @@ A conversation as the API shows it:
 - `archived_at`: when the owner archived it, or `null`. An archived conversation can be read
   and streamed, but not sent to or switched to another model (`409`) until it is unarchived.
 - `updated_at`: the last rename, archive or message.
+- `origin`: `null` for a conversation someone started themselves; for one the server
+  started, it identifies whether an app or routine started it and the relevant space, app or
+  routine IDs. The deduplication key stays private.
 - `cli_permissions`: on a CLI worker, `ask` (the default: the CLI asks the owner before it
   runs a command, edits a file or fetches a page) or `allow_all` (nothing asks). See
   [Permission questions](#permission-questions) and [agent-safety.md](agent-safety.md).

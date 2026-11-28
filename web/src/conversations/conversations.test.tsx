@@ -81,6 +81,30 @@ test('lists conversations, creates one and opens it', async () => {
   await waitFor(() => expect(sources.at(-1)?.url).toBe('/api/workspaces/1/conversations/7/events'))
 })
 
+test('marks conversations started by an app', async () => {
+  const started = { ...conversation(3, 'Report'), origin: { kind: 'app' as const, space_id: 1, app_id: 2 } }
+  fakeFetch({ 'GET /api/workspaces/1/conversations': { body: { conversations: [started] } } })
+  const { factory } = fakeStreams()
+  render(<Page streams={factory} />)
+  const row = await screen.findByRole('listitem')
+  expect(within(row).getByText('App')).toBeTruthy()
+})
+
+test('marks only the conversations the server started, by what started them', async () => {
+  const routine = { ...conversation(4, 'Weekly'), origin: { kind: 'routine' as const, routine_id: 9 } }
+  fakeFetch({
+    'GET /api/workspaces/1/conversations': { body: { conversations: [routine, conversation(5, 'Mine')] } },
+  })
+  const { factory } = fakeStreams()
+  render(<Page streams={factory} />)
+  const rows = await screen.findAllByRole('listitem')
+  expect(rows).toHaveLength(2)
+  expect(within(rows[0]).getByText('Routine')).toBeTruthy()
+  expect(within(rows[0]).queryByText('App')).toBeNull()
+  expect(within(rows[1]).queryByText('Routine')).toBeNull()
+  expect(within(rows[1]).queryByText('App')).toBeNull()
+})
+
 test('a conversation made after the page went (the session ended) is not opened', async () => {
   let answer: () => void = () => {}
   fakeFetch({

@@ -54,6 +54,7 @@ func Roots() []Root {
 		root[conversations.Conversation]("Conversation"),
 		root[conversations.Members]("ConversationMembers"),
 		root[conversations.Member]("ConversationMember"),
+		root[conversations.ConversationOrigin]("ConversationOrigin"),
 		root[conversations.SendReply]("SendReply"),
 		root[conversations.SubmissionReply]("SubmissionReply"),
 		root[conversations.ContinueModels]("ContinueModels"),

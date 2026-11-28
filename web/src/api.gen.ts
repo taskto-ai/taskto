@@ -554,6 +554,7 @@ export type Conversation = {
   created_at: string
   updated_at: string
   cli_permissions: string
+  origin: ConversationOrigin | null
   role: string
   owner: ConversationsPerson
 }
@@ -566,6 +567,13 @@ export type ConversationMember = {
 
 export type ConversationMembers = {
   members: ConversationMember[] | null
+}
+
+export type ConversationOrigin = {
+  kind: string
+  space_id?: number
+  app_id?: number
+  routine_id?: number
 }
 
 export type ConversationsModelRef = {

@@ -590,6 +590,10 @@
     "publishedOn": "published {date}",
     "open": "Open",
     "openNamed": "Open {name}",
+    "openWindow": "Open in a new window",
+    "openTab": "Open in a new tab",
+    "openInTaskto": "Open in taskto",
+    "standaloneNotFound": "This app wasn’t found",
     "moreNamed": "More actions for {name}",
     "publishItem": "Publish…",
     "moveItem": "Move to a space…",
@@ -2784,6 +2788,10 @@
     "archived": "Archived",
     "showArchivedTitle": "Show archived conversations",
     "new": "New",
+    "origin": {
+      "app": "App",
+      "routine": "Routine"
+    },
     "nothingArchived": "Nothing archived.",
     "nothingShared": "Nobody has shared a conversation with you.",
     "sharedWithMe": "Shared with me",
@@ -3193,6 +3201,7 @@
       "open": "Open",
       "openNamed": "Open {name}",
       "back": "Back to the downloaded apps",
+      "notDownloaded": "This app isn’t downloaded on this device. The apps that are downloaded are listed here.",
       "needsUpdate": "This version of taskto.ai can’t draw {name}."
     },
     "accountChanged": {
