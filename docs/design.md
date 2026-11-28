@@ -667,6 +667,13 @@ taskto.ai's own components in an app (`web/src/apps/catalog.tsx`) are styled wit
 value with tabular figures, and tiles in one of the app's rows wrap onto the next line when there
 isn't room.
 
+Charts (`web/src/apps/Chart.tsx`) are plain SVG with no library and no colour of their own: a
+series is drawn in a label colour role, in order blue, green, violet, amber, pink and teal
+(`.ui-chart-s1` to `.ui-chart-s6` point `--ui-chart-color` and its `-soft` twin, the area's fill, at
+the roles), so a chart follows light, dark and every brand and prints. Colour is never the only
+carrier: the legend names each series and a table of every number sits beside the picture for
+screen readers. The drawing's text sits inside the SVG and scales with it, so its width is capped.
+
 ## Installed app
 
 `web/public/manifest.webmanifest` (`theme_color` and `background_color` cream `#faf8f4`) and the

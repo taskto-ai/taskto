@@ -43,6 +43,14 @@
       "more": "Mostrando {shown} de {total}",
       "open": "Abrir {title}"
     },
+    "chart": {
+      "empty": "Ainda sem dados",
+      "table": "Dados de {label}",
+      "group": "Grupo",
+      "value": "Valor",
+      "other": "Outros",
+      "week": "Semana {week}, {year}"
+    },
     "invalidScreen": "O app enviou uma tela que não pode ser mostrada: {error}",
     "noDataChanges": "Seu papel neste app permite ver, mas não alterar os dados.",
     "ownRecords": "Você vê apenas os registros que adicionou.",
