@@ -101,8 +101,15 @@ describe('drawing', () => {
   })
 
   test('small values keep their digits in the table and on the scale', async () => {
-    const x = [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }, { key: 'c', label: 'C' }]
-    await drawn({ variant: 'bar' }, { by_stage: { x, series: [{ key: '', label: '', values: [0.0001, 0.0002, 0.0003] }] } })
+    const x = [
+      { key: 'a', label: 'A' },
+      { key: 'b', label: 'B' },
+      { key: 'c', label: 'C' },
+    ]
+    await drawn(
+      { variant: 'bar' },
+      { by_stage: { x, series: [{ key: '', label: '', values: [0.0001, 0.0002, 0.0003] }] } },
+    )
     expect(tableRows().slice(1)).toEqual([
       ['A', '0.0001'],
       ['B', '0.0002'],

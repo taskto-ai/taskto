@@ -13,8 +13,8 @@ import {
   cut,
   MAX_SERIES_DRAWN,
   plotted,
-  readChart,
   type Run,
+  readChart,
   runs,
   stackLayers,
 } from './chartData'
@@ -152,9 +152,7 @@ function marks(data: ChartData, p: Plot): ReactNode[] {
           .join('')
         if (fill) out.push(<path key={`mark-${out.length}`} className={`ui-chart-fill ${cls}`} d={fill} />)
       }
-      out.push(
-        <path key={`mark-${out.length}`} className={`ui-chart-line ${cls}`} d={stretches.map(top).join('')} />,
-      )
+      out.push(<path key={`mark-${out.length}`} className={`ui-chart-line ${cls}`} d={stretches.map(top).join('')} />)
       for (const r of stretches) {
         if (r.start !== r.end) continue
         out.push(
