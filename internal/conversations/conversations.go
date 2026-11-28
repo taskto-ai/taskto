@@ -57,11 +57,15 @@ type Service struct {
 	closing    context.Context
 	endStreams context.CancelFunc
 
-	mu      sync.Mutex
-	streams map[int64]int
-	guards  map[int64]*guard
+	mu         sync.Mutex
+	streams    map[int64]int
+	modelHolds map[int64]*modelHold
+	guards     map[int64]*guard
 
 	readyWait     time.Duration
+	modelWait     time.Duration
+	holdLimit     time.Duration
+	putBackLimit  time.Duration
 	exportTimeout time.Duration
 	heartbeat     time.Duration
 	writeTimeout  time.Duration
@@ -73,8 +77,8 @@ type Service struct {
 func New(sqlDB *sql.DB, agent Agent) *Service {
 	closing, end := context.WithCancel(context.Background())
 	return &Service{
-		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{}, guards: map[int64]*guard{},
-		readyWait: 5 * time.Second, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
+		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{}, modelHolds: map[int64]*modelHold{}, guards: map[int64]*guard{},
+		readyWait: 5 * time.Second, modelWait: modelWait, holdLimit: holdLimit, putBackLimit: putBackLimit, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
 		maxStreams: 16,
 	}
 }
@@ -207,4 +211,44 @@ func (s *Service) update(ctx context.Context, workspace, user, id int64, title *
 func (s *Service) touch(ctx context.Context, id, agentID int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND agent_id = ?`, id, agentID)
 	return err
+}
+
+const (
+	modelWait    = 3 * time.Second
+	holdLimit    = 20 * time.Second
+	putBackLimit = 5 * time.Second
+)
+
+type modelHold struct {
+	turn  chan struct{}
+	users int
+}
+
+func (s *Service) holdModel(ctx context.Context, conversation int64) (func(), error) {
+	s.mu.Lock()
+	h := s.modelHolds[conversation]
+	if h == nil {
+		h = &modelHold{turn: make(chan struct{}, 1)}
+		s.modelHolds[conversation] = h
+	}
+	h.users++
+	s.mu.Unlock()
+	leave := func() {
+		s.mu.Lock()
+		h.users--
+		if h.users == 0 {
+			delete(s.modelHolds, conversation)
+		}
+		s.mu.Unlock()
+	}
+	select {
+	case h.turn <- struct{}{}:
+		return func() {
+			<-h.turn
+			leave()
+		}, nil
+	case <-ctx.Done():
+		leave()
+		return nil, ctx.Err()
+	}
 }

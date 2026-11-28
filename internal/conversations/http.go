@@ -316,6 +316,16 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "request_id must be up to 128 printable ASCII characters")
 		return
 	}
+	var switchTo *agentrt.ModelRef
+	var reply SendReply
+	if mention, ok := agentMention(req.Content); ok {
+		model, ok := usable(w, r, mention)
+		if !ok {
+			return
+		}
+		switchTo = &model
+		reply.Model = &mention
+	}
 	rt, ok := s.runtime(w, r)
 	if !ok {
 		return
@@ -324,6 +334,29 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, _ := caller(r)
+	var before agentrt.ModelRef
+	ctx := r.Context()
+	if switchTo != nil {
+		done, err := s.holdModel(ctx, c.ID)
+		if err != nil {
+			return
+		}
+		defer done()
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.holdLimit)
+		defer cancel()
+		was, err := rt.Model(ctx, c.agentID)
+		if err != nil {
+			conversationError(w, r, c, err)
+			return
+		}
+		before = was
+		if err := rt.SetModel(ctx, c.agentID, *switchTo); err != nil {
+			conversationError(w, r, c, err)
+			return
+		}
+		slog.InfoContext(r.Context(), "conversation model changed by a mention", "conversation", c.ID, "provider", switchTo.Provider, "by", user)
+	}
 	data, err := json.Marshal(struct {
 		V      int   `json:"v"`
 		Author int64 `json:"author"`
@@ -342,13 +375,20 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	if s.capability != nil {
 		in.Capability = s.capability(c.ID, c.agentID)
 	}
-	model, _ := rt.Model(r.Context(), c.agentID)
-	if err := s.ensureUsageMark(r.Context(), rt, c.ID, c.agentID); err != nil {
+	model, _ := rt.Model(ctx, c.agentID)
+	if err := s.ensureUsageMark(ctx, rt, c.ID, c.agentID); err != nil {
 		conversationError(w, r, c, err)
 		return
 	}
-	sub, err := rt.Submit(r.Context(), c.agentID, in)
+	sub, err := rt.Submit(ctx, c.agentID, in)
 	if err != nil {
+		if switchTo != nil {
+			backCtx, stop := context.WithTimeout(context.WithoutCancel(r.Context()), s.putBackLimit)
+			defer stop()
+			if back := rt.SetModel(backCtx, c.agentID, before); back != nil {
+				slog.WarnContext(r.Context(), "conversations: putting back the model after a mention's send failed", "conversation", c.ID, "err", back)
+			}
+		}
 		conversationError(w, r, c, err)
 		return
 	}
@@ -356,7 +396,8 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		slog.WarnContext(r.Context(), "conversations: marking a conversation updated", "conversation", c.ID, "err", err)
 	}
 	s.markWhenSettled(rt, Principal{Conversation: c.ID, AgentConversation: c.agentID, Workspace: c.WorkspaceID, User: user}, model.Provider, sub)
-	writeJSON(w, http.StatusAccepted, map[string]int64{"submission_id": sub})
+	reply.SubmissionID = sub
+	writeJSON(w, http.StatusAccepted, reply)
 }
 
 type SubmissionReply struct {
@@ -580,6 +621,16 @@ func (s *Service) handleSetModel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	waitCtx, stopWaiting := context.WithTimeout(r.Context(), s.modelWait)
+	done, err := s.holdModel(waitCtx, c.ID)
+	stopWaiting()
+	if err != nil {
+		if r.Context().Err() == nil {
+			writeError(w, http.StatusConflict, apierr.CodeConversationBusy, "the conversation's model is being changed by a message: try again in a moment")
+		}
+		return
+	}
+	defer done()
 	if !s.stillWritable(w, r) {
 		return
 	}

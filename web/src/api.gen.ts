@@ -907,6 +907,11 @@ export type SearchSegment = {
   match?: boolean
 }
 
+export type SendReply = {
+  submission_id: number
+  model?: ConversationsModelRef
+}
+
 export type Space = {
   id: number
   workspace_id: number

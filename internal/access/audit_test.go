@@ -2,9 +2,11 @@ package access
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/auth"
@@ -97,5 +99,31 @@ func TestAuditSpaceRefusalsRecordNothing(t *testing.T) {
 		if r.Action == audit.SpaceUpdated || r.Action == audit.SpaceMemberAdded {
 			t.Fatalf("the other workspace's log holds %+v", r)
 		}
+	}
+}
+
+func TestTheRemovedMemberHookRunsAfterTheRemovalCommits(t *testing.T) {
+	e := newEnv(t)
+	owner, ws := e.setup()
+	alice := e.join(owner, ws, "Alice", auth.RoleMember)
+	s := e.createShared(owner, ws, "Team")
+	e.addMember(owner, s, alice, RoleEditor)
+
+	var calls int
+	var seen error
+	e.c.OnMemberRemoved(func(spaceID, userID int64) {
+		calls++
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, seen = e.c.Check(ctx, userID, spaceID)
+	})
+	expect(t, owner.do(http.MethodDelete, spacePath(s, memberPath(alice)), nil), http.StatusNoContent)
+	if calls != 1 || !errors.Is(seen, ErrNotFound) {
+		t.Fatalf("hook ran %d times and saw %v from outside the transaction, want once and the removal already visible", calls, seen)
+	}
+
+	expect(t, owner.do(http.MethodDelete, spacePath(s, memberPath(alice)), nil), http.StatusNotFound)
+	if calls != 1 {
+		t.Fatalf("hook ran %d times, a refused removal must not run it", calls)
 	}
 }
