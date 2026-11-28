@@ -341,6 +341,9 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
           if (afterEntry <= pin.consumed || (await latestReplyEntryId(tx, conv.id)) !== afterEntry) {
             throw new HttpError(409, 'the conversation moved on', 'moved')
           }
+          if ((await tx.doc(LiveDoc, conv.id)).run !== undefined) {
+            throw new HttpError(409, 'the conversation is busy', 'busy')
+          }
           if ((await tx.doc(InboxDoc, conv.id)).items.length > 0) {
             throw new HttpError(409, 'messages are queued behind the failed reply', 'queued')
           }

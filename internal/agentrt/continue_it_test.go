@@ -525,10 +525,63 @@ func TestAFailureAfterAFinishedToolCallIsContinuedOnACLIWithTheToolResult(t *tes
 	if len(prompts) != 1 {
 		t.Fatalf("the CLI worker ran %d turns, want 1", len(prompts))
 	}
-	for _, want := range []string{request, "pause_safe: paused 200ms"} {
+	for _, want := range []string{request, `{"tool":"pause_safe","result":"paused 200ms"}`} {
 		if !strings.Contains(prompts[0], want) {
 			t.Fatalf("the CLI's prompt %q lacks %q", prompts[0], want)
 		}
+	}
+}
+
+func TestASteerPlacedDuringAFailedRunIsContinuedOnACLIWithEveryRequestAndResult(t *testing.T) {
+	for name, languages := range map[string][2]string{
+		"one language":   {"", ""},
+		"language moved": {"en", "pt-BR"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &turnRecorder{}
+			s := cliSidecar(t, rec)
+			ctx := ctxFor(t)
+			conv, err := s.client.CreateConversation(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w, err := s.client.Watch(ctx, conv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.Close()
+			first, err := s.client.Submit(ctx, conv, Input{Content: "tool:pause_safe:1000", Capability: "cap", Language: languages[0]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitForOps(t, w, "waited 200ms")
+			steer := "fail-after-tool:script;tool:pause_safe:200"
+			second, err := s.client.Submit(ctx, conv, Input{Content: steer, Capability: "cap", Language: languages[1], WhenBusy: "steer"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range []int64{first, second} {
+				if settled, err := s.client.Wait(ctx, id); err != nil || settled.Reason != "model_error" {
+					t.Fatalf("submission %d settled %+v, %v; want model_error in the same run", id, settled, err)
+				}
+			}
+			sub, _, err := s.client.Continue(ctx, conv, ModelRef{Provider: "cli-claude", ModelID: "default"}, lastEntryID(t, s.client, conv))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+				t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+			}
+			prompts := rec.asked()
+			if len(prompts) != 1 {
+				t.Fatalf("the CLI worker ran %d turns, want 1", len(prompts))
+			}
+			for _, want := range []string{"tool:pause_safe:1000", steer, `{"tool":"pause_safe","result":"paused 1000ms"}`, `{"tool":"pause_safe","result":"paused 200ms"}`} {
+				if !strings.Contains(prompts[0], want) {
+					t.Fatalf("the CLI's prompt %q lacks %q", prompts[0], want)
+				}
+			}
+		})
 	}
 }
 
@@ -591,6 +644,42 @@ func TestAContinueNeverPlacesAFollowUpQueuedBehindTheFailedRequest(t *testing.T)
 	}
 	if !answered(t, s, conv, "echo: second question") {
 		t.Fatal("the follow-up that stayed queued was never answered")
+	}
+}
+
+func TestAContinueOfARunningConversationWithAQueuedMessageIsBusyNotQueued(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.client.Watch(ctx, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	running, err := s.client.Submit(ctx, conv, Input{Content: "tool:pause_safe:30000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForOps(t, w, "waited 200ms")
+	queued, err := s.client.Submit(ctx, conv, Input{Content: "second question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.client.Continue(ctx, conv, backupModel, lastEntryID(t, s.client, conv)); conflictReason(err) != "busy" {
+		t.Fatalf("a continue while a run is going and a message waits behind it: err = %v, want a 409 with reason busy", err)
+	}
+	if err := s.client.Abort(ctx, conv); err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for _, id := range []int64{running, queued} {
+		if _, err := s.client.Wait(waitCtx, id); err != nil {
+			t.Fatalf("submission %d did not settle: %v", id, err)
+		}
 	}
 }
 

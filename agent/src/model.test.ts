@@ -52,6 +52,17 @@ describe('the scripted model', () => {
     expect(failing.stopReason).toBe('error')
   })
 
+  it('treats a fail-after-tool prompt as plain text on the first generation until the test entry turns failures on', async () => {
+    const prompt = 'fail-after-tool:script;tool:pause_safe:10'
+    const plain = await reply(prompt)
+    expect(plain.stopReason).not.toBe('error')
+    expect(JSON.stringify(plain.content)).not.toContain('toolCall')
+    expect(JSON.stringify(plain.content)).toContain(`echo: ${prompt}`)
+    testHooks.scriptFailures = true
+    const scripted = await reply(prompt)
+    expect(JSON.stringify(scripted.content)).toContain('toolCall')
+  })
+
   it('leaves the test entry alone: only it turns failures on', async () => {
     expect(testHooks.scriptFailures).toBe(false)
   })
