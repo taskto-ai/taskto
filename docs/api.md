@@ -3115,7 +3115,7 @@ saying what is wrong) unless:
   (`internal/apps/catalog.go`): A2UI's basic catalog without `Image`, `Video`,
   `AudioPlayer` and the `openUrl` function (an app is shared, and a picture from
   elsewhere would tell that server who opens it, and could carry the app's data in its
-  address), plus `Stat` (a labelled value), `Table` (a sortable table of the records, below), `Markdown` (formatted text from a literal or a
+  address), plus `Stat` (a labelled value), `Chart` (a line, bar or area chart of a declared series, below), `Table` (a sortable table of the records, below), `Markdown` (formatted text from a literal or a
   binding, drawn by the web app's own renderer, which never makes HTML: links show as text
   and are never followed, and images show as links, so an app opens nothing outside),
   `Show` (draws its child while a rule holds,
@@ -3145,6 +3145,20 @@ saying what is wrong) unless:
   that the server sends to a client carries its field's `type`, added to the surface only, never
   stored in the definition. `app_catalog` describes `Table` and the two kinds of prop it
   introduces: a field's name of given types and an action's name of given kinds.
+- **Chart** draws one value of the data model as a line, bar or area chart: `{"id", "component": "Chart", "data": {"path": "/<series name>"}, "label", "variant"?, "stacked"?, "unit"?}`.
+  `data` is the binding of a declared series (`series`, above; or any value of its shape: `{"x": [{"key", "label"}], "series": [{"key", "label", "values"}]}`); `label` is the chart's name, shown as its
+  caption and read by screen readers; `variant` is `line` (the default), `bar` or `area`; `stacked`
+  puts each series of a bar or area chart on top of the one before it (a running total, a missing
+  value adding nothing); `unit` is text that follows the numbers. The chart is plain SVG drawn by the
+  web app and has no prop for a colour, a link or a picture: it loads and runs nothing, and what it
+  shows from the data (labels, keys, the unit) is text only. Only the first six series are
+  drawn, in the label colours of the theme, with a legend; a missing, malformed or empty value draws
+  "No data yet". Every number is also in a table that only screen readers reach, with every series
+  (up to 24) and up to 120 points; a value that is not a number, or is beyond 10^15, is a gap in the
+  drawing and a dash in the table. The server's own keys are translated or formatted for the
+  viewer: `true` and `false` as yes and no, `other` as "Other", and day, week and month keys as
+  dates. The plot reads left to right in every language. `app_catalog` describes `Chart` and how
+  to feed it.
 - **Icons**: an `Icon`'s `name` is `{"svgPath": "<path data>"}`, A2UI's own form, and a path is
   the way to give an icon: one SVG path, drawn on a fixed 24 by 24 view box (`0 0 24 24`) and
   filled in the text's colour (nonzero fill). It is written by a model or by whoever edits the app

@@ -42,6 +42,14 @@
       "more": "Showing {shown} of {total}",
       "open": "Open {title}"
     },
+    "chart": {
+      "empty": "No data yet",
+      "table": "Data of {label}",
+      "group": "Group",
+      "value": "Value",
+      "other": "Other",
+      "week": "Week {week}, {year}"
+    },
     "invalidScreen": "The app sent a screen that can’t be shown: {error}",
     "noDataChanges": "Your role in this app lets you view it, not change its data.",
     "ownRecords": "You see only the records you added.",
