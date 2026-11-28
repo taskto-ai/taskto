@@ -15,10 +15,20 @@ import (
 
 func twoScriptModels(t *testing.T) []string {
 	t.Helper()
-	config := map[string]any{"providers": []any{
+	return scriptModels(t, map[string]any{"id": "script", "kind": "script"}, map[string]any{"id": "backup", "kind": "script", "name": "Backup"})
+}
+
+func threeScriptModels(t *testing.T) []string {
+	t.Helper()
+	return scriptModels(t,
 		map[string]any{"id": "script", "kind": "script"},
 		map[string]any{"id": "backup", "kind": "script", "name": "Backup"},
-	}}
+		map[string]any{"id": "mentioned", "kind": "script", "name": "Mentioned"})
+}
+
+func scriptModels(t *testing.T, list ...any) []string {
+	t.Helper()
+	config := map[string]any{"providers": list}
 	path := filepath.Join(t.TempDir(), "providers.json")
 	if err := os.WriteFile(path, []byte(mustJSON(config)), 0o600); err != nil {
 		t.Fatal(err)
@@ -35,8 +45,9 @@ func conflictReason(err error) string {
 }
 
 var (
-	scriptModel = ModelRef{Provider: "script", ModelID: "script-1"}
-	backupModel = ModelRef{Provider: "backup", ModelID: "script-1"}
+	scriptModel    = ModelRef{Provider: "script", ModelID: "script-1"}
+	backupModel    = ModelRef{Provider: "backup", ModelID: "script-1"}
+	mentionedModel = ModelRef{Provider: "mentioned", ModelID: "script-1"}
 )
 
 func lastEntryID(t *testing.T, c *Client, conv int64) int64 {
@@ -114,7 +125,7 @@ func TestContinueAfterAFailedReplyAnswersOnTheModelItWasGiven(t *testing.T) {
 	s := startSidecar(t, twoScriptModels(t)...)
 	ctx := ctxFor(t)
 	conv := failedConversation(t, s)
-	sub, _, err := s.client.Continue(ctx, conv, backupModel, lastEntryID(t, s.client, conv))
+	sub, _, err := s.client.Continue(ctx, conv, nil, backupModel, lastEntryID(t, s.client, conv))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,11 +149,11 @@ func TestContinueRunsOnItsOwnModelWhateverIsWrittenBeforeItsCommit(t *testing.T)
 	var sub int64
 	go func() {
 		var err error
-		sub, _, err = s.client.Continue(ctx, conv, backupModel, after)
+		sub, _, err = s.client.Continue(ctx, conv, nil, backupModel, after)
 		done <- err
 	}()
 	waitForOutput(t, s, "test: the continue is waiting before its commit")
-	if err := s.client.SetModel(ctx, conv, scriptModel); err != nil {
+	if err := s.client.SetModel(ctx, conv, nil, scriptModel); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
@@ -172,7 +183,7 @@ func TestContinueOfAFailureThatMovedOnIsRefusedAndStartsNothing(t *testing.T) {
 	if before == stale {
 		t.Fatal("the next request wrote no entry")
 	}
-	if _, _, err := s.client.Continue(ctx, conv, scriptModel, stale); conflictReason(err) != "moved" {
+	if _, _, err := s.client.Continue(ctx, conv, nil, scriptModel, stale); conflictReason(err) != "moved" {
 		t.Fatalf("a continue of a failure the conversation moved past: err = %v, want a 409 with reason moved", err)
 	}
 	if after := lastEntryID(t, s.client, conv); after != before {
@@ -200,10 +211,10 @@ func TestAPrivateNoteDoesNotMoveTheFailureAContinueAnswers(t *testing.T) {
 	if note == failure {
 		t.Fatal("the note wrote no entry")
 	}
-	if _, _, err := s.client.Continue(ctx, conv, backupModel, note); conflictReason(err) != "moved" {
+	if _, _, err := s.client.Continue(ctx, conv, nil, backupModel, note); conflictReason(err) != "moved" {
 		t.Fatalf("a continue after the note's entry: err = %v, want a 409 with reason moved: the note is not the failed reply", err)
 	}
-	sub, _, err := s.client.Continue(ctx, conv, backupModel, failure)
+	sub, _, err := s.client.Continue(ctx, conv, nil, backupModel, failure)
 	if err != nil {
 		t.Fatalf("a continue of the failed reply with a note after it: %v", err)
 	}
@@ -227,7 +238,7 @@ func TestAPrivateNoteDoesNotReopenAFailureAContinueConsumed(t *testing.T) {
 		t.Fatalf("the request settled %+v, %v; want done", settled, err)
 	}
 	reply := lastEntryID(t, s.client, conv)
-	first, _, err := s.client.Continue(ctx, conv, backupModel, reply)
+	first, _, err := s.client.Continue(ctx, conv, nil, backupModel, reply)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +247,7 @@ func TestAPrivateNoteDoesNotReopenAFailureAContinueConsumed(t *testing.T) {
 	}
 	note := addNote(t, s, conv)
 	for _, entry := range []int64{note, reply} {
-		if _, _, err := s.client.Continue(ctx, conv, backupModel, entry); conflictReason(err) != "moved" {
+		if _, _, err := s.client.Continue(ctx, conv, nil, backupModel, entry); conflictReason(err) != "moved" {
 			t.Fatalf("a continue of entry %d after a continue consumed the reply %d and a note came: err = %v, want a 409 with reason moved", entry, reply, err)
 		}
 	}
@@ -278,7 +289,7 @@ func TestContinueOfABusyConversationIsRefusedAndStartsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForOps(t, w, "waited 200ms")
-	if _, _, err := s.client.Continue(ctx, conv, backupModel, lastEntryID(t, s.client, conv)); conflictReason(err) != "busy" {
+	if _, _, err := s.client.Continue(ctx, conv, nil, backupModel, lastEntryID(t, s.client, conv)); conflictReason(err) != "busy" {
 		t.Fatalf("continue while a run is going: err = %v, want a 409 with reason busy", err)
 	}
 	if got, err := s.client.Model(ctx, conv); err != nil || got != scriptModel {
@@ -304,10 +315,10 @@ func TestContinueOfARetiredOrUnknownConversationIsNotFound(t *testing.T) {
 	if err := s.client.RetireConversation(ctx, conv); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.client.Continue(ctx, conv, scriptModel, 1); !notFound(err) {
+	if _, _, err := s.client.Continue(ctx, conv, nil, scriptModel, 1); !notFound(err) {
 		t.Fatalf("continue of a retired conversation: err = %v, want a 404", err)
 	}
-	if _, _, err := s.client.Continue(ctx, conv+1000, scriptModel, 1); !notFound(err) {
+	if _, _, err := s.client.Continue(ctx, conv+1000, nil, scriptModel, 1); !notFound(err) {
 		t.Fatalf("continue of an unknown conversation: err = %v, want a 404", err)
 	}
 }
@@ -321,7 +332,7 @@ func TestContinueOvertakenByARetireStartsNoRun(t *testing.T) {
 	}
 	resumed := make(chan error, 1)
 	go func() {
-		_, _, err := s.client.Continue(ctx, conv, scriptModel, 1)
+		_, _, err := s.client.Continue(ctx, conv, nil, scriptModel, 1)
 		resumed <- err
 	}()
 	waitForOutput(t, s, "test: the continue is waiting before its commit")
@@ -342,12 +353,12 @@ func TestAContinuedRunKeepsItsModelWhileItIsRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
-	sub, _, err := s.client.Continue(ctx, conv, backupModel, lastEntryID(t, s.client, conv))
+	sub, _, err := s.client.Continue(ctx, conv, nil, backupModel, lastEntryID(t, s.client, conv))
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitForOps(t, w, "waited 200ms")
-	if err := s.client.SetModel(ctx, conv, scriptModel); conflictReason(err) != "busy" {
+	if err := s.client.SetModel(ctx, conv, nil, scriptModel); conflictReason(err) != "busy" {
 		t.Fatalf("a model write while the continued run is going: err = %v, want a 409 with reason busy", err)
 	}
 	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
@@ -356,7 +367,7 @@ func TestAContinuedRunKeepsItsModelWhileItIsRunning(t *testing.T) {
 	if got := lastAssistantProvider(t, s.client, conv); got != "backup" {
 		t.Fatalf("the generation after the tool ran on %q, want the continue's backup", got)
 	}
-	if err := s.client.SetModel(ctx, conv, scriptModel); err != nil {
+	if err := s.client.SetModel(ctx, conv, nil, scriptModel); err != nil {
 		t.Fatalf("a model write once the continued run ended: %v", err)
 	}
 }
@@ -376,7 +387,7 @@ func TestAnEntryThatAContinueConsumedIsNotContinuedAgainWhenTheRunAddedNoEntry(t
 		t.Fatalf("the request settled %+v, %v; want done", settled, err)
 	}
 	after := lastEntryID(t, s.client, conv)
-	first, _, err := s.client.Continue(ctx, conv, backupModel, after)
+	first, _, err := s.client.Continue(ctx, conv, nil, backupModel, after)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +397,7 @@ func TestAnEntryThatAContinueConsumedIsNotContinuedAgainWhenTheRunAddedNoEntry(t
 	if now := lastEntryID(t, s.client, conv); now != after {
 		t.Fatalf("the continue added entry %d: this test needs a run that adds none", now)
 	}
-	if _, _, err := s.client.Continue(ctx, conv, backupModel, after); conflictReason(err) != "moved" {
+	if _, _, err := s.client.Continue(ctx, conv, nil, backupModel, after); conflictReason(err) != "moved" {
 		t.Fatalf("a second continue of the entry the first one consumed: err = %v, want a 409 with reason moved", err)
 	}
 }
@@ -456,7 +467,7 @@ func TestACLITurnOfAContinuedRunSaysItIsPinnedAndALaterOneDoesNot(t *testing.T) 
 	if settled, err := s.client.Wait(ctx, failed); err != nil || settled.Reason != "model_error" {
 		t.Fatalf("the failing request settled %+v, %v", settled, err)
 	}
-	sub, _, err := s.client.Continue(ctx, conv, ModelRef{Provider: "cli-claude", ModelID: "default"}, lastEntryID(t, s.client, conv))
+	sub, _, err := s.client.Continue(ctx, conv, nil, ModelRef{Provider: "cli-claude", ModelID: "default"}, lastEntryID(t, s.client, conv))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,5 +483,86 @@ func TestACLITurnOfAContinuedRunSaysItIsPinnedAndALaterOneDoesNot(t *testing.T) 
 	}
 	if got := rec.seen(); len(got) != 2 || !got[0] || got[1] {
 		t.Fatalf("the CLI turns said pinned = %v, want [true false]: the continued run's, then an ordinary message's", got)
+	}
+}
+
+func TestAContinueThatCommitsLateCannotChangeTheModelAMentionSwitched(t *testing.T) {
+	s := startSidecar(t, append(threeScriptModels(t), "TASKTO_AGENT_TEST_CONTINUE_PAUSE_MS=1500")...)
+	ctx := ctxFor(t)
+	conv := failedConversation(t, s)
+	after := lastEntryID(t, s.client, conv)
+	late := make(chan error, 1)
+	go func() {
+		_, _, err := s.client.Continue(ctx, conv, &scriptModel, backupModel, after)
+		late <- err
+	}()
+	waitForOutput(t, s, "test: the continue is waiting before its commit")
+
+	if err := s.client.SetModel(ctx, conv, &scriptModel, mentionedModel); err != nil {
+		t.Fatalf("the mention's switch: %v", err)
+	}
+	if err := <-late; conflictReason(err) != "model_changed" {
+		t.Fatalf("the continue that committed after the mention's switch: err = %v, want a 409 with reason model_changed", err)
+	}
+	if got, err := s.client.Model(ctx, conv); err != nil || got != mentionedModel {
+		t.Fatalf("the model is %+v, %v after the late continue; want the mention's %+v", got, err, mentionedModel)
+	}
+	sub, err := s.client.Submit(ctx, conv, Input{Content: "hello", ExpectModel: &mentionedModel})
+	if err != nil {
+		t.Fatalf("the mention's send: %v", err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the mention settled %+v, %v; want done", settled, err)
+	}
+	if got := lastAssistantProvider(t, s.client, conv); got != "mentioned" {
+		t.Fatalf("the mention's reply came from %q, want the model it switched to", got)
+	}
+}
+
+func TestAMentionIsRefusedWhenAContinueLandedBetweenItsSwitchAndItsSend(t *testing.T) {
+	s := startSidecar(t, threeScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv := failedConversation(t, s)
+	if err := s.client.SetModel(ctx, conv, &scriptModel, mentionedModel); err != nil {
+		t.Fatal(err)
+	}
+	before := lastEntryID(t, s.client, conv)
+	sub, _, err := s.client.Continue(ctx, conv, &mentionedModel, backupModel, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the continue settled %+v, %v", settled, err)
+	}
+	entries := lastEntryID(t, s.client, conv)
+	if _, err := s.client.Submit(ctx, conv, Input{Content: "hello", ExpectModel: &mentionedModel}); conflictReason(err) != "model_changed" {
+		t.Fatalf("a send that expected the model the continue had replaced: err = %v, want a 409 with reason model_changed", err)
+	}
+	if now := lastEntryID(t, s.client, conv); now != entries {
+		t.Fatalf("a refused send added entry %d", now)
+	}
+	if got, err := s.client.Model(ctx, conv); err != nil || got != backupModel {
+		t.Fatalf("the model is %+v, %v after the refused send; want the continue's %+v", got, err, backupModel)
+	}
+}
+
+func TestAModelWriteThatExpectsAnotherModelIsRefused(t *testing.T) {
+	s := startSidecar(t, threeScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.SetModel(ctx, conv, &backupModel, mentionedModel); conflictReason(err) != "model_changed" {
+		t.Fatalf("a write that expected backup on a script conversation: err = %v, want a 409 with reason model_changed", err)
+	}
+	if got, err := s.client.Model(ctx, conv); err != nil || got != scriptModel {
+		t.Fatalf("a refused write left the model %+v, %v; want script", got, err)
+	}
+	if err := s.client.SetModel(ctx, conv, &scriptModel, mentionedModel); err != nil {
+		t.Fatalf("a write that expected the right model: %v", err)
+	}
+	if err := s.client.SetModel(ctx, conv, nil, backupModel); err != nil {
+		t.Fatalf("a write that expects nothing: %v", err)
 	}
 }

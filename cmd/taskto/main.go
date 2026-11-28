@@ -294,7 +294,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 			if err != nil {
 				return err
 			}
-			return c.SetModel(ctx, conversation, agentrt.ModelRef{Provider: "cli-" + string(cli), ModelID: "default"})
+			return c.SetModel(ctx, conversation, nil, agentrt.ModelRef{Provider: "cli-" + string(cli), ModelID: "default"})
 		})
 		convAgent = func(ctx context.Context) (conversations.Runtime, error) {
 			c, err := agent.ready(ctx)

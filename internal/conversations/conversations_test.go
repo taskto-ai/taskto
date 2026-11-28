@@ -53,13 +53,22 @@ type fakeRuntime struct {
 	stallPutBack  bool
 	onEntries     func()
 	onContinue    func()
+	onSetModel    func()
 	stallContinue bool
+	continueErr   error
 
 	lateContinue  bool
 	continueCalls int
-	consumed      int64
-	landing       func()
-	confirm       chan struct{}
+	landing       func() error
+}
+
+var errModelChanged = &agentrt.StatusError{Code: http.StatusConflict, Message: "the conversation is on another model", Reason: "model_changed"}
+
+func (f *fakeRuntime) expects(conv int64, expected *agentrt.ModelRef) error {
+	if expected != nil && f.models[conv] != *expected {
+		return errModelChanged
+	}
+	return nil
 }
 
 var setupToken = auth.NewSetupToken()
@@ -105,6 +114,9 @@ func (f *fakeRuntime) Submit(ctx context.Context, conv int64, in agentrt.Input) 
 	if f.submitErr != nil {
 		return 0, f.submitErr
 	}
+	if err := f.expects(conv, in.ExpectModel); err != nil {
+		return 0, err
+	}
 	f.inputs[conv] = append(f.inputs[conv], in)
 	f.calls = append(f.calls, "submit")
 	return int64(1000 + len(f.inputs[conv])), nil
@@ -115,7 +127,7 @@ type continueCall struct {
 	after int64
 }
 
-func (f *fakeRuntime) Continue(ctx context.Context, conv int64, model agentrt.ModelRef, after int64) (int64, agentrt.ModelRef, error) {
+func (f *fakeRuntime) Continue(ctx context.Context, conv int64, expected *agentrt.ModelRef, model agentrt.ModelRef, after int64) (int64, agentrt.ModelRef, error) {
 	if f.onContinue != nil {
 		f.onContinue()
 	}
@@ -124,59 +136,43 @@ func (f *fakeRuntime) Continue(ctx context.Context, conv int64, model agentrt.Mo
 		return 0, agentrt.ModelRef{}, ctx.Err()
 	}
 	f.mu.Lock()
-	late := f.lateContinue
 	f.continueCalls++
-	first := f.continueCalls == 1
-	if late && first {
-		f.landing = func() {
+	if f.lateContinue && f.continueCalls == 1 {
+		f.landing = func() error {
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			f.landContinue(conv, model, after)
+			_, _, err := f.admitContinue(conv, expected, model, after)
+			return err
 		}
-	}
-	f.mu.Unlock()
-	if late && first {
+		f.mu.Unlock()
 		<-ctx.Done()
 		return 0, agentrt.ModelRef{}, ctx.Err()
 	}
-	if late {
-		select {
-		case <-f.confirm:
-		case <-ctx.Done():
-			return 0, agentrt.ModelRef{}, ctx.Err()
-		}
-	}
-	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.continueErr != nil {
+		return 0, agentrt.ModelRef{}, f.continueErr
+	}
 	if f.err != nil {
 		return 0, agentrt.ModelRef{}, f.err
 	}
-	if late && !f.landContinue(conv, model, after) {
-		return 0, agentrt.ModelRef{}, &agentrt.StatusError{Code: http.StatusConflict, Message: "the conversation moved on", Reason: "moved"}
-	}
-	if !late {
-		f.resumed = append(f.resumed, continueCall{model, after})
-		f.resumes[conv]++
-	}
-	return int64(3000 + f.resumes[conv]), model, nil
+	return f.admitContinue(conv, expected, model, after)
 }
 
-func (f *fakeRuntime) landContinue(conv int64, model agentrt.ModelRef, after int64) bool {
-	if after <= f.consumed {
-		return false
+func (f *fakeRuntime) admitContinue(conv int64, expected *agentrt.ModelRef, model agentrt.ModelRef, after int64) (int64, agentrt.ModelRef, error) {
+	if err := f.expects(conv, expected); err != nil {
+		return 0, agentrt.ModelRef{}, err
 	}
-	f.consumed = after
 	f.models[conv] = model
 	f.resumed = append(f.resumed, continueCall{model, after})
 	f.resumes[conv]++
-	return true
+	return int64(3000 + f.resumes[conv]), model, nil
 }
 
-func (f *fakeRuntime) landLate() {
+func (f *fakeRuntime) landLate() error {
 	f.mu.Lock()
 	land := f.landing
 	f.mu.Unlock()
-	land()
+	return land()
 }
 
 func (f *fakeRuntime) Note(_ context.Context, conv int64, n agentrt.NoteInput) (int64, error) {
@@ -226,7 +222,10 @@ func (f *fakeRuntime) Model(_ context.Context, conv int64) (agentrt.ModelRef, er
 	return f.models[conv], f.err
 }
 
-func (f *fakeRuntime) SetModel(ctx context.Context, conv int64, model agentrt.ModelRef) error {
+func (f *fakeRuntime) SetModel(ctx context.Context, conv int64, expected *agentrt.ModelRef, model agentrt.ModelRef) error {
+	if f.onSetModel != nil {
+		f.onSetModel()
+	}
 	f.mu.Lock()
 	if f.stallPutBack && len(f.calls) > 0 && strings.HasPrefix(f.calls[len(f.calls)-1], "set-model ") {
 		f.mu.Unlock()
@@ -236,6 +235,9 @@ func (f *fakeRuntime) SetModel(ctx context.Context, conv int64, model agentrt.Mo
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
+	}
+	if err := f.expects(conv, expected); err != nil {
+		return err
 	}
 	f.models[conv] = model
 	f.calls = append(f.calls, "set-model "+model.Provider+"/"+model.ModelID)

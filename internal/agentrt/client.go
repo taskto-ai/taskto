@@ -36,6 +36,8 @@ type Input struct {
 	Capability string      `json:"capability,omitempty"`
 	Language   string      `json:"language"`
 	Entry      *InputEntry `json:"entry,omitempty"`
+
+	ExpectModel *ModelRef `json:"expectModel,omitempty"`
 }
 
 type InputEntry struct {
@@ -165,8 +167,12 @@ func (c *Client) Model(ctx context.Context, conversation int64) (ModelRef, error
 	return out, err
 }
 
-func (c *Client) SetModel(ctx context.Context, conversation int64, model ModelRef) error {
-	return c.do(ctx, http.MethodPut, "/conversations/"+itoa(conversation)+"/model", model, nil)
+func (c *Client) SetModel(ctx context.Context, conversation int64, expected *ModelRef, model ModelRef) error {
+	in := struct {
+		ModelRef
+		ExpectModel *ModelRef `json:"expectModel,omitempty"`
+	}{model, expected}
+	return c.do(ctx, http.MethodPut, "/conversations/"+itoa(conversation)+"/model", in, nil)
 }
 
 func (c *Client) Submit(ctx context.Context, conversation int64, in Input) (int64, error) {
@@ -177,15 +183,16 @@ func (c *Client) Submit(ctx context.Context, conversation int64, in Input) (int6
 	return out.SubmissionID, err
 }
 
-func (c *Client) Continue(ctx context.Context, conversation int64, model ModelRef, afterEntry int64) (int64, ModelRef, error) {
+func (c *Client) Continue(ctx context.Context, conversation int64, expected *ModelRef, model ModelRef, afterEntry int64) (int64, ModelRef, error) {
 	var out struct {
 		SubmissionID int64    `json:"submissionId"`
 		Model        ModelRef `json:"model"`
 	}
 	in := struct {
-		Model      ModelRef `json:"model"`
-		AfterEntry int64    `json:"afterEntry"`
-	}{model, afterEntry}
+		Model       ModelRef  `json:"model"`
+		AfterEntry  int64     `json:"afterEntry"`
+		ExpectModel *ModelRef `json:"expectModel,omitempty"`
+	}{model, afterEntry, expected}
 	err := c.do(ctx, http.MethodPost, "/conversations/"+itoa(conversation)+"/continue", in, &out)
 	return out.SubmissionID, out.Model, err
 }

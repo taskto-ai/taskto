@@ -151,6 +151,7 @@ var agentRefusals = map[string]apierr.Code{
 	"no_model":      apierr.CodeConversationNoModel,
 	"busy":          apierr.CodeConversationBusy,
 	"moved":         apierr.CodeConversationMoved,
+	"model_changed": apierr.CodeConversationBusy,
 }
 
 func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
@@ -351,7 +352,7 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		before = was
-		if err := rt.SetModel(ctx, c.agentID, *switchTo); err != nil {
+		if err := rt.SetModel(ctx, c.agentID, &was, *switchTo); err != nil {
 			conversationError(w, r, c, err)
 			return
 		}
@@ -375,7 +376,17 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	if s.capability != nil {
 		in.Capability = s.capability(c.ID, c.agentID)
 	}
-	model, _ := rt.Model(ctx, c.agentID)
+	var model agentrt.ModelRef
+	if switchTo != nil {
+		model = *switchTo
+	} else {
+		model, err = rt.Model(ctx, c.agentID)
+		if err != nil {
+			conversationError(w, r, c, err)
+			return
+		}
+	}
+	in.ExpectModel = &model
 	if err := s.ensureUsageMark(ctx, rt, c.ID, c.agentID); err != nil {
 		conversationError(w, r, c, err)
 		return
@@ -385,7 +396,7 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		if switchTo != nil {
 			backCtx, stop := context.WithTimeout(context.WithoutCancel(r.Context()), s.putBackLimit)
 			defer stop()
-			if back := rt.SetModel(backCtx, c.agentID, before); back != nil {
+			if back := rt.SetModel(backCtx, c.agentID, &model, before); back != nil {
 				slog.WarnContext(r.Context(), "conversations: putting back the model after a mention's send failed", "conversation", c.ID, "err", back)
 			}
 		}
@@ -499,12 +510,7 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	holding := true
-	defer func() {
-		if holding {
-			done()
-		}
-	}()
+	defer done()
 	ctx, cancel := context.WithTimeout(r.Context(), s.holdLimit)
 	defer cancel()
 	unlock, ok := s.lock(ctx, c.ID)
@@ -518,13 +524,13 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	if !s.stillWritable(w, r) {
 		return
 	}
-	sub, admitted, err := rt.Continue(ctx, c.agentID, model, req.AfterEntry)
+	current, err := rt.Model(ctx, c.agentID)
 	if err != nil {
-		var answered *agentrt.StatusError
-		if !errors.As(err, &answered) {
-			holding = false
-			go s.settleContinue(rt, c.agentID, model, req.AfterEntry, done)
-		}
+		conversationError(w, r, c, err)
+		return
+	}
+	sub, admitted, err := rt.Continue(ctx, c.agentID, &current, model, req.AfterEntry)
+	if err != nil {
 		conversationError(w, r, c, err)
 		return
 	}
@@ -534,28 +540,6 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	s.markWhenSettled(rt, p, admitted.Provider, sub)
 	slog.InfoContext(r.Context(), "conversation continued", "conversation", c.ID, "provider", admitted.Provider, "by", p.User)
 	writeJSON(w, http.StatusAccepted, SubmissionReply{SubmissionID: sub, Model: modelRef{Provider: admitted.Provider, ModelID: admitted.ModelID}})
-}
-
-func (s *Service) settleContinue(rt Runtime, agentID int64, model agentrt.ModelRef, afterEntry int64, done func()) {
-	defer done()
-	limit := time.NewTimer(s.settleLimit)
-	defer limit.Stop()
-	for {
-		ctx, cancel := context.WithTimeout(s.closing, s.holdLimit)
-		_, _, err := rt.Continue(ctx, agentID, model, afterEntry)
-		cancel()
-		var answered *agentrt.StatusError
-		if err == nil || errors.As(err, &answered) {
-			return
-		}
-		select {
-		case <-limit.C:
-			return
-		case <-s.closing.Done():
-			return
-		case <-time.After(settlePause):
-		}
-	}
 }
 
 func (s *Service) handleMessages(w http.ResponseWriter, r *http.Request) {
@@ -681,7 +665,12 @@ func (s *Service) handleSetModel(w http.ResponseWriter, r *http.Request) {
 	if !s.stillWritable(w, r) {
 		return
 	}
-	if err := rt.SetModel(r.Context(), c.agentID, model); err != nil {
+	current, err := rt.Model(r.Context(), c.agentID)
+	if err != nil {
+		conversationError(w, r, c, err)
+		return
+	}
+	if err := rt.SetModel(r.Context(), c.agentID, &current, model); err != nil {
 		conversationError(w, r, c, err)
 		return
 	}

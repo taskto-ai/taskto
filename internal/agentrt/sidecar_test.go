@@ -393,7 +393,7 @@ func TestListAndRetireConversations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.client.SetModel(ctx, orphan, catalog.Default); !notFound(err) {
+	if err := s.client.SetModel(ctx, orphan, nil, catalog.Default); !notFound(err) {
 		t.Fatalf("set model of a retired conversation: err = %v, want a 404", err)
 	}
 	if _, err := s.client.Watch(ctx, orphan); !notFound(err) {
@@ -657,7 +657,7 @@ func TestSetModelOvertakenByARetireIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	set := make(chan error, 1)
-	go func() { set <- s.client.SetModel(ctx, conv, catalog.Default) }()
+	go func() { set <- s.client.SetModel(ctx, conv, nil, catalog.Default) }()
 	waitForOutput(t, s, "test: the model write is waiting before its commit")
 	if err := s.client.RetireConversation(ctx, conv); err != nil {
 		t.Fatal(err)

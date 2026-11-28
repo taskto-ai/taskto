@@ -15,12 +15,12 @@ import (
 type Runtime interface {
 	CreateConversationOn(ctx context.Context, model agentrt.ModelRef) (int64, error)
 	Submit(ctx context.Context, conversation int64, in agentrt.Input) (int64, error)
-	Continue(ctx context.Context, conversation int64, model agentrt.ModelRef, afterEntry int64) (int64, agentrt.ModelRef, error)
+	Continue(ctx context.Context, conversation int64, expected *agentrt.ModelRef, model agentrt.ModelRef, afterEntry int64) (int64, agentrt.ModelRef, error)
 	Note(ctx context.Context, conversation int64, n agentrt.NoteInput) (int64, error)
 	Wait(ctx context.Context, submission int64) (agentrt.Settled, error)
 	Messages(ctx context.Context, conversation int64) ([]agentrt.Message, error)
 	Model(ctx context.Context, conversation int64) (agentrt.ModelRef, error)
-	SetModel(ctx context.Context, conversation int64, model agentrt.ModelRef) error
+	SetModel(ctx context.Context, conversation int64, expected *agentrt.ModelRef, model agentrt.ModelRef) error
 	Abort(ctx context.Context, conversation int64) error
 	Entries(ctx context.Context, conversation, before int64, limit int) (json.RawMessage, error)
 	Watch(ctx context.Context, conversation int64) (Watch, error)
@@ -66,7 +66,6 @@ type Service struct {
 	modelWait     time.Duration
 	holdLimit     time.Duration
 	putBackLimit  time.Duration
-	settleLimit   time.Duration
 	exportTimeout time.Duration
 	heartbeat     time.Duration
 	writeTimeout  time.Duration
@@ -79,7 +78,7 @@ func New(sqlDB *sql.DB, agent Agent) *Service {
 	closing, end := context.WithCancel(context.Background())
 	return &Service{
 		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{}, modelHolds: map[int64]*modelHold{}, guards: map[int64]*guard{},
-		readyWait: 5 * time.Second, modelWait: modelWait, holdLimit: holdLimit, putBackLimit: putBackLimit, settleLimit: settleLimit, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
+		readyWait: 5 * time.Second, modelWait: modelWait, holdLimit: holdLimit, putBackLimit: putBackLimit, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
 		maxStreams: 16,
 	}
 }
@@ -218,8 +217,6 @@ const (
 	modelWait    = 3 * time.Second
 	holdLimit    = 20 * time.Second
 	putBackLimit = 5 * time.Second
-	settleLimit  = 60 * time.Second
-	settlePause  = time.Second
 )
 
 type modelHold struct {

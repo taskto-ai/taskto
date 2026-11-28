@@ -5,7 +5,8 @@ export type AgentChoice = { ref: ModelRef; label: string; menu: string; cli: boo
 
 const PROVIDER = /^[A-Za-z0-9._-]{1,256}$/
 const MODEL = /^[A-Za-z0-9._:-]{1,256}$/
-const LEADING = /^@\[([^\][\\\n]{1,100})\]\(agent:([A-Za-z0-9._-]{1,256})\/([A-Za-z0-9._:-]{1,256})\)(?:[\t\n\f\r ]+|$)/
+const LEADING =
+  /^@\[([^\][\\\n]{1,100})\]\(agent:([A-Za-z0-9._-]{1,256})\/([A-Za-z0-9._:-]{1,256})\)(?:[\t\n\f\r ]+|$)/u
 
 export function agentLabel(text: string): string {
   return Array.from(text.replace(/[\][\\\n\r]/g, ' '))

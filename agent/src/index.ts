@@ -5,6 +5,7 @@ import { format } from 'node:util'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
 import {
+  AgentDoc,
   ConversationBusy,
   type ConversationId,
   type Cursor,
@@ -14,6 +15,7 @@ import {
   Harness,
   LiveDoc,
   type SubmissionId,
+  type Tx,
 } from '@earendil-works/pi-durable'
 import { cliTools } from './cli.js'
 import { ContinuePin, latestReplyEntryId, pinHolds } from './continue.js'
@@ -103,7 +105,7 @@ class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly reason?: 'unknown_model' | 'no_model' | 'busy' | 'moved',
+    readonly reason?: 'unknown_model' | 'no_model' | 'busy' | 'moved' | 'model_changed',
   ) {
     super(message)
   }
@@ -148,6 +150,23 @@ function modelRef(value: unknown): ModelRef {
   const model = { provider: ref.provider, modelId: ref.modelId }
   if (!hasModel(catalog, model)) throw new HttpError(400, 'unknown model', 'unknown_model')
   return model
+}
+
+function expectedModel(value: unknown): ModelRef | undefined {
+  if (value === undefined) return undefined
+  const ref = value as Partial<ModelRef> | null
+  if (typeof ref !== 'object' || ref === null || typeof ref.provider !== 'string' || typeof ref.modelId !== 'string') {
+    throw new HttpError(400, 'expectModel must be { provider, modelId }')
+  }
+  return { provider: ref.provider, modelId: ref.modelId }
+}
+
+async function requireModel(tx: Tx, conversationId: ConversationId, expected: ModelRef | undefined) {
+  if (!expected) return
+  const current = (await tx.doc(AgentDoc, conversationId)).model
+  if (current?.provider !== expected.provider || current.modelId !== expected.modelId) {
+    throw new HttpError(409, 'the conversation is on another model', 'model_changed')
+  }
 }
 
 function parseId(segment: string): number {
@@ -300,11 +319,13 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         if (!validInputEntry(body.entry)) throw new HttpError(400, 'entry must be a bounded taskto.input entry')
         entry = body.entry
       }
+      const expected = expectedModel(body.expectModel)
       const conv = await conversation(id)
       const { capability, language } = body as { capability?: string; language?: string }
       let submissionId: SubmissionId | undefined
       await conv.commit(async (tx) => {
         if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
+        await requireModel(tx, conv.id, expected)
         submissionId = await conv.submit(tx, {
           type: 'input',
           content,
@@ -330,12 +351,14 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       if (typeof afterEntry !== 'number' || !Number.isSafeInteger(afterEntry) || afterEntry < 1) {
         throw new HttpError(400, 'afterEntry must be the id of the last entry')
       }
+      const expected = expectedModel(body.expectModel)
       const conv = await conversation(id)
       let submissionId: SubmissionId | undefined
       await testHooks.beforeContinueWrite?.()
       try {
         await conv.commit(async (tx) => {
           if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
+          await requireModel(tx, conv.id, expected)
           const pin = await tx.doc(ContinuePin, conv.id)
           if (afterEntry <= pin.consumed || (await latestReplyEntryId(tx, conv.id)) !== afterEntry) {
             throw new HttpError(409, 'the conversation moved on', 'moved')
@@ -411,11 +434,14 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       return send(res, 200, { provider: agent.model.provider, modelId: agent.model.modelId })
     }
     if (req.method === 'PUT' && action === 'model') {
-      const model = modelRef(await readJson(req))
+      const body = await readJson(req)
+      const model = modelRef(body)
+      const expected = expectedModel(body.expectModel)
       const conv = await conversation(id)
       await testHooks.beforeModelWrite?.()
       await conv.commit(async (tx) => {
         if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
+        await requireModel(tx, conv.id, expected)
         if (pinHolds(await tx.doc(ContinuePin, conv.id), await tx.doc(LiveDoc, conv.id))) {
           throw new HttpError(409, 'a continued reply keeps its model until it ends', 'busy')
         }

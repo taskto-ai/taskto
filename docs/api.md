@@ -325,7 +325,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `conversation_title_invalid` | 400 | A title must have at most `max` printable characters. |
 | `conversation_lost` | 410 | The agent runtime no longer has the conversation's content. |
 | `conversation_no_model` | 409 | The conversation has no model: choose one. |
-| `conversation_busy` | 409 | The conversation is working: a continue is only for an idle one. Also, a message that names an agent is still changing the conversation's model, so `PUT …/model` or `POST …/continue` gave up waiting for it (a few seconds), and nothing changed. |
+| `conversation_busy` | 409 | The conversation is working: a continue is only for an idle one. Also, a message that names an agent is still changing the conversation's model, so `PUT …/model` or `POST …/continue` gave up waiting for it (a few seconds), and nothing changed. Also, the conversation was on another model than the one the request had read, because another request changed it meanwhile: nothing changed, read the model and try again. |
 | `conversation_moved` | 409 | The conversation has entries after the one the continue was for: it was already continued, or changed meanwhile. |
 | `model_unavailable` | 409 | The caller can't run that model now: a CLI whose account isn't connected, or that the member's account mode leaves no account for. |
 | `agent_off` | 503 | The agent runtime is off: the server runs without `-agent`. |
@@ -5762,10 +5762,16 @@ message that names an agent is between its switch and its submission, `POST …/
 the hold a few seconds, then answers `409 conversation_busy` and starts nothing, and a message
 that names an agent waits for a continue that is being admitted. The two never interleave, so a
 message is never submitted under the model of a continue that came between its switch and its send.
-A continue whose call to the agent runtime got no answer in time answers `503`, but the runtime may
-still commit it, so the server keeps the hold, asking the runtime again for the same continue, until
-the runtime answers (it is then either admitted or refused as moved) or about a minute passes; a
-message that names an agent waits for that hold like for any other.
+Holding the model orders the requests of one server, but correctness does not depend on it: every
+change of a conversation's model and every submission or continue the server sends to the agent
+runtime carries the model the server expects the conversation to be on, read just before, and the
+runtime checks it in the same transaction that applies the change or admits the turn. When the
+conversation is on another model, the runtime refuses and the request answers `409
+conversation_busy` with nothing changed (a mention that fails after its switch puts the model back
+only if it is still the one the mention switched to). So a continue that got no answer in time
+(`503`, the hold released) and commits later is refused when a mention has switched the model
+meanwhile, and a mention is never submitted on a model another request changed. Nothing is retried
+in the background: a request that got no answer admits nothing afterwards.
 
 Each person-sent message is stored as a `taskto.input` entry. Its `data` includes version `1`
 and the sender's user ID; optional `text` and `attached` fields preserve the original text and

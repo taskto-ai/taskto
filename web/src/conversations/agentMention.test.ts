@@ -39,6 +39,15 @@ test('a token round-trips through the parser, which only reads one at the very s
   expect(leadingAgent('@[Codex](user:3) hi')).toBeNull()
 })
 
+test('a label is counted in characters, as the server counts it, not in UTF-16 units', () => {
+  const emoji = (n: number) => '\u{1F600}'.repeat(n)
+  const token = (label: string) => `@[${label}](agent:cli-claude/default) hi`
+  expect(leadingAgent(token(emoji(51)))?.ref).toEqual({ provider: 'cli-claude', model_id: 'default' })
+  expect(leadingAgent(token(emoji(100)))?.rest).toBe('hi')
+  expect(leadingAgent(token(emoji(101)))).toBeNull()
+  expect(leadingAgent(token(emoji(0)))).toBeNull()
+})
+
 test('a label never breaks the token', () => {
   expect(agentLabel('A [b]\\c\nd')).toBe('A  b  c d')
   expect(agentLabel('x'.repeat(150))).toHaveLength(100)

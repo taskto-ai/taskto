@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -502,7 +503,6 @@ func TestAMentionWaitsForAContinueBeingAdmitted(t *testing.T) {
 func TestAStalledContinueEndsAtItsDeadlineAndFreesTheHold(t *testing.T) {
 	e := newEnv(t, false)
 	e.svc.holdLimit = 50 * time.Millisecond
-	e.svc.settleLimit = 50 * time.Millisecond
 	owner, ws := e.setup()
 	c := owner.create(ws, nil)
 	e.rt.stallContinue = true
@@ -531,54 +531,195 @@ func TestAStalledContinueEndsAtItsDeadlineAndFreesTheHold(t *testing.T) {
 	owner.expect(http.StatusOK, http.MethodPut, path(ws, fmt.Sprintf("/%d/model", c.ID)), map[string]any{"provider": "backup", "model_id": "b-1"})
 }
 
-func TestAContinueThatTimedOutKeepsTheHoldUntilTheRuntimeAnswersAgain(t *testing.T) {
+func (e *env) modelOf(c Conversation) agentrt.ModelRef {
+	e.t.Helper()
+	agent := c.agentIDForTest(e.t, e)
+	e.rt.mu.Lock()
+	defer e.rt.mu.Unlock()
+	return e.rt.models[agent]
+}
+
+func (e *env) otherWriterSetsModel(c Conversation, model agentrt.ModelRef) func() {
+	agent := c.agentIDForTest(e.t, e)
+	return func() {
+		e.rt.mu.Lock()
+		defer e.rt.mu.Unlock()
+		e.rt.models[agent] = model
+	}
+}
+
+func TestAContinueThatLandsAfterAMentionCannotChangeTheModel(t *testing.T) {
 	e := newEnv(t, false)
 	e.svc.holdLimit = 50 * time.Millisecond
-	e.svc.modelWait = 5 * time.Second
 	owner, ws := e.setup()
 	c := owner.create(ws, nil)
-	agent := c.agentIDForTest(t, e)
 	mentioned := agentrt.ModelRef{Provider: "cli-codex", ModelID: "default"}
 	e.rt.mu.Lock()
 	e.rt.lateContinue = true
-	e.rt.confirm = make(chan struct{})
 	e.rt.mu.Unlock()
 
 	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("the stalled continue answered %d, want 503", rec.Code)
 	}
+	rec = owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), mention(mentioned.Provider, mentioned.ModelID, "hello"))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("the mention answered %d, want 202", rec.Code)
+	}
+	err := e.rt.landLate()
+	var refused *agentrt.StatusError
+	if !errors.As(err, &refused) || refused.Reason != "model_changed" {
+		t.Fatalf("the continue that stalled landed with %v, want a refusal because the model changed", err)
+	}
+	if got := e.modelOf(c); got != mentioned {
+		t.Fatalf("the model is %+v after the late continue, want the mention's %+v", got, mentioned)
+	}
+	if got := e.continues(); len(got) != 0 {
+		t.Fatalf("a continue that stalled was admitted after a mention: %+v", got)
+	}
+}
 
-	submitting, release := make(chan struct{}), make(chan struct{})
+func TestAMentionIsRefusedWhenAContinueChangedTheModelBeforeItsSend(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	continued := agentrt.ModelRef{Provider: "backup", ModelID: "b-1"}
 	e.rt.mu.Lock()
-	e.rt.onSubmit = func() {
-		close(submitting)
-		<-release
-	}
+	e.rt.onSubmit = e.otherWriterSetsModel(c, continued)
 	e.rt.mu.Unlock()
-	sent := make(chan int, 1)
-	go func() {
-		sent <- owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), mention(mentioned.Provider, mentioned.ModelID, "hello")).Code
-	}()
-	for waiting := false; !waiting; {
-		select {
-		case <-submitting:
-			waiting = true
-		default:
-			waiting = e.holdsOnModel(c.ID, 2)
-			runtime.Gosched()
-		}
+
+	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), mention("cli-codex", "default", "hello"))
+	if rec.Code != http.StatusConflict || apiErrorCode(t, rec.Body.Bytes()) != string(apierr.CodeConversationBusy) {
+		t.Fatalf("a mention whose model was changed by another request answered %d %s, want 409 conversation_busy", rec.Code, rec.Body.String())
 	}
-	e.rt.landLate()
-	close(e.rt.confirm)
-	close(release)
-	if code := <-sent; code != http.StatusAccepted {
-		t.Fatalf("the mention answered %d, want 202", code)
+	if got := e.modelOf(c); got != continued {
+		t.Fatalf("the model is %+v, want the other request's %+v left alone", got, continued)
 	}
 	e.rt.mu.Lock()
-	got := e.rt.models[agent]
+	inputs := len(e.rt.inputs)
 	e.rt.mu.Unlock()
-	if got != mentioned {
-		t.Fatalf("the model is %+v after the mention, want %+v: a continue that timed out landed after the mention's switch", got, mentioned)
+	if inputs != 0 {
+		t.Fatalf("a mention was admitted on a model it did not switch to: %d inputs", inputs)
+	}
+}
+
+func TestAMessageIsRefusedWhenTheModelChangedAfterItWasRead(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	e.rt.mu.Lock()
+	e.rt.onSubmit = e.otherWriterSetsModel(c, agentrt.ModelRef{Provider: "backup", ModelID: "b-1"})
+	e.rt.mu.Unlock()
+
+	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), map[string]any{"content": "hello"})
+	if rec.Code != http.StatusConflict || apiErrorCode(t, rec.Body.Bytes()) != string(apierr.CodeConversationBusy) {
+		t.Fatalf("a message whose model changed answered %d %s, want 409 conversation_busy", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAContinueIsRefusedWhenTheModelChangedAfterItWasRead(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	other := agentrt.ModelRef{Provider: "cli-codex", ModelID: "default"}
+	e.rt.mu.Lock()
+	e.rt.onContinue = e.otherWriterSetsModel(c, other)
+	e.rt.mu.Unlock()
+
+	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7))
+	if rec.Code != http.StatusConflict || apiErrorCode(t, rec.Body.Bytes()) != string(apierr.CodeConversationBusy) {
+		t.Fatalf("a continue whose model changed answered %d %s, want 409 conversation_busy", rec.Code, rec.Body.String())
+	}
+	if got := e.modelOf(c); got != other {
+		t.Fatalf("the model is %+v, want the other request's %+v left alone", got, other)
+	}
+}
+
+func TestAModelChangeIsRefusedWhenTheModelChangedAfterItWasRead(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	other := agentrt.ModelRef{Provider: "cli-codex", ModelID: "default"}
+	e.rt.mu.Lock()
+	e.rt.onSetModel = e.otherWriterSetsModel(c, other)
+	e.rt.mu.Unlock()
+
+	rec := owner.do(http.MethodPut, path(ws, fmt.Sprintf("/%d/model", c.ID)), map[string]any{"provider": "backup", "model_id": "b-1"})
+	if rec.Code != http.StatusConflict || apiErrorCode(t, rec.Body.Bytes()) != string(apierr.CodeConversationBusy) {
+		t.Fatalf("a model change whose model changed answered %d %s, want 409 conversation_busy", rec.Code, rec.Body.String())
+	}
+	if got := e.modelOf(c); got != other {
+		t.Fatalf("the model is %+v, want the other request's %+v left alone", got, other)
+	}
+}
+
+func TestAContinueThatCouldNotReachTheRuntimeIsNotRetriedAfterAnArchive(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	e.rt.mu.Lock()
+	e.rt.continueErr = errors.New("connection reset")
+	e.rt.mu.Unlock()
+
+	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("a continue that could not reach the runtime answered %d, want 503", rec.Code)
+	}
+	e.svc.mu.Lock()
+	holds := len(e.svc.modelHolds)
+	e.svc.mu.Unlock()
+	if holds != 0 {
+		t.Fatalf("%d model holds are left once the continue answered: something is still working for it", holds)
+	}
+	owner.expect(http.StatusOK, http.MethodPatch, path(ws, fmt.Sprintf("/%d", c.ID)), map[string]any{"archived": true})
+	e.rt.mu.Lock()
+	e.rt.continueErr = nil
+	calls := e.rt.continueCalls
+	e.rt.mu.Unlock()
+	if calls != 1 || len(e.continues()) != 0 {
+		t.Fatalf("the runtime saw %d continue calls and admitted %+v: nothing may be admitted for a continue that was answered, least of all after an archive", calls, e.continues())
+	}
+}
+
+func TestAMentionIsRefusedWhenAContinueChangedTheModelBeforeItsSwitch(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	continued := agentrt.ModelRef{Provider: "backup", ModelID: "b-1"}
+	e.rt.mu.Lock()
+	e.rt.onSetModel = e.otherWriterSetsModel(c, continued)
+	e.rt.mu.Unlock()
+
+	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), mention("cli-codex", "default", "hello"))
+	if rec.Code != http.StatusConflict || apiErrorCode(t, rec.Body.Bytes()) != string(apierr.CodeConversationBusy) {
+		t.Fatalf("a mention whose switch found another model answered %d %s, want 409 conversation_busy", rec.Code, rec.Body.String())
+	}
+	if got := e.modelOf(c); got != continued {
+		t.Fatalf("the model is %+v, want the other request's %+v left alone", got, continued)
+	}
+	e.rt.mu.Lock()
+	inputs := len(e.rt.inputs)
+	e.rt.mu.Unlock()
+	if inputs != 0 {
+		t.Fatalf("a mention was admitted after its switch was refused: %d inputs", inputs)
+	}
+}
+
+func TestAMentionThatFailsDoesNotPutTheModelBackOverAnotherRequest(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	continued := agentrt.ModelRef{Provider: "backup", ModelID: "b-1"}
+	e.rt.mu.Lock()
+	e.rt.onSubmit = e.otherWriterSetsModel(c, continued)
+	e.rt.submitErr = errors.New("connection reset")
+	e.rt.mu.Unlock()
+
+	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), mention("cli-codex", "default", "hello"))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("a mention that could not be sent answered %d, want 503", rec.Code)
+	}
+	if got := e.modelOf(c); got != continued {
+		t.Fatalf("the model is %+v, want the other request's %+v: the put-back overwrote it", got, continued)
 	}
 }

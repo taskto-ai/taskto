@@ -389,44 +389,53 @@ test('a continue reply that arrives after a later mention read back does not rep
 const mentionOfS = '@[Scripted](agent:script/s) hello'
 const modelValue = (provider: string, model_id: string) => JSON.stringify([provider, model_id])
 
-test('a continue that succeeds after an older mention shows its own model, not the mention read back', async () => {
-  let server = { provider: 'script', model_id: 's' }
-  let releaseSend: () => void = () => {}
-  let releaseContinue: () => void = () => {}
-  let reads = 0
-  const calls = await show([asked], {
-    [`GET ${BASE}/model`]: () => {
-      reads++
-      return { body: server }
-    },
-    [`POST ${BASE}/messages`]: () =>
-      new Promise((done) => {
-        releaseSend = () => {
-          server = mentioned
-          done({ status: 202, body: { submission_id: 8, model: mentioned } })
-        }
-      }),
-    [`POST ${BASE}/continue`]: (call) =>
-      new Promise((done) => {
-        releaseContinue = () => {
-          server = { provider: 'cli-claude', model_id: 'default' }
-          done(accepted(call))
-        }
-      }),
-  })
-  const picker = (await screen.findByLabelText('Model')) as HTMLSelectElement
-  await send(mentionOfT)
-  await waitFor(() => expect(writes(calls)).toEqual([`POST ${BASE}/messages`]))
-  act(() => stream?.send({ type: 'value', value: { entries: [asked, failed], docs: {} } }))
-  await screen.findByLabelText('Continue on…')
-  choose('Claude Code: Default')
-  await waitFor(() => expect(writes(calls)).toEqual([`POST ${BASE}/messages`, `POST ${BASE}/continue`]))
-  await act(async () => releaseSend())
-  await waitFor(() => expect(reads).toBe(2))
-  await act(async () => {})
-  await act(async () => releaseContinue())
-  await waitFor(() => expect(picker.value).toBe(modelValue('cli-claude', 'default')))
-})
+test.each([
+  ['a short label', mentionOfT],
+  [
+    'a label of 51 emoji, which the server counts as 51 characters',
+    `@[${'\u{1F600}'.repeat(51)}](agent:script/t) hello`,
+  ],
+])(
+  'a continue that succeeds after an older mention with %s shows its own model, not the mention read back',
+  async (_name, text) => {
+    let server = { provider: 'script', model_id: 's' }
+    let releaseSend: () => void = () => {}
+    let releaseContinue: () => void = () => {}
+    let reads = 0
+    const calls = await show([asked], {
+      [`GET ${BASE}/model`]: () => {
+        reads++
+        return { body: server }
+      },
+      [`POST ${BASE}/messages`]: () =>
+        new Promise((done) => {
+          releaseSend = () => {
+            server = mentioned
+            done({ status: 202, body: { submission_id: 8, model: mentioned } })
+          }
+        }),
+      [`POST ${BASE}/continue`]: (call) =>
+        new Promise((done) => {
+          releaseContinue = () => {
+            server = { provider: 'cli-claude', model_id: 'default' }
+            done(accepted(call))
+          }
+        }),
+    })
+    const picker = (await screen.findByLabelText('Model')) as HTMLSelectElement
+    await send(text)
+    await waitFor(() => expect(writes(calls)).toEqual([`POST ${BASE}/messages`]))
+    act(() => stream?.send({ type: 'value', value: { entries: [asked, failed], docs: {} } }))
+    await screen.findByLabelText('Continue on…')
+    choose('Claude Code: Default')
+    await waitFor(() => expect(writes(calls)).toEqual([`POST ${BASE}/messages`, `POST ${BASE}/continue`]))
+    await act(async () => releaseSend())
+    await waitFor(() => expect(reads).toBe(2))
+    await act(async () => {})
+    await act(async () => releaseContinue())
+    await waitFor(() => expect(picker.value).toBe(modelValue('cli-claude', 'default')))
+  },
+)
 
 test('a second mention shows its own model although the first mention read back arrives while it is sent', async () => {
   let server = { provider: 'script', model_id: 's' }
