@@ -92,7 +92,8 @@ test('the owner shares with a member of the workspace and stops sharing again', 
   fireEvent.click(within(dialog).getAllByRole('button', { name: 'Share' }).at(-1) as HTMLElement)
   await waitFor(() => expect(within(dialog).getByText('Bo')).toBeTruthy())
   expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({ role: 'viewer' })
-  expect(await within(dialog).findByText('Everyone in the workspace can already read it.')).toBeTruthy()
+  expect(await within(dialog).findByText('There is no one else to add.')).toBeTruthy()
+  expect(within(dialog).queryByText(/can already read/)).toBeNull()
 
   fireEvent.click(within(dialog).getByRole('button', { name: 'Stop sharing with Cy' }))
   await waitFor(() =>
@@ -163,6 +164,30 @@ test('nothing can be typed until the conversation says who it belongs to', async
   release()
   await screen.findByText('Shared by Eve · read only')
   expect(screen.queryByLabelText('Message')).toBeNull()
+})
+
+test('nothing can be typed while the role is unknown, even with the stream live, and a retry finds it', async () => {
+  let owned = false
+  const calls = fakeFetch({
+    ...MODELS,
+    'GET /api/workspaces/1/conversations/7': () =>
+      owned
+        ? { body: conversation({ role: 'viewer', owner: { id: 5, name: 'Eve' } }) }
+        : { status: 500, body: { error: 'database is down', code: 'internal' } },
+  })
+  const { sources, factory } = fakeStreams()
+  render(view(factory))
+  await waitFor(() => expect(sources).toHaveLength(1))
+  act(() => sources[0].open())
+  await screen.findByRole('button', { name: 'Try again' })
+  expect(screen.queryByLabelText('Message')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
+
+  owned = true
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await screen.findByText('Shared by Eve · read only')
+  expect(screen.queryByLabelText('Message')).toBeNull()
+  expect(calls.some((c) => c.method !== 'GET')).toBe(false)
 })
 
 test('the dialog reads who it is shared with each time it opens', async () => {

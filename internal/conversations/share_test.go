@@ -107,6 +107,7 @@ func TestOwnerSharesWithAMemberToRead(t *testing.T) {
 		{http.MethodPost, "/messages", map[string]any{"content": "hi"}},
 		{http.MethodPut, "/model", map[string]any{"provider": "script", "model_id": "script-1"}},
 		{http.MethodPost, "/stop", nil},
+		{http.MethodPost, "/notes", map[string]any{"content": "a note the agent never sees"}},
 		{http.MethodPost, "/cli-permissions/abc", map[string]any{"allow": true}},
 		{http.MethodPut, fmt.Sprintf("/members/%d", outsider.id), map[string]any{"role": "viewer"}},
 		{http.MethodDelete, fmt.Sprintf("/members/%d", owner.id), nil},
@@ -173,9 +174,10 @@ func TestOwnerSharesWithAMemberToRead(t *testing.T) {
 	}
 	e.rt.mu.Lock()
 	sent, aborted, model := len(e.rt.inputs[conv.agentIDForTest(t, e)]), e.rt.aborts[conv.agentIDForTest(t, e)], e.rt.models[conv.agentIDForTest(t, e)]
+	noted := len(e.rt.notes[conv.agentIDForTest(t, e)])
 	e.rt.mu.Unlock()
-	if sent != 1 || aborted != 0 || model != defaultModel {
-		t.Fatalf("the reader changed the runtime: %d inputs, %d aborts, model %+v", sent, aborted, model)
+	if sent != 1 || aborted != 0 || model != defaultModel || noted != 0 {
+		t.Fatalf("the reader changed the runtime: %d inputs, %d aborts, %d notes, model %+v", sent, aborted, noted, model)
 	}
 	if again := decode[Conversation](t, owner.expect(http.StatusOK, http.MethodGet, one, nil)); again.Title != privateTitle {
 		t.Fatalf("title = %q", again.Title)
@@ -483,7 +485,7 @@ func TestAStaleOwnerCannotShareOrUnshareAnotherConversation(t *testing.T) {
 	if _, err := e.svc.share(t.Context(), read, owner.id, reader.id, RoleViewer); !errors.Is(err, errNotFound) {
 		t.Fatalf("share on a conversation that changed hands = %v, want %v", err, errNotFound)
 	}
-	if err := e.svc.unshare(t.Context(), read, reader.id); !errors.Is(err, errNotFound) {
+	if err := e.svc.unshare(t.Context(), read, owner.id, reader.id); !errors.Is(err, errNotFound) {
 		t.Fatalf("unshare on a conversation that changed hands = %v, want %v", err, errNotFound)
 	}
 	if n := e.count(`SELECT count(*) FROM conversation_members`); n != 0 {

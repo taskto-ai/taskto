@@ -2767,7 +2767,7 @@
       "person": "Add a person",
       "choose": "Choose a member",
       "add": "Share",
-      "noOthers": "Everyone in the workspace can already read it.",
+      "noOthers": "There is no one else to add.",
       "remove": "Stop sharing with {name}",
       "removeLabel": "Remove",
       "done": "Done"

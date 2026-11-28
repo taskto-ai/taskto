@@ -2788,7 +2788,7 @@
       "person": "Adicionar uma pessoa",
       "choose": "Escolha um membro",
       "add": "Compartilhar",
-      "noOthers": "Todos do workspace já podem lê-la.",
+      "noOthers": "Não há mais ninguém para adicionar.",
       "remove": "Parar de compartilhar com {name}",
       "removeLabel": "Remover",
       "done": "Concluir"

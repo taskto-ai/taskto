@@ -98,6 +98,11 @@ func (s *Service) writable(w http.ResponseWriter, r *http.Request) (Conversation
 	return c, ok
 }
 
+func (s *Service) stillReadable(w http.ResponseWriter, r *http.Request) bool {
+	_, ok := s.conversationInPath(w, r)
+	return ok
+}
+
 func (s *Service) stillWritable(w http.ResponseWriter, r *http.Request) bool {
 	_, ok := s.writable(w, r)
 	return ok
@@ -372,6 +377,9 @@ func (s *Service) handleMessages(w http.ResponseWriter, r *http.Request) {
 		conversationError(w, r, c, err)
 		return
 	}
+	if !s.stillReadable(w, r) {
+		return
+	}
 	if msgs == nil {
 		msgs = []agentrt.Message{}
 	}
@@ -431,6 +439,15 @@ func (s *Service) handleEntries(w http.ResponseWriter, r *http.Request) {
 		conversationError(w, r, c, err)
 		return
 	}
+	if !s.stillReadable(w, r) {
+		return
+	}
+	if c.Role != RoleOwner {
+		if page, err = redactForViewer(page); err != nil {
+			serverError(w, r, err)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, page)
 }
 
@@ -446,6 +463,9 @@ func (s *Service) handleModel(w http.ResponseWriter, r *http.Request) {
 	m, err := rt.Model(r.Context(), c.agentID)
 	if err != nil {
 		conversationError(w, r, c, err)
+		return
+	}
+	if !s.stillReadable(w, r) {
 		return
 	}
 	writeJSON(w, http.StatusOK, modelRef{Provider: m.Provider, ModelID: m.ModelID})

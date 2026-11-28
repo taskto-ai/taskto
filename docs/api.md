@@ -5685,16 +5685,24 @@ conversation; `400` for an empty body, a bad title or a bad `cli_permissions`.
 An owner can let chosen members of the workspace **read** a conversation, live: a viewer sees its
 messages and the agent's work as they stream, on the same routes as the owner (`GET` the
 conversation, `…/entries`, `…/events`, `…/messages` and `…/model`), and can change nothing. Every
-other route is the owner's: for a viewer `PATCH`, `POST …/messages`, `PUT …/model`, `POST …/stop`,
-`GET` and `POST …/cli-permissions…` and the writes below answer `403 conversation_read_only`
+other route is the owner's: for a viewer `PATCH`, `POST …/messages`, `POST …/notes`, `PUT …/model`,
+`POST …/stop`, `GET` and `POST …/cli-permissions…` and the writes below answer `403 conversation_read_only`
 (a person who can't read the conversation at all gets `404 conversation_not_found` from all of
 them, so the answer never says whether it exists). The agent's tools still act for the owner only,
-and the owner's export holds only the owner's own conversations.
+and the owner's export holds only the owner's own conversations. What a CLI turn showed the owner
+alone never reaches a viewer: the transcript of a `cli_turn` (its permission questions and the
+owner's answers, and the notices of an account switch with the accounts' labels) is left out of the
+viewer's `…/entries`, of the snapshot and of every change the stream carries; the turn's answer and
+the apps it saved stay.
 
 A share counts only while the viewer is a member of the workspace and not disabled **and** the
 owner still is: a viewer who leaves the workspace loses every share there for good (rejoining
-doesn't bring them back), and a stream that is open ends with `interrupted` at its next heartbeat
-once the caller can no longer read it. A viewer's streams count against their own limit
+doesn't bring them back). A viewer's stream asks again before each event it carries and ends with
+`interrupted` instead of writing one once the caller can no longer read the conversation (the owner's
+stream, at its next heartbeat), and a read that was waiting for the agent runtime when the access
+ended answers `404 conversation_not_found` instead of its page. Sharing and unsharing ask again,
+inside their transaction, that the person acting still reaches the conversation (the owner enabled
+and in the workspace, or the viewer removing themself), and record nothing when they don't. A viewer's streams count against their own limit
 (`too_many_streams`). Sharing, changing and ending a share are in the [audit log](audit.md) as
 `conversation_shared`, `conversation_share_changed` and `conversation_unshared`.
 

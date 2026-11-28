@@ -41,10 +41,11 @@ func (s *Service) Readable(ctx context.Context, workspace, user, id int64) (titl
 	return c.Title, c.Owner.Name, true, nil
 }
 
-func stillOwnedBy(ctx context.Context, tx *sql.Tx, c Conversation) error {
+func stillReaches(ctx context.Context, tx *sql.Tx, c Conversation, actor int64) error {
 	var same bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM conversations WHERE id = ? AND owner_id = ? AND agent_id = ?)`,
-		c.ID, c.Owner.ID, c.agentID).Scan(&same); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 `+reachFrom+`
+		WHERE c.id = ?3 AND c.owner_id = ?4 AND c.agent_id = ?5 AND `+reachWhere+`)`,
+		actor, c.WorkspaceID, c.ID, c.Owner.ID, c.agentID).Scan(&same); err != nil {
 		return err
 	}
 	if !same {
@@ -91,7 +92,10 @@ func (s *Service) share(ctx context.Context, c Conversation, actor, target int64
 		return Member{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := stillOwnedBy(ctx, tx, c); err != nil {
+	if actor != c.Owner.ID {
+		return Member{}, errNotFound
+	}
+	if err := stillReaches(ctx, tx, c, actor); err != nil {
 		return Member{}, err
 	}
 	var inWorkspace bool
@@ -147,13 +151,16 @@ func (s *Service) share(ctx context.Context, c Conversation, actor, target int64
 	return m, tx.Commit()
 }
 
-func (s *Service) unshare(ctx context.Context, c Conversation, target int64) error {
+func (s *Service) unshare(ctx context.Context, c Conversation, actor, target int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := stillOwnedBy(ctx, tx, c); err != nil {
+	if actor != c.Owner.ID && actor != target {
+		return errNotFound
+	}
+	if err := stillReaches(ctx, tx, c, actor); err != nil {
 		return err
 	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?`, c.ID, target)
@@ -248,7 +255,7 @@ func (s *Service) handleUnshare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, apierr.CodeConversationReadOnly, "this conversation is shared with you to read: only its owner can remove other people")
 		return
 	}
-	switch err := s.unshare(r.Context(), c, target); {
+	switch err := s.unshare(r.Context(), c, user, target); {
 	case errors.Is(err, errNotFound):
 		writeError(w, http.StatusNotFound, apierr.CodeConversationNotFound, errNotFound.Error())
 	case errors.Is(err, errNotShared):

@@ -84,7 +84,24 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case ev := <-events:
-			if err := out.event(ev.Raw); err != nil {
+			if c.Role != RoleOwner {
+				if _, err := s.reach(ctx, workspace, user, c.ID); err != nil {
+					if r.Context().Err() == nil {
+						_ = out.event(interrupted)
+					}
+					return
+				}
+			}
+			data := []byte(ev.Raw)
+			if c.Role != RoleOwner {
+				var err error
+				if data, err = redactForViewer(data); err != nil {
+					slog.WarnContext(ctx, "conversations: an event for a viewer couldn't be read", "conversation", c.ID, "err", err)
+					_ = out.event(interrupted)
+					return
+				}
+			}
+			if err := out.event(data); err != nil {
 				if errors.Is(err, errBadLine) {
 					slog.WarnContext(ctx, "conversations: the agent runtime sent a line with a line break", "conversation", c.ID)
 					_ = out.event(interrupted)

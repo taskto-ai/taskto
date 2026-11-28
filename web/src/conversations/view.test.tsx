@@ -84,7 +84,7 @@ for (const status of [403, 404]) {
   })
 }
 
-test('a first read that fails for another reason leaves the composer usable, and is tried again', async () => {
+test('a first read that fails for another reason leaves no composer until the role is known, and is tried again', async () => {
   let fail = true
   fakeFetch({
     ...MODELS,
@@ -94,15 +94,16 @@ test('a first read that fails for another reason leaves the composer usable, and
   const { sources, factory } = fakeStreams()
   render(view(7, factory))
   const retry = await screen.findByRole('button', { name: 'Try again' })
-  expect(box().disabled).toBe(false)
-  expect(box().getAttribute('aria-describedby')).toBeNull()
-  expect(((await screen.findByLabelText('Model')) as HTMLSelectElement).disabled).toBe(false)
+  expect(screen.queryByLabelText('Message')).toBeNull()
+  expect(screen.queryByLabelText('Model')).toBeNull()
 
   fail = false
   await waitFor(() => expect(sources).toHaveLength(1))
   act(() => sources[0].open())
   expect(await screen.findByRole('heading', { name: 'Talk 7' })).toBeTruthy()
   await waitFor(() => expect(retry.isConnected).toBe(false))
+  expect(box().disabled).toBe(false)
+  expect(box().getAttribute('aria-describedby')).toBeNull()
 })
 
 test('Try again reads the conversation again', async () => {
@@ -157,7 +158,7 @@ test('two views on one page each have their own fields', async () => {
   expect(document.getElementById('tt-message')).toBeNull()
 })
 
-test("a refusal that answers a read since superseded doesn't turn the composer off", async () => {
+test("a refusal that answers a read since superseded doesn't turn the retry off", async () => {
   let refuse7: (a: { status: number; body: unknown }) => void = () => {}
   fakeFetch({
     'GET /api/workspaces/1/conversations/7': () =>
@@ -173,8 +174,8 @@ test("a refusal that answers a read since superseded doesn't turn the composer o
   rerender(<ConversationView {...props} id={8} />)
   await screen.findByRole('button', { name: 'Try again' })
   await act(async () => refuse7({ status: 404, body: { error: 'not found' } }))
-  expect(box().disabled).toBe(false)
-  expect(box().getAttribute('aria-describedby')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+  expect(screen.queryByLabelText('Message')).toBeNull()
 })
 
 async function showTurn(entries: unknown[]) {

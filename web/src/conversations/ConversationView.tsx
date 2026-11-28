@@ -86,7 +86,7 @@ export function ConversationView({
     view && older.history ? { ...view, entries: older.history.entries, before: older.history.before } : view,
   )
   const archived = Boolean(meta.data?.archived_at)
-  const readOnly = Boolean(meta.data) && meta.data?.role !== 'owner'
+  const readOnly = meta.data?.role !== 'owner'
   const apps = embedApps ? liveApps(messages) : new Set<ToolUse>()
   const saved = lastSavedApp(messages, savedAfter)
   const savedKey = saved?.save
@@ -217,7 +217,7 @@ export function ConversationView({
         loadingEarlier={older.loading}
         earlierError={older.error}
       />
-      {!readOnly && Boolean(meta.data || meta.error) && (
+      {(!readOnly || (unreadable && !meta.data)) && (
         <Composer
           workspace={workspace}
           base={base}
