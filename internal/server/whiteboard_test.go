@@ -124,15 +124,6 @@ func (w *wbStack) create(cookie string, space int64, path string) string {
 	return body["doc"].(map[string]any)["version"].(string)
 }
 
-func (w *wbStack) version(cookie string, space int64, path string) string {
-	w.t.Helper()
-	code, body := w.browser(cookie, http.MethodGet, w.doc(space, path), nil)
-	if code != http.StatusOK {
-		w.t.Fatalf("read %s = %d %v", path, code, body)
-	}
-	return body["version"].(string)
-}
-
 func (w *wbStack) content(cookie string, space int64, path string) shapes.Board {
 	w.t.Helper()
 	rec := w.stack.request(http.MethodGet, w.doc(space, path), nil, sameOrigin(cookie))
