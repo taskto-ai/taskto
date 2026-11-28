@@ -5,12 +5,14 @@ import { z } from 'zod'
 import { type Format, type T, useFormat, useT } from '../i18n'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import {
+  anchorOf,
   axisPicks,
   type ChartData,
   type ChartLine,
   type ChartPoint,
   chartScale,
   cut,
+  labelWidth,
   MAX_SERIES_DRAWN,
   plotted,
   type Run,
@@ -39,11 +41,12 @@ const SERIES_CLASS = ['ui-chart-s1', 'ui-chart-s2', 'ui-chart-s3', 'ui-chart-s4'
 
 const WIDTH = 320
 const HEIGHT = 180
-const LEFT = 40
+const MIN_LEFT = 40
+const MAX_LEFT = 200
+const TICK_GAP = 6
 const RIGHT = 8
 const TOP = 18
 const BOTTOM = 24
-const PLOT_WIDTH = WIDTH - LEFT - RIGHT
 const PLOT_HEIGHT = HEIGHT - TOP - BOTTOM
 const AXIS_LABEL = 14
 
@@ -89,12 +92,22 @@ function yOf(value: number, min: number, max: number): number {
   return TOP + (PLOT_HEIGHT * (max - value)) / (max - min)
 }
 
-function xOf(i: number, count: number, band: boolean): number {
-  if (band) return LEFT + ((i + 0.5) * PLOT_WIDTH) / count
-  return LEFT + (count === 1 ? PLOT_WIDTH / 2 : (i * PLOT_WIDTH) / (count - 1))
+const plotWidth = (left: number) => WIDTH - left - RIGHT
+
+function xOf(i: number, count: number, band: boolean, left: number): number {
+  const span = plotWidth(left)
+  if (band) return left + ((i + 0.5) * span) / count
+  return left + (count === 1 ? span / 2 : (i * span) / (count - 1))
 }
 
-type Plot = { variant: 'line' | 'bar' | 'area'; stacked: boolean; min: number; max: number; count: number }
+type Plot = {
+  variant: 'line' | 'bar' | 'area'
+  stacked: boolean
+  min: number
+  max: number
+  count: number
+  left: number
+}
 
 function marks(data: ChartData, p: Plot): ReactNode[] {
   const drawn = data.series.slice(0, MAX_SERIES_DRAWN)
@@ -103,7 +116,7 @@ function marks(data: ChartData, p: Plot): ReactNode[] {
   const y = (v: number) => yOf(v, p.min, p.max)
   const out: ReactNode[] = []
   if (p.variant === 'bar') {
-    const band = PLOT_WIDTH / p.count
+    const band = plotWidth(p.left) / p.count
     const group = band * 0.8
     const width = stack ? group : group / drawn.length
     drawn.forEach((line, s) => {
@@ -112,7 +125,7 @@ function marks(data: ChartData, p: Plot): ReactNode[] {
         const layer = layers?.[s][i]
         const from = layer ? layer.from : 0
         const to = layer ? layer.to : v
-        const left = LEFT + i * band + (band - group) / 2 + (stack ? 0 : s * width)
+        const left = p.left + i * band + (band - group) / 2 + (stack ? 0 : s * width)
         out.push(
           <rect
             key={`mark-${out.length}`}
@@ -129,7 +142,7 @@ function marks(data: ChartData, p: Plot): ReactNode[] {
   }
   drawn.forEach((line, s) => {
     const cls = SERIES_CLASS[s]
-    const at = (i: number, v: number) => `${num(xOf(i, p.count, false))} ${num(y(v))}`
+    const at = (i: number, v: number) => `${num(xOf(i, p.count, false, p.left))} ${num(y(v))}`
     if (layers) {
       const ys = layers[s]
       const stretches = runs(ys.map((l) => (l.has ? l.to : null)))
@@ -159,7 +172,7 @@ function marks(data: ChartData, p: Plot): ReactNode[] {
           <circle
             key={`mark-${out.length}`}
             className={`ui-chart-dot ${cls}`}
-            cx={num(xOf(r.start, p.count, false))}
+            cx={num(xOf(r.start, p.count, false, p.left))}
             cy={num(y(ys[r.start].to))}
             r="2.5"
           />,
@@ -180,7 +193,7 @@ function marks(data: ChartData, p: Plot): ReactNode[] {
         .filter((r) => r.end > r.start)
         .map(
           (r) =>
-            `${edge(r)}L${num(xOf(r.end, p.count, false))} ${floor}L${num(xOf(r.start, p.count, false))} ${floor}Z`,
+            `${edge(r)}L${num(xOf(r.end, p.count, false, p.left))} ${floor}L${num(xOf(r.start, p.count, false, p.left))} ${floor}Z`,
         )
         .join('')
       if (fill) out.push(<path key={`mark-${out.length}`} className={`ui-chart-fill ${cls}`} d={fill} />)
@@ -192,7 +205,7 @@ function marks(data: ChartData, p: Plot): ReactNode[] {
         <circle
           key={`mark-${out.length}`}
           className={`ui-chart-dot ${cls}`}
-          cx={num(xOf(r.start, p.count, false))}
+          cx={num(xOf(r.start, p.count, false, p.left))}
           cy={num(y(line.values[r.start] as number))}
           r="2.5"
         />,
@@ -224,9 +237,11 @@ function ChartDrawing({
   const count = data.x.length
   const band = variant === 'bar'
   const texts = data.x.map((p) => cut(pointText(p, t, f), AXIS_LABEL))
-  const longest = Math.max(...texts.map((s) => Array.from(s).length))
-  const picks = axisPicks(count, longest, band)
-  const plot: Plot = { variant, stacked, min: scale.min, max: scale.max, count }
+  const tickTexts = scale.ticks.map((tick) => f.number(tick, DIGITS))
+  const widest = Math.max(...tickTexts.map(labelWidth))
+  const left = Math.min(MAX_LEFT, Math.max(MIN_LEFT, Math.ceil(widest) + TICK_GAP))
+  const picks = axisPicks(count, texts.map(labelWidth), band, plotWidth(left))
+  const plot: Plot = { variant, stacked, min: scale.min, max: scale.max, count, left }
   return (
     <>
       <svg
@@ -242,19 +257,19 @@ function ChartDrawing({
             {unit}
           </text>
         )}
-        {scale.ticks.map((tick) => {
+        {scale.ticks.map((tick, k) => {
           const y = yOf(tick, scale.min, scale.max)
           return (
             <g key={tick}>
               <line
                 className={tick === 0 ? 'ui-chart-axis' : 'ui-chart-grid'}
-                x1={LEFT}
+                x1={left}
                 x2={WIDTH - RIGHT}
                 y1={num(y)}
                 y2={num(y)}
               />
-              <text className="ui-chart-tick" x={LEFT - 6} y={num(y + 4)} textAnchor="end">
-                {f.number(tick, DIGITS)}
+              <text className="ui-chart-tick" x={left - TICK_GAP} y={num(y + 4)} textAnchor="end">
+                {tickTexts[k]}
               </text>
             </g>
           )
@@ -264,9 +279,9 @@ function ChartDrawing({
           <text
             key={i}
             className="ui-chart-tick"
-            x={num(xOf(i, count, band))}
+            x={num(xOf(i, count, band, left))}
             y={HEIGHT - 6}
-            textAnchor={count === 1 ? 'middle' : i === 0 ? 'start' : i === count - 1 ? 'end' : 'middle'}
+            textAnchor={anchorOf(i, count)}
           >
             {texts[i]}
           </text>

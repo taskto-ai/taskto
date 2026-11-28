@@ -84,12 +84,11 @@ export function chartScale(values: readonly number[]): Scale {
   const top = niceMax(extent > 0 ? extent : 1)
   const intervals = intervalsOf(top)
   const step = top / intervals
-  const slack = extent * 1e-12
   const round = (n: number) => Number(n.toPrecision(12))
   let min = round(Math.floor(lo / step + 1e-9) * step)
-  if (min > lo + slack) min = round(min - step)
+  if (min > lo) min = round(min - step)
   let max = round(Math.ceil(hi / step - 1e-9) * step)
-  if (max < hi - slack) max = round(max + step)
+  if (max < hi) max = round(max + step)
   if (max <= min) max = round(min + step * intervals)
   const ticks: number[] = []
   for (let i = Math.round(min / step); i <= Math.round(max / step); i++) ticks.push(round(i * step))
@@ -129,21 +128,56 @@ export function runs(values: readonly (number | null)[]): Run[] {
   return out
 }
 
-export function axisPicks(
-  count: number,
-  longest: number,
-  band = false,
-  width = 272,
-  charWidth = 6.2,
-  gap = 10,
-): number[] {
-  const textWidth = longest * charWidth
+export const TICK_SIZE = 12
+
+const EM_WIDTHS: [string, number][] = [
+  [" !'.,:;Iijl", 0.3],
+  ['()[]{}/\\|ftr`', 0.4],
+  ['"^_?s', 0.53],
+  ['abcdeghknopquvxyz', 0.62],
+  ['0123456789#$&*+-<=>~', 0.65],
+  ['BEFJKLPRSTXYZ', 0.69],
+  ['ACDGHNOQUV', 0.77],
+  ['w', 0.82],
+  ['m', 0.9],
+  ['M', 0.91],
+  ['%@ÆŒæœ', 0.99],
+  ['W', 1.02],
+  ['…', 1.1],
+]
+
+const EM = new Map(EM_WIDTHS.flatMap(([chars, em]) => Array.from(chars, (c): [string, number] => [c, em])))
+
+function emOf(ch: string): number {
+  const known = EM.get(ch)
+  if (known !== undefined) return known
+  const code = ch.codePointAt(0) ?? 0
+  if (code >= 0x300 && code <= 0x36f) return 0
+  if (/\p{Nd}/u.test(ch)) return 0.7
+  if (code <= 0x24f) return 0.77
+  if (code <= 0x52f) return 1
+  return 1.3
+}
+
+export function labelWidth(text: string): number {
+  return Array.from(text).reduce((sum, ch) => sum + emOf(ch), 0) * TICK_SIZE
+}
+
+export type Anchor = 'start' | 'middle' | 'end'
+
+export function anchorOf(i: number, count: number): Anchor {
+  if (count === 1) return 'middle'
+  return i === 0 ? 'start' : i === count - 1 ? 'end' : 'middle'
+}
+
+export function axisPicks(count: number, widths: readonly number[], band = false, width = 272, gap = 10): number[] {
   const extent = (i: number): [number, number] => {
     const x = band ? ((i + 0.5) * width) / count : count === 1 ? width / 2 : (i * width) / (count - 1)
-    if (count === 1) return [x - textWidth / 2, x + textWidth / 2]
-    if (i === 0) return [x, x + textWidth]
-    if (i === count - 1) return [x - textWidth, x]
-    return [x - textWidth / 2, x + textWidth / 2]
+    const w = widths[i] ?? 0
+    const anchor = anchorOf(i, count)
+    if (anchor === 'start') return [x, x + w]
+    if (anchor === 'end') return [x - w, x]
+    return [x - w / 2, x + w / 2]
   }
   const fits = (picks: number[]) => {
     const gaps = picks.slice(1).map((p, k) => p - picks[k])

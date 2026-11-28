@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs'
 import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
@@ -10,6 +11,7 @@ import {
   axisPicks,
   type ChartLine,
   chartScale,
+  labelWidth,
   MAX_POINTS,
   MAX_SERIES_LISTED,
   niceMax,
@@ -17,7 +19,9 @@ import {
   readChart,
   runs,
   stackLayers,
+  TICK_SIZE,
 } from './chartData'
+import { INTER_ADVANCE_EM, INTER_STRING_PX } from './chartInterWidths'
 
 afterEach(async () => {
   cleanup()
@@ -434,6 +438,8 @@ describe('what people read', () => {
   })
 })
 
+const same = (count: number, chars: number) => Array.from({ length: count }, () => chars * 7)
+
 describe('the numbers behind the picture', () => {
   test('niceMax rounds up to 1, 2, 2.5, 5 or 10 times a power of ten', () => {
     expect([0.3, 1, 1.1, 2, 2.2, 3, 5, 7, 11, 24, 26, 99, 1234].map(niceMax)).toEqual([
@@ -449,6 +455,15 @@ describe('the numbers behind the picture', () => {
     expect(chartScale([-30, 10])).toEqual({ min: -30, max: 10, ticks: [-30, -20, -10, 0, 10] })
   })
 
+  test('the scale holds a value just across zero, with no tolerance, on either side', () => {
+    expect(chartScale([1, -1e-13]).min).toBeLessThan(0)
+    expect(chartScale([-1, 1e-13]).max).toBeGreaterThan(0)
+    expect(chartScale([1e15, -1e-3]).min).toBeLessThan(0)
+    expect(chartScale([-1e15, 1e-3]).max).toBeGreaterThan(0)
+    expect(chartScale([1e-13, -1]).max).toBeGreaterThan(1e-13)
+    expect(chartScale([-1e-13, 1]).min).toBeLessThan(0)
+  })
+
   test('the scale never leaves out a value, however small it is beside the others', () => {
     expect(chartScale([1, -1e-10]).min).toBeLessThan(0)
     expect(chartScale([-1, 1e-10]).max).toBeGreaterThan(0)
@@ -461,13 +476,20 @@ describe('the numbers behind the picture', () => {
       [-7.5, 2.4999999999, 1e-12],
       [24.999999999, -0.0000001],
       [2e-9, 1],
+      [1, -1e-13],
+      [-1, 1e-13],
+      [1e-13, -1],
+      [-1e-13, 1],
+      [1, -1e-14],
+      [-1, 1e-14],
+      [0.1 + 0.2],
+      [-(0.1 + 0.2)],
     ]
     for (const values of inputs) {
       const scale = chartScale(values)
-      const slack = Math.max(...values.map(Math.abs)) * 1e-12
       for (const v of values) {
-        expect(scale.min).toBeLessThanOrEqual(v + slack)
-        expect(scale.max).toBeGreaterThanOrEqual(v - slack)
+        expect(scale.min).toBeLessThanOrEqual(v)
+        expect(scale.max).toBeGreaterThanOrEqual(v)
       }
       expect(scale.ticks[0]).toBe(scale.min)
       expect(scale.ticks.at(-1)).toBe(scale.max)
@@ -505,21 +527,20 @@ describe('the numbers behind the picture', () => {
   })
 
   test('names that fit are all shown, otherwise evenly spaced ones, never more than three for many points', () => {
-    expect(axisPicks(4, 6)).toEqual([0, 1, 2, 3])
-    expect(axisPicks(7, 3)).toEqual([0, 3, 6])
-    expect(axisPicks(12, 3)).toEqual([0, 6, 11])
-    expect(axisPicks(4, 14)).toEqual([0, 3])
-    expect(axisPicks(5, 14)).toEqual([0, 4])
-    expect(axisPicks(2, 14)).toEqual([0, 1])
-    expect(axisPicks(6, 60)).toEqual([0])
+    expect(axisPicks(4, same(4, 6))).toEqual([0, 1, 2, 3])
+    expect(axisPicks(7, same(7, 3))).toEqual([0, 3, 6])
+    expect(axisPicks(12, same(12, 3))).toEqual([0, 6, 11])
+    expect(axisPicks(4, same(4, 14))).toEqual([0, 3])
+    expect(axisPicks(5, same(5, 14))).toEqual([0, 4])
+    expect(axisPicks(2, same(2, 14))).toEqual([0, 1])
+    expect(axisPicks(6, same(6, 60))).toEqual([0])
   })
 
-  test('names never overlap, whatever their anchor, and the last gap is not left short', () => {
-    expect(axisPicks(4, 13)).toEqual([0, 3])
+  test('names never overlap, whatever their anchor and width, and the last gap is not left short', () => {
+    expect(axisPicks(4, same(4, 13))).toEqual([0, 3])
     const width = 272
-    const extent = (i: number, count: number, longest: number, band: boolean) => {
+    const extent = (i: number, count: number, w: number, band: boolean) => {
       const x = band ? ((i + 0.5) * width) / count : count === 1 ? width / 2 : (i * width) / (count - 1)
-      const w = longest * 6.2
       if (count === 1) return [x - w / 2, x + w / 2]
       if (i === 0) return [x, x + w]
       if (i === count - 1) return [x - w, x]
@@ -527,16 +548,38 @@ describe('the numbers behind the picture', () => {
     }
     for (const band of [false, true]) {
       for (let count = 2; count <= 40; count++) {
-        for (let longest = 1; longest <= 14; longest++) {
-          const picks = axisPicks(count, longest, band)
-          expect(picks[0]).toBe(0)
-          const boxes = picks.map((i) => extent(i, count, longest, band))
-          for (let k = 1; k < boxes.length; k++) expect(boxes[k][0] - boxes[k - 1][1]).toBeGreaterThanOrEqual(10)
-          const gaps = picks.slice(1).map((p, k) => p - picks[k])
-          if (gaps.length > 1) expect(Math.min(...gaps) * 4).toBeGreaterThanOrEqual(Math.max(...gaps) * 3)
+        for (let chars = 1; chars <= 14; chars++) {
+          const widths = Array.from({ length: count }, (_, i) => (i % 3 === 1 ? 0 : ((i * 5) % chars) + 1) * 7)
+          for (const set of [same(count, chars), widths]) {
+            const picks = axisPicks(count, set, band)
+            expect(picks[0]).toBe(0)
+            const boxes = picks.map((i) => extent(i, count, set[i], band))
+            for (let k = 1; k < boxes.length; k++) expect(boxes[k][0] - boxes[k - 1][1]).toBeGreaterThanOrEqual(10)
+            const gaps = picks.slice(1).map((p, k) => p - picks[k])
+            if (gaps.length > 1) expect(Math.min(...gaps) * 4).toBeGreaterThanOrEqual(Math.max(...gaps) * 3)
+          }
         }
       }
     }
+  })
+
+  test('a name is never drawn narrower than Inter draws it, nor much wider', () => {
+    const tokens = readFileSync('src/ui/tokens.css', 'utf8')
+    expect(tokens).toContain('--text-xs: 12px;')
+    expect(tokens).toContain('--type-caption: 400 var(--text-xs)')
+    expect(TICK_SIZE).toBe(12)
+    for (const [ch, em] of Object.entries(INTER_ADVANCE_EM)) {
+      const drawnWidth = em * TICK_SIZE
+      expect(labelWidth(ch), ch).toBeGreaterThanOrEqual(drawnWidth)
+      expect(labelWidth(ch), ch).toBeLessThanOrEqual(drawnWidth + 0.25 * TICK_SIZE)
+    }
+    for (const [text, px] of INTER_STRING_PX) {
+      expect(labelWidth(text), text).toBeGreaterThanOrEqual(px)
+      expect(labelWidth(text), text).toBeLessThanOrEqual(px * 1.15)
+    }
+    expect(labelWidth('é')).toBeGreaterThan(0)
+    expect(labelWidth('\u0301')).toBe(0)
+    expect(labelWidth('日')).toBeGreaterThanOrEqual(TICK_SIZE)
   })
 
   test('reading takes only own properties and keeps the series in step with the points', () => {
@@ -560,5 +603,104 @@ describe('the numbers behind the picture', () => {
       series: Array.from({ length: 50 }, () => ({ values: [1] })),
     })
     expect(many?.series).toHaveLength(MAX_SERIES_LISTED)
+  })
+})
+
+const AXIS_NAME_Y = '174'
+const CAPTION_SIZE = 12
+
+function inter(text: string): number {
+  return Array.from(text).reduce((sum, ch) => sum + INTER_ADVANCE_EM[ch] * CAPTION_SIZE, 0)
+}
+
+function reach(text: Element): [number, number] {
+  const label = text.textContent ?? ''
+  const x = Number(text.getAttribute('x'))
+  const w = inter(label)
+  const anchor = text.getAttribute('text-anchor')
+  if (anchor === 'end') return [x - w, x]
+  if (anchor === 'middle') return [x - w / 2, x + w / 2]
+  return [x, x + w]
+}
+
+const ticks = () => [...document.querySelectorAll('svg text.ui-chart-tick')]
+const axisNames = () => ticks().filter((t) => t.getAttribute('y') === AXIS_NAME_Y && (t.textContent ?? '') !== '')
+const valueTicks = () => ticks().filter((t) => t.getAttribute('y') !== AXIS_NAME_Y)
+
+function points(labels: string[]) {
+  return {
+    x: labels.map((label) => ({ key: label, label })),
+    series: [{ key: '', label: '', values: labels.map((_, i) => i + 1) }],
+  }
+}
+
+describe('what is drawn stays apart and inside, as Inter sets it', () => {
+  test('axis names clear one another, the wide ones between narrow ones too', async () => {
+    await drawn({ variant: 'line' }, { by_stage: points(['WWWWWWWWW', '', 'WWWWWWWWW', '', 'Z']) })
+    const boxes = axisNames()
+      .map(reach)
+      .sort((a, b) => a[0] - b[0])
+    expect(boxes.length).toBeGreaterThan(1)
+    for (let k = 1; k < boxes.length; k++) expect(boxes[k][0] - boxes[k - 1][1]).toBeGreaterThan(0)
+  })
+
+  test('axis names clear one another for bars and lines, whatever they say and however many', async () => {
+    const kinds = [
+      (i: number) => 'WWWWWWWWWWWWWW'.slice(0, 4 + (i % 10)),
+      (i: number) => `2026-${String((i % 12) + 1).padStart(2, '0')}-28`,
+      (i: number) => ['i', 'Marketing', 'W', 'mm', 'Quarterly review', 'x'][i % 6],
+    ]
+    for (const variant of ['line', 'bar']) {
+      for (const total of [2, 3, 5, 8, 13]) {
+        for (const kind of kinds) {
+          const labels = Array.from({ length: total }, (_, i) => kind(i))
+          await drawn({ variant }, { by_stage: points(labels) })
+          const names = axisNames()
+          const boxes = names.map(reach).sort((a, b) => a[0] - b[0])
+          const where = `${variant} ${total} ${labels.join('|')}`
+          expect(boxes.length, where).toBeGreaterThan(0)
+          for (let k = 1; k < boxes.length; k++) expect(boxes[k][0] - boxes[k - 1][1], where).toBeGreaterThan(0)
+          cleanup()
+        }
+      }
+    }
+  })
+
+  test('the scale ticks stay inside the picture and left of the plot, even for tiny and huge numbers', async () => {
+    for (const values of [
+      [2e-9, 3e-9],
+      [1e15, -1e15],
+      [0.0001, 0.0003],
+      [3, 1234.5, 0],
+    ]) {
+      const labels = values.map((_, i) => `p${i}`)
+      await drawn({ variant: 'line' }, { by_stage: { x: points(labels).x, series: [{ key: '', label: '', values }] } })
+      const left = Number(document.querySelector('svg line')?.getAttribute('x1'))
+      const shown = valueTicks()
+      expect(shown.length).toBeGreaterThan(2)
+      for (const tick of shown) {
+        const [from, to] = reach(tick)
+        expect(from, `${values} ${tick.textContent}`).toBeGreaterThanOrEqual(0)
+        expect(to, `${values} ${tick.textContent}`).toBeLessThanOrEqual(left)
+      }
+      cleanup()
+    }
+  })
+
+  test('what is drawn is as wide as the room left after the ticks', async () => {
+    await drawn(
+      { variant: 'bar' },
+      { by_stage: { x: points(['a', 'b']).x, series: [{ key: '', label: '', values: [2e-9, 3e-9] }] } },
+    )
+    const left = Number(document.querySelector('svg line')?.getAttribute('x1'))
+    expect(left).toBeGreaterThan(40)
+    const rects = [...document.querySelectorAll('svg rect')].map((r) => ({
+      from: Number(r.getAttribute('x')),
+      to: Number(r.getAttribute('x')) + Number(r.getAttribute('width')),
+    }))
+    for (const r of rects) {
+      expect(r.from).toBeGreaterThanOrEqual(left)
+      expect(r.to).toBeLessThanOrEqual(312)
+    }
   })
 })
