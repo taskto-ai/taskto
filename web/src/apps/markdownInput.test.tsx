@@ -155,6 +155,15 @@ test('the counter appears past 80 % of the limit, and says so when the limit is 
   expect(screen.getByText('101 of 100').hasAttribute('data-full')).toBe(true)
 })
 
+test('the counter counts characters the way the server does, an emoji as one', () => {
+  render(<Harness start={'😀'.repeat(81)} maxLength={100} />)
+  expect(screen.getByText('81 of 100').hasAttribute('data-full')).toBe(false)
+  fireEvent.change(box(), { target: { value: '😀'.repeat(100) } })
+  expect(screen.getByText('100 of 100').hasAttribute('data-full')).toBe(false)
+  fireEvent.change(box(), { target: { value: '😀'.repeat(79) } })
+  expect(screen.queryByText(/ of /)).toBeNull()
+})
+
 test('with no limit known there is no counter', () => {
   render(<Harness start={'x'.repeat(5000)} />)
   expect(screen.queryByText(/ of /)).toBeNull()

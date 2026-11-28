@@ -93,7 +93,8 @@ export function MarkdownField({
     setActive(TOOLS[to].tool)
   }
 
-  const over = maxLength !== undefined && value.length > maxLength * COUNTER_SHARE
+  const used = Array.from(value).length
+  const over = maxLength !== undefined && used > maxLength * COUNTER_SHARE
   const tabs = [
     { id: 'write', label: t('apps.markdownInput.write') },
     { id: 'preview', label: t('apps.markdownInput.preview') },
@@ -157,8 +158,8 @@ export function MarkdownField({
         </div>
       )}
       {over && maxLength !== undefined && (
-        <p className="ui-app-markdown-count" aria-live="polite" data-full={value.length > maxLength ? '' : undefined}>
-          {t('apps.markdownInput.count', { used: number(value.length), max: number(maxLength) })}
+        <p className="ui-app-markdown-count" aria-live="polite" data-full={used > maxLength ? '' : undefined}>
+          {t('apps.markdownInput.count', { used: number(used), max: number(maxLength) })}
         </p>
       )}
     </div>

@@ -58,3 +58,17 @@ test('link with nothing selected makes a sample label and selects it', () => {
   expect(edit.text).toBe('x[text](https://)')
   expect(edit.text.slice(edit.start, edit.end)).toBe('text')
 })
+
+test('a line break at the very start does not push the first line out of the edit', () => {
+  expect(prefixLines('\nabc', 0, 0, LIST_PREFIX).text).toBe('- \nabc')
+})
+
+test('taking a prefix off keeps the caret where it was, and a caret in the prefix goes to the line start', () => {
+  expect(prefixLines('- task', 0, 0, LIST_PREFIX)).toEqual({ text: 'task', start: 0, end: 0 })
+  expect(prefixLines('- task', 4, 4, LIST_PREFIX)).toEqual({ text: 'task', start: 2, end: 2 })
+  expect(prefixLines('- one\n- two', 2, 11, LIST_PREFIX)).toEqual({ text: 'one\ntwo', start: 0, end: 7 })
+})
+
+test('adding a prefix moves a caret in the line along with its text', () => {
+  expect(prefixLines('task', 2, 2, LIST_PREFIX)).toEqual({ text: '- task', start: 4, end: 4 })
+})
