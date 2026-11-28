@@ -37,11 +37,8 @@ BEGIN
     SELECT RAISE(ABORT, 'a space''s skill belongs to a shared space of its workspace');
 END;
 
-CREATE TRIGGER skills_user_is_member
-BEFORE INSERT ON skills
-WHEN NEW.scope = 'user' AND NOT EXISTS (
-    SELECT 1 FROM memberships m WHERE m.workspace_id = NEW.workspace_id AND m.user_id = NEW.user_id
-)
+CREATE TRIGGER skills_user_is_member BEFORE INSERT ON skills
+WHEN NEW.scope = 'user' AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = NEW.workspace_id AND m.user_id = NEW.user_id)
 BEGIN
     SELECT RAISE(ABORT, 'a person''s own skill belongs to a member of its workspace');
 END;

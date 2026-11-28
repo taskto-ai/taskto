@@ -432,14 +432,11 @@ func (s *Store) ForUser(ctx context.Context, workspaceID, userID int64) (list []
 		if err != nil {
 			return err
 		}
-		spaces := make([][2]int64, 0, len(readable))
-		for _, sp := range readable {
-			spaces = append(spaces, [2]int64{sp.ID, sp.Generation})
+		spaces := make([][2]int64, len(readable))
+		for i, sp := range readable {
+			spaces[i] = [2]int64{sp.ID, sp.Generation}
 		}
-		pairs, err := json.Marshal(spaces)
-		if err != nil {
-			return err
-		}
+		pairs, _ := json.Marshal(spaces)
 		list, err = collect(tx.QueryContext(ctx, `SELECT `+columns+` FROM skills
 			WHERE workspace_id = ? AND enabled = 1 AND (scope = 'workspace' OR (scope = 'user' AND user_id = ?)
 				OR (scope = 'space' AND (space_id, space_generation) IN (SELECT j.value ->> 0, j.value ->> 1 FROM json_each(?) j)))
