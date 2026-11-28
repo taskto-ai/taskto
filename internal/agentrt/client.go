@@ -37,7 +37,8 @@ type Input struct {
 	Language   string      `json:"language"`
 	Entry      *InputEntry `json:"entry,omitempty"`
 
-	ExpectModel *ModelRef `json:"expectModel,omitempty"`
+	ExpectRevision *int64 `json:"expectRevision,omitempty"`
+	AdmitBy        int64  `json:"admitBy,omitempty"`
 }
 
 type InputEntry struct {
@@ -161,38 +162,56 @@ func (c *Client) PurgeConversation(ctx context.Context, conversation int64) erro
 	return c.do(ctx, http.MethodPost, "/conversations/"+itoa(conversation)+"/purge", nil, nil)
 }
 
-func (c *Client) Model(ctx context.Context, conversation int64) (ModelRef, error) {
-	var out ModelRef
+type ModelState struct {
+	ModelRef
+	Revision int64 `json:"revision"`
+}
+
+func (c *Client) Model(ctx context.Context, conversation int64) (ModelState, error) {
+	var out ModelState
 	err := c.do(ctx, http.MethodGet, "/conversations/"+itoa(conversation)+"/model", nil, &out)
 	return out, err
 }
 
-func (c *Client) SetModel(ctx context.Context, conversation int64, expected *ModelRef, model ModelRef) error {
+func admitBy(ctx context.Context) int64 {
+	if at, ok := ctx.Deadline(); ok {
+		return at.UnixMilli()
+	}
+	return 0
+}
+
+func (c *Client) SetModel(ctx context.Context, conversation, revision int64, model ModelRef) (int64, error) {
 	in := struct {
 		ModelRef
-		ExpectModel *ModelRef `json:"expectModel,omitempty"`
-	}{model, expected}
-	return c.do(ctx, http.MethodPut, "/conversations/"+itoa(conversation)+"/model", in, nil)
+		ExpectRevision int64 `json:"expectRevision"`
+	}{model, revision}
+	var out struct {
+		Revision int64 `json:"revision"`
+	}
+	err := c.do(ctx, http.MethodPut, "/conversations/"+itoa(conversation)+"/model", in, &out)
+	return out.Revision, err
 }
 
 func (c *Client) Submit(ctx context.Context, conversation int64, in Input) (int64, error) {
 	var out struct {
 		SubmissionID int64 `json:"submissionId"`
 	}
+	in.AdmitBy = admitBy(ctx)
 	err := c.do(ctx, http.MethodPost, "/conversations/"+itoa(conversation)+"/submit", in, &out)
 	return out.SubmissionID, err
 }
 
-func (c *Client) Continue(ctx context.Context, conversation int64, expected *ModelRef, model ModelRef, afterEntry int64) (int64, ModelRef, error) {
+func (c *Client) Continue(ctx context.Context, conversation, revision int64, model ModelRef, afterEntry int64) (int64, ModelRef, error) {
 	var out struct {
 		SubmissionID int64    `json:"submissionId"`
 		Model        ModelRef `json:"model"`
 	}
 	in := struct {
-		Model       ModelRef  `json:"model"`
-		AfterEntry  int64     `json:"afterEntry"`
-		ExpectModel *ModelRef `json:"expectModel,omitempty"`
-	}{model, afterEntry, expected}
+		Model          ModelRef `json:"model"`
+		AfterEntry     int64    `json:"afterEntry"`
+		ExpectRevision int64    `json:"expectRevision"`
+		AdmitBy        int64    `json:"admitBy,omitempty"`
+	}{model, afterEntry, revision, admitBy(ctx)}
 	err := c.do(ctx, http.MethodPost, "/conversations/"+itoa(conversation)+"/continue", in, &out)
 	return out.SubmissionID, out.Model, err
 }

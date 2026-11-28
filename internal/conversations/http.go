@@ -138,6 +138,8 @@ func agentError(w http.ResponseWriter, r *http.Request, err error) {
 			code = apierr.CodeBadRequest
 		}
 		writeError(w, se.Code, code, se.Message)
+	case errors.As(err, &se) && se.Code == http.StatusServiceUnavailable:
+		unavailable(w)
 	case errors.As(err, &se):
 		serverError(w, r, err)
 	default:
@@ -335,24 +337,25 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, _ := caller(r)
-	var before agentrt.ModelRef
-	ctx := r.Context()
 	if switchTo != nil {
-		done, err := s.holdModel(ctx, c.ID)
+		done, err := s.holdModel(r.Context(), c.ID)
 		if err != nil {
 			return
 		}
 		defer done()
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, s.holdLimit)
-		defer cancel()
-		was, err := rt.Model(ctx, c.agentID)
-		if err != nil {
-			conversationError(w, r, c, err)
-			return
-		}
-		before = was
-		if err := rt.SetModel(ctx, c.agentID, &was, *switchTo); err != nil {
+	}
+	admitBy := time.Now().Add(s.admitLimit)
+	ctx, cancel := context.WithDeadline(r.Context(), admitBy)
+	defer cancel()
+	state, err := rt.Model(ctx, c.agentID)
+	if err != nil {
+		conversationError(w, r, c, err)
+		return
+	}
+	before, model, revision := state.ModelRef, state.ModelRef, state.Revision
+	if switchTo != nil {
+		model = *switchTo
+		if revision, err = rt.SetModel(ctx, c.agentID, revision, model); err != nil {
 			conversationError(w, r, c, err)
 			return
 		}
@@ -376,27 +379,18 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	if s.capability != nil {
 		in.Capability = s.capability(c.ID, c.agentID)
 	}
-	var model agentrt.ModelRef
-	if switchTo != nil {
-		model = *switchTo
-	} else {
-		model, err = rt.Model(ctx, c.agentID)
-		if err != nil {
-			conversationError(w, r, c, err)
-			return
-		}
-	}
-	in.ExpectModel = &model
+	in.ExpectRevision = &revision
 	if err := s.ensureUsageMark(ctx, rt, c.ID, c.agentID); err != nil {
 		conversationError(w, r, c, err)
 		return
 	}
 	sub, err := rt.Submit(ctx, c.agentID, in)
 	if err != nil {
+		s.settleAdmission(err, admitBy)
 		if switchTo != nil {
 			backCtx, stop := context.WithTimeout(context.WithoutCancel(r.Context()), s.putBackLimit)
 			defer stop()
-			if back := rt.SetModel(backCtx, c.agentID, &model, before); back != nil {
+			if _, back := rt.SetModel(backCtx, c.agentID, revision, before); back != nil {
 				slog.WarnContext(r.Context(), "conversations: putting back the model after a mention's send failed", "conversation", c.ID, "err", back)
 			}
 		}
@@ -511,7 +505,8 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer done()
-	ctx, cancel := context.WithTimeout(r.Context(), s.holdLimit)
+	admitBy := time.Now().Add(s.admitLimit)
+	ctx, cancel := context.WithDeadline(r.Context(), admitBy)
 	defer cancel()
 	unlock, ok := s.lock(ctx, c.ID)
 	if !ok {
@@ -529,8 +524,9 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 		conversationError(w, r, c, err)
 		return
 	}
-	sub, admitted, err := rt.Continue(ctx, c.agentID, &current, model, req.AfterEntry)
+	sub, admitted, err := rt.Continue(ctx, c.agentID, current.Revision, model, req.AfterEntry)
 	if err != nil {
+		s.settleAdmission(err, admitBy)
 		conversationError(w, r, c, err)
 		return
 	}
@@ -670,7 +666,7 @@ func (s *Service) handleSetModel(w http.ResponseWriter, r *http.Request) {
 		conversationError(w, r, c, err)
 		return
 	}
-	if err := rt.SetModel(r.Context(), c.agentID, &current, model); err != nil {
+	if _, err := rt.SetModel(r.Context(), c.agentID, current.Revision, model); err != nil {
 		conversationError(w, r, c, err)
 		return
 	}

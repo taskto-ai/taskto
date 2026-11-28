@@ -289,12 +289,17 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 			}
 			return c, nil
 		})
-		cliAccounts.SetModelSetter(func(ctx context.Context, conversation int64, cli cliworker.CLI) error {
+		cliAccounts.SetModelSetter(func(ctx context.Context, conversation int64, cli cliworker.CLI, revision int64) (int64, error) {
 			c, err := agent.ready(ctx)
 			if err != nil {
-				return err
+				return 0, err
 			}
-			return c.SetModel(ctx, conversation, nil, agentrt.ModelRef{Provider: "cli-" + string(cli), ModelID: "default"})
+			next, err := c.SetModel(ctx, conversation, revision, agentrt.ModelRef{Provider: "cli-" + string(cli), ModelID: "default"})
+			var refused *agentrt.StatusError
+			if errors.As(err, &refused) && refused.Reason == "model_changed" {
+				return 0, cliaccounts.ErrModelChanged
+			}
+			return next, err
 		})
 		convAgent = func(ctx context.Context) (conversations.Runtime, error) {
 			c, err := agent.ready(ctx)

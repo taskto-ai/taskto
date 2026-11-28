@@ -9,7 +9,6 @@ import {
   ConversationBusy,
   type ConversationId,
   type Cursor,
-  configure,
   createRegistry,
   type EntryId,
   Harness,
@@ -24,6 +23,7 @@ import { Language, LanguageSection, validLanguage } from './language.js'
 import { Lifecycle } from './lifecycle.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
 import { purgeInFlight, purgeOnce, startCheckpointer, WalBusyError } from './purge.js'
+import { modelRevision, pastDeadline, writeModel } from './revision.js'
 import { compactOnce, openHarnessStorage, recordFresh } from './storage.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
@@ -105,7 +105,7 @@ class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly reason?: 'unknown_model' | 'no_model' | 'busy' | 'moved' | 'model_changed',
+    readonly reason?: 'unknown_model' | 'no_model' | 'busy' | 'moved' | 'model_changed' | 'too_late',
   ) {
     super(message)
   }
@@ -152,21 +152,29 @@ function modelRef(value: unknown): ModelRef {
   return model
 }
 
-function expectedModel(value: unknown): ModelRef | undefined {
-  if (value === undefined) return undefined
-  const ref = value as Partial<ModelRef> | null
-  if (typeof ref !== 'object' || ref === null || typeof ref.provider !== 'string' || typeof ref.modelId !== 'string') {
-    throw new HttpError(400, 'expectModel must be { provider, modelId }')
+function expectedRevision(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new HttpError(400, 'expectRevision must be the model revision the caller read')
   }
-  return { provider: ref.provider, modelId: ref.modelId }
+  return value
 }
 
-async function requireModel(tx: Tx, conversationId: ConversationId, expected: ModelRef | undefined) {
-  if (!expected) return
-  const current = (await tx.doc(AgentDoc, conversationId)).model
-  if (current?.provider !== expected.provider || current.modelId !== expected.modelId) {
+function admitBy(value: unknown): number | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+    throw new HttpError(400, 'admitBy must be a time in milliseconds')
+  }
+  return value
+}
+
+async function requireRevision(tx: Tx, conversationId: ConversationId, expected: number) {
+  if ((await modelRevision(tx, conversationId)) !== expected) {
     throw new HttpError(409, 'the conversation is on another model', 'model_changed')
   }
+}
+
+function requireInTime(by: number | undefined) {
+  if (pastDeadline(by)) throw new HttpError(503, 'the time to admit this request has passed', 'too_late')
 }
 
 function parseId(segment: string): number {
@@ -319,13 +327,15 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         if (!validInputEntry(body.entry)) throw new HttpError(400, 'entry must be a bounded taskto.input entry')
         entry = body.entry
       }
-      const expected = expectedModel(body.expectModel)
+      const expected = body.expectRevision === undefined ? undefined : expectedRevision(body.expectRevision)
+      const by = admitBy(body.admitBy)
       const conv = await conversation(id)
       const { capability, language } = body as { capability?: string; language?: string }
       let submissionId: SubmissionId | undefined
       await conv.commit(async (tx) => {
         if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
-        await requireModel(tx, conv.id, expected)
+        requireInTime(by)
+        if (expected !== undefined) await requireRevision(tx, conv.id, expected)
         submissionId = await conv.submit(tx, {
           type: 'input',
           content,
@@ -351,14 +361,16 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       if (typeof afterEntry !== 'number' || !Number.isSafeInteger(afterEntry) || afterEntry < 1) {
         throw new HttpError(400, 'afterEntry must be the id of the last entry')
       }
-      const expected = expectedModel(body.expectModel)
+      const expected = expectedRevision(body.expectRevision)
+      const by = admitBy(body.admitBy)
       const conv = await conversation(id)
       let submissionId: SubmissionId | undefined
       await testHooks.beforeContinueWrite?.()
       try {
         await conv.commit(async (tx) => {
           if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
-          await requireModel(tx, conv.id, expected)
+          requireInTime(by)
+          await requireRevision(tx, conv.id, expected)
           const pin = await tx.doc(ContinuePin, conv.id)
           if (afterEntry <= pin.consumed || (await latestReplyEntryId(tx, conv.id)) !== afterEntry) {
             throw new HttpError(409, 'the conversation moved on', 'moved')
@@ -366,11 +378,13 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
           submissionId = await conv.submit(tx, { type: 'continue' })
           pin.consumed = afterEntry
           pin.submission = submissionId
-          await configure(tx, conv.id, { model })
+          await writeModel(tx, conv.id, model)
         }, context)
       } catch (error) {
         if (error instanceof ConversationBusy) throw new HttpError(409, 'the conversation is busy', 'busy')
         throw error
+      } finally {
+        testHooks.afterContinueWrite?.()
       }
       return send(res, 202, { submissionId, model })
     }
@@ -429,25 +443,32 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === 'GET' && action === 'entries') return send(res, 200, await entries(id, url.searchParams))
     if (req.method === 'GET' && action === 'watch') return watch(id, req, res)
     if (req.method === 'GET' && action === 'model') {
-      const agent = await (await conversation(id)).agent(context)
-      if (!agent.model) throw new HttpError(409, 'conversation has no model', 'no_model')
-      return send(res, 200, { provider: agent.model.provider, modelId: agent.model.modelId })
+      const conv = await conversation(id)
+      const state = await conv.commit(async (tx) => {
+        const model = (await tx.doc(AgentDoc, conv.id)).model
+        return {
+          model: model && { provider: model.provider, modelId: model.modelId },
+          revision: await modelRevision(tx, conv.id),
+        }
+      }, context)
+      if (!state.model) throw new HttpError(409, 'conversation has no model', 'no_model')
+      return send(res, 200, { ...state.model, revision: state.revision })
     }
     if (req.method === 'PUT' && action === 'model') {
       const body = await readJson(req)
       const model = modelRef(body)
-      const expected = expectedModel(body.expectModel)
+      const expected = expectedRevision(body.expectRevision)
       const conv = await conversation(id)
       await testHooks.beforeModelWrite?.()
-      await conv.commit(async (tx) => {
+      const revision = await conv.commit(async (tx) => {
         if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
-        await requireModel(tx, conv.id, expected)
+        await requireRevision(tx, conv.id, expected)
         if (pinHolds(await tx.doc(ContinuePin, conv.id), await tx.doc(LiveDoc, conv.id))) {
           throw new HttpError(409, 'a continued reply keeps its model until it ends', 'busy')
         }
-        await configure(tx, conv.id, { model })
+        return writeModel(tx, conv.id, model)
       }, context)
-      return send(res, 200, model)
+      return send(res, 200, { ...model, revision })
     }
     if (req.method === 'GET' && action === 'messages') {
       const view = await (await conversation(id)).context(context)

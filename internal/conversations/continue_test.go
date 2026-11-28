@@ -502,7 +502,7 @@ func TestAMentionWaitsForAContinueBeingAdmitted(t *testing.T) {
 
 func TestAStalledContinueEndsAtItsDeadlineAndFreesTheHold(t *testing.T) {
 	e := newEnv(t, false)
-	e.svc.holdLimit = 50 * time.Millisecond
+	e.svc.admitLimit, e.svc.admitMargin = 50*time.Millisecond, time.Millisecond
 	owner, ws := e.setup()
 	c := owner.create(ws, nil)
 	e.rt.stallContinue = true
@@ -544,38 +544,125 @@ func (e *env) otherWriterSetsModel(c Conversation, model agentrt.ModelRef) func(
 	return func() {
 		e.rt.mu.Lock()
 		defer e.rt.mu.Unlock()
-		e.rt.models[agent] = model
+		e.rt.write(agent, model)
 	}
 }
 
 func TestAContinueThatLandsAfterAMentionCannotChangeTheModel(t *testing.T) {
+	for name, mentioned := range map[string]agentrt.ModelRef{
+		"another model":          {Provider: "cli-codex", ModelID: "default"},
+		"the model already used": defaultModel,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, false)
+			owner, ws := e.setup()
+			c := owner.create(ws, nil)
+			e.rt.mu.Lock()
+			e.rt.lateContinue = true
+			e.rt.mu.Unlock()
+
+			rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7))
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("the stalled continue answered %d, want 503", rec.Code)
+			}
+			rec = owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), mention(mentioned.Provider, mentioned.ModelID, "hello"))
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("the mention answered %d, want 202", rec.Code)
+			}
+			err := e.rt.landLate()
+			var refused *agentrt.StatusError
+			if !errors.As(err, &refused) || refused.Reason != "model_changed" {
+				t.Fatalf("the continue that stalled landed with %v, want a refusal because the model changed", err)
+			}
+			if got := e.modelOf(c); got != mentioned {
+				t.Fatalf("the model is %+v after the late continue, want the mention's %+v", got, mentioned)
+			}
+			if got := e.continues(); len(got) != 0 {
+				t.Fatalf("a continue that stalled was admitted after a mention: %+v", got)
+			}
+		})
+	}
+}
+
+func TestAnAnswerOf503MeansNothingIsAdmittedAfterItNotEvenAfterAnArchive(t *testing.T) {
 	e := newEnv(t, false)
-	e.svc.holdLimit = 50 * time.Millisecond
 	owner, ws := e.setup()
 	c := owner.create(ws, nil)
-	mentioned := agentrt.ModelRef{Provider: "cli-codex", ModelID: "default"}
 	e.rt.mu.Lock()
 	e.rt.lateContinue = true
+	e.rt.enforceAdmitBy = true
 	e.rt.mu.Unlock()
 
+	started := time.Now()
 	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("the stalled continue answered %d, want 503", rec.Code)
 	}
-	rec = owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), mention(mentioned.Provider, mentioned.ModelID, "hello"))
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("the mention answered %d, want 202", rec.Code)
+	if took, least := time.Since(started), e.svc.admitLimit+e.svc.admitMargin; took < least {
+		t.Fatalf("the 503 came after %v, before the admit-by time and its margin (%v) had passed: the runtime could still admit the turn", took, least)
 	}
+	owner.expect(http.StatusOK, http.MethodPatch, path(ws, fmt.Sprintf("/%d", c.ID)), map[string]any{"archived": true})
 	err := e.rt.landLate()
 	var refused *agentrt.StatusError
-	if !errors.As(err, &refused) || refused.Reason != "model_changed" {
-		t.Fatalf("the continue that stalled landed with %v, want a refusal because the model changed", err)
-	}
-	if got := e.modelOf(c); got != mentioned {
-		t.Fatalf("the model is %+v after the late continue, want the mention's %+v", got, mentioned)
+	if !errors.As(err, &refused) || refused.Reason != "too_late" {
+		t.Fatalf("the continue that stalled landed with %v after the 503 and an archive, want a refusal because its time had passed", err)
 	}
 	if got := e.continues(); len(got) != 0 {
-		t.Fatalf("a continue that stalled was admitted after a mention: %+v", got)
+		t.Fatalf("a continue was admitted after the 503 and the archive: %+v", got)
+	}
+}
+
+func TestEverySubmissionAndContinueCarriesTheTimeItMustBeAdmittedBy(t *testing.T) {
+	e := newEnv(t, false)
+	e.svc.admitLimit = time.Minute
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	before := time.Now()
+	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), map[string]any{"content": "hello"})
+	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), mention("cli-codex", "default", "hi"))
+	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7))
+	e.rt.mu.Lock()
+	defer e.rt.mu.Unlock()
+	if len(e.rt.deadlines) != 3 {
+		t.Fatalf("the runtime saw %d requests that admit a turn, want 3", len(e.rt.deadlines))
+	}
+	for i, by := range e.rt.deadlines {
+		if by.Before(before.Add(time.Minute)) || by.After(time.Now().Add(time.Minute)) {
+			t.Errorf("request %d carried the admit-by time %v, want a minute from when it was handled", i, by)
+		}
+	}
+}
+
+func TestASendWhoseOutcomeIsUnknownIsAnsweredOnlyAfterItsAdmitByTimeAndMargin(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	e.rt.mu.Lock()
+	e.rt.submitErr = errors.New("connection reset")
+	e.rt.mu.Unlock()
+
+	started := time.Now()
+	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), map[string]any{"content": "hello"})
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("a send that got no answer was answered %d, want 503", rec.Code)
+	}
+	if took, least := time.Since(started), e.svc.admitLimit+e.svc.admitMargin; took < least {
+		t.Fatalf("the 503 came after %v, before the admit-by time and its margin (%v) had passed", took, least)
+	}
+}
+
+func TestASendTheRuntimeRefusedIsAnsweredAtOnce(t *testing.T) {
+	e := newEnv(t, false)
+	e.svc.admitLimit = time.Minute
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	e.rt.mu.Lock()
+	e.rt.onSubmit = e.otherWriterSetsModel(c, agentrt.ModelRef{Provider: "backup", ModelID: "b-1"})
+	e.rt.mu.Unlock()
+	started := time.Now()
+	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), map[string]any{"content": "hello"})
+	if rec.Code != http.StatusConflict || time.Since(started) > 10*time.Second {
+		t.Fatalf("a send the runtime refused answered %d after %v, want 409 at once", rec.Code, time.Since(started))
 	}
 }
 

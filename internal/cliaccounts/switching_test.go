@@ -101,22 +101,51 @@ func TestLimitedUntil(t *testing.T) {
 	}
 }
 
-type modelCalls struct {
-	mu   sync.Mutex
-	clis []cliworker.CLI
+type modelCall struct {
+	cli      cliworker.CLI
+	revision int64
 }
 
-func (m *modelCalls) set(_ context.Context, _ int64, cli cliworker.CLI) error {
+type modelCalls struct {
+	mu    sync.Mutex
+	calls []modelCall
+	err   error
+}
+
+func (m *modelCalls) set(_ context.Context, _ int64, cli cliworker.CLI, revision int64) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.clis = append(m.clis, cli)
-	return nil
+	if m.err != nil {
+		return 0, m.err
+	}
+	m.calls = append(m.calls, modelCall{cli, revision})
+	return revision + 1, nil
+}
+
+func (m *modelCalls) failWith(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.err = err
 }
 
 func (m *modelCalls) list() []cliworker.CLI {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]cliworker.CLI(nil), m.clis...)
+	var out []cliworker.CLI
+	for _, c := range m.calls {
+		out = append(out, c.cli)
+	}
+	return out
+}
+
+func (m *modelCalls) revisions() []int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []int64
+	for _, c := range m.calls {
+		out = append(out, c.revision)
+	}
+	return out
 }
 
 func switchEnv(t *testing.T, enabled bool) (*turnEnv, int64, *modelCalls) {
@@ -191,6 +220,72 @@ func TestSwitchOnALimit(t *testing.T) {
 	}
 	if len(again) != len(events) || done(again).Seq != done(events).Seq {
 		t.Errorf("re-attached: %d events (last %d), first time %d (last %d)", len(again), done(again).Seq, len(events), done(events).Seq)
+	}
+}
+
+func codexTurns(t *testing.T, e *turnEnv) int {
+	t.Helper()
+	n := 0
+	for _, c := range clitest.Calls(t, e.dirs(e.owner.id).Config(cliworker.Codex)) {
+		if len(c.Args) > 0 && c.Args[0] == "exec" {
+			n++
+		}
+	}
+	return n
+}
+
+func TestEveryModelWriteOfASwitchCarriesTheRevisionTheTurnStartedOn(t *testing.T) {
+	e, conv, models := switchEnv(t, true)
+	if d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it", ModelRevision: 7})); d.Status != cliworker.StatusOK {
+		t.Fatalf("the switch after a limit: %+v", d)
+	}
+	if d := done(e.turn(conv, turnBody{Turn: "t2", CLI: "claude", Model: "default", Prompt: "again", ModelRevision: 11})); d.Status != cliworker.StatusOK {
+		t.Fatalf("the switch at the start of a turn: %+v", d)
+	}
+	if got := models.revisions(); len(got) != 2 || got[0] != 7 || got[1] != 11 {
+		t.Fatalf("the model writes carried the revisions %v, want [7 11]: the ones the turns started on", got)
+	}
+}
+
+func TestASwitchAfterALimitEndsTheTurnWhenTheModelWasChangedMeanwhile(t *testing.T) {
+	e, conv, models := switchEnv(t, true)
+	models.failWith(ErrModelChanged)
+	d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it", ModelRevision: 7}))
+	if d.Status != cliworker.StatusFailed || !strings.Contains(d.Text, "usage limit") {
+		t.Fatalf("the turn whose switch was refused ended with %+v, want the limit's failure", d)
+	}
+	if n := codexTurns(t, e); n != 0 {
+		t.Fatalf("Codex ran %d turns after the model write was refused: the conversation's model is another's now", n)
+	}
+	if got := models.list(); len(got) != 0 {
+		t.Fatalf("model writes %v went through", got)
+	}
+}
+
+func TestASwitchAtTheStartOfATurnEndsItWhenTheModelWasChangedMeanwhile(t *testing.T) {
+	e, conv, models := switchEnv(t, true)
+	if d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it"})); d.Status != cliworker.StatusOK {
+		t.Fatalf("the first turn: %+v", d)
+	}
+	models.failWith(ErrModelChanged)
+	d := done(e.turn(conv, turnBody{Turn: "t2", CLI: "claude", Model: "default", Prompt: "again"}))
+	if d.Status != cliworker.StatusFailed || d.Text != modelChangedText {
+		t.Fatalf("the turn whose switch was refused ended with %+v, want a failure saying the model was changed", d)
+	}
+}
+
+func TestATurnWithoutTheRevisionItStartedOnIsRefused(t *testing.T) {
+	e, conv, models := switchEnv(t, true)
+	for name, body := range map[string]map[string]any{
+		"missing":  {"turn": "t1", "cli": "claude", "model": "default", "prompt": "do it"},
+		"negative": {"turn": "t2", "cli": "claude", "model": "default", "prompt": "do it", "modelRevision": -1},
+	} {
+		if code, _, text := e.post(conv, "/cli/turn", body); code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s, want 400", name, code, text)
+		}
+	}
+	if len(models.list()) != 0 || codexTurns(t, e) != 0 {
+		t.Fatal("a refused turn ran or wrote the model")
 	}
 }
 

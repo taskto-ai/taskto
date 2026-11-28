@@ -185,7 +185,7 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.client.Model(ctx, conv); err != nil || got != want {
+	if got, err := s.client.Model(ctx, conv); err != nil || got.ModelRef != want {
 		t.Fatalf("model = %+v, %v; want %+v", got, err, want)
 	}
 	if settled := ask(t, s.client, conv, "hello there"); settled.Status != "done" {
@@ -199,17 +199,17 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 	}
 
 	large := ModelRef{Provider: "fake", ModelID: "fake-large"}
-	if err := s.client.SetModel(ctx, conv, nil, large); err != nil {
+	if err := setModelNow(ctx, s.client, conv, large); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.client.Model(ctx, conv); err != nil || got != large {
+	if got, err := s.client.Model(ctx, conv); err != nil || got.ModelRef != large {
 		t.Fatalf("model after switch = %+v, %v; want %+v", got, err, large)
 	}
 	ask(t, s.client, conv, "and now?")
 	if got := lastAssistant(t, s.client, conv); got != "fake-large heard: and now?" {
 		t.Fatalf("answer after switch = %q", got)
 	}
-	if err := s.client.SetModel(ctx, conv, nil, ModelRef{Provider: "script", ModelID: "script-1"}); err != nil {
+	if err := setModelNow(ctx, s.client, conv, ModelRef{Provider: "script", ModelID: "script-1"}); err != nil {
 		t.Fatal(err)
 	}
 	ask(t, s.client, conv, "offline")
@@ -221,7 +221,7 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.client.Model(ctx, chosen); err != nil || got != large {
+	if got, err := s.client.Model(ctx, chosen); err != nil || got.ModelRef != large {
 		t.Fatalf("model of a conversation created on %+v = %+v, %v", large, got, err)
 	}
 
@@ -234,7 +234,7 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 		if _, err := s.client.CreateConversationOn(ctx, bad); statusCode(err) != http.StatusBadRequest {
 			t.Errorf("create on %+v: err = %v, want a 400", bad, err)
 		}
-		err := s.client.SetModel(ctx, conv, nil, bad)
+		err := setModelNow(ctx, s.client, conv, bad)
 		if statusCode(err) != http.StatusBadRequest {
 			t.Errorf("switch to %+v: err = %v, want a 400", bad, err)
 		}
@@ -242,7 +242,7 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 			t.Errorf("switch to %+v: reason = %q, want unknown_model", bad, se.Reason)
 		}
 	}
-	if err := s.client.SetModel(ctx, 999_999, nil, large); statusCode(err) != http.StatusNotFound {
+	if err := setModelNow(ctx, s.client, 999_999, large); statusCode(err) != http.StatusNotFound {
 		t.Errorf("switch of an unknown conversation: err = %v, want a 404", err)
 	}
 	if got, err := s.client.Model(ctx, conv); err != nil || got.Provider != "script" {
@@ -451,7 +451,7 @@ func TestModelRouteReturnsOnlyTheReference(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body) != 2 || body["provider"] != "fake" || body["modelId"] != "fake-small" {
-		t.Fatalf("model route = %v, want exactly provider and modelId", body)
+	if len(body) != 3 || body["provider"] != "fake" || body["modelId"] != "fake-small" || body["revision"] != float64(0) {
+		t.Fatalf("model route = %v, want exactly provider, modelId and the revision", body)
 	}
 }

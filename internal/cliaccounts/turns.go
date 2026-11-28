@@ -108,6 +108,8 @@ type turnRequest struct {
 	History []historyEntry `json:"history"`
 	Replay  bool           `json:"replay"`
 	Pinned  bool           `json:"pinned"`
+
+	ModelRevision *int64 `json:"modelRevision"`
 }
 
 type historyEntry struct {
@@ -128,6 +130,11 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "turn, cli, model and prompt are required, and the model must be one the CLI offers")
 		return
 	}
+	if req.ModelRevision == nil || *req.ModelRevision < 0 {
+		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "modelRevision is required: the revision of the conversation's model the turn started on")
+		return
+	}
+	revision := *req.ModelRevision
 	out := newEventWriter(w)
 	fail := func(status cliworker.Status, msg string) {
 		out.write(cliworker.Event{Type: cliworker.EventDone, Status: status, Text: msg})
@@ -159,7 +166,7 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 			fail(cliworker.StatusFailed, "this turn belongs to another conversation")
 			return
 		}
-		s.chain(r.Context(), out, p, req, id, t)
+		s.chain(r.Context(), out, p, req, id, t, &revision)
 		return
 	}
 
@@ -200,10 +207,14 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 		out.write(cliworker.Event{Type: cliworker.EventInterrupted, Text: "the previous run of this turn was interrupted by a restart; resuming"})
 	}
 	if notice != "" {
-		s.switchModel(r.Context(), p, req.CLI, c.cli())
+		if err := s.switchModel(r.Context(), p, req.CLI, c.cli(), &revision); errors.Is(err, ErrModelChanged) {
+			_ = s.worker.StopTurn(p.User, id)
+			fail(cliworker.StatusFailed, modelChangedText)
+			return
+		}
 		out.write(cliworker.Event{Type: cliworker.EventNotice, Text: notice})
 	}
-	s.chain(r.Context(), out, p, req, id, t)
+	s.chain(r.Context(), out, p, req, id, t, &revision)
 }
 
 func (s *Service) start(ctx context.Context, p conversations.Principal, req turnRequest, id string, c choice, note string) (Turn, error) {
@@ -318,7 +329,7 @@ func chainID(id string, n int) string {
 	return id + "-s" + strconv.Itoa(n)
 }
 
-func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.Principal, req turnRequest, id string, t Turn) {
+func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.Principal, req turnRequest, id string, t Turn, revision *int64) {
 	tried := map[string]bool{}
 	offset := 0
 	for n := 0; ; n++ {
@@ -333,7 +344,7 @@ func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.P
 		next, found, _ := s.worker.FindTurn(p.User, nextID)
 		notice := s.switchNotice(nextID)
 		if !found && n < maxSwitches && !req.Pinned {
-			next, notice = s.switchAfter(ctx, out, p, req, t, res, id, nextID, tried)
+			next, notice = s.switchAfter(ctx, out, p, req, t, res, id, nextID, tried, revision)
 		}
 		if next == nil {
 			res.done.Seq += offset
@@ -455,7 +466,7 @@ func (s *Service) stopped(ctx context.Context, p conversations.Principal, t Turn
 	return ""
 }
 
-func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversations.Principal, req turnRequest, t Turn, res passed, id, nextID string, tried map[string]bool) (Turn, string) {
+func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversations.Principal, req turnRequest, t Turn, res passed, id, nextID string, tried map[string]bool, revision *int64) (Turn, string) {
 	why := s.stopped(ctx, p, t, res)
 	if why == "" || s.isStopped(id) {
 		return nil, ""
@@ -481,6 +492,9 @@ func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversat
 		note += "\n\nWhat it had said so far:\n\n" + strings.TrimSpace(res.text)
 	}
 	note += "\n\n"
+	if err := s.switchModel(ctx, p, t.Spec().CLI, next.cli(), revision); errors.Is(err, ErrModelChanged) {
+		return nil, ""
+	}
 	tn, err := s.start(ctx, p, req, nextID, next, note)
 	if err != nil {
 		slog.ErrorContext(ctx, "cli turn: switching", "conversation", p.Conversation, "err", err)
@@ -493,7 +507,6 @@ func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversat
 	s.mu.Lock()
 	s.switches[nextID] = notice
 	s.mu.Unlock()
-	s.switchModel(ctx, p, t.Spec().CLI, next.cli())
 	return tn, notice
 }
 
@@ -506,13 +519,17 @@ func (s *Service) switchNotice(nextID string) string {
 	return "continuing on another account"
 }
 
-func (s *Service) switchModel(ctx context.Context, p conversations.Principal, from, to cliworker.CLI) {
+func (s *Service) switchModel(ctx context.Context, p conversations.Principal, from, to cliworker.CLI, revision *int64) error {
 	if from == to || s.setModel == nil {
-		return
+		return nil
 	}
-	if err := s.setModel(context.WithoutCancel(ctx), p.AgentConversation, to); err != nil {
+	next, err := s.setModel(context.WithoutCancel(ctx), p.AgentConversation, to, *revision)
+	if err != nil {
 		slog.WarnContext(ctx, "cli turn: setting the conversation's model after a switch", "conversation", p.Conversation, "err", err)
+		return err
 	}
+	*revision = next
+	return nil
 }
 
 type choice struct {

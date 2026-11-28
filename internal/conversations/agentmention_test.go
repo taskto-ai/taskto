@@ -337,7 +337,7 @@ func TestTheOwnersModelChangeGivesUpOnAHeldModel(t *testing.T) {
 
 func TestAStalledSendEndsAtItsDeadlineAndFreesTheHold(t *testing.T) {
 	e := newEnv(t, false)
-	e.svc.holdLimit = 50 * time.Millisecond
+	e.svc.admitLimit, e.svc.admitMargin = 50*time.Millisecond, time.Millisecond
 	owner, ws := e.setup()
 	c := owner.create(ws, nil)
 	send := path(ws, fmt.Sprintf("/%d/messages", c.ID))
@@ -376,7 +376,7 @@ func TestAStalledSendEndsAtItsDeadlineAndFreesTheHold(t *testing.T) {
 
 func TestAStalledPutBackEndsAtItsOwnDeadlineAndFreesTheHold(t *testing.T) {
 	e := newEnv(t, false)
-	e.svc.holdLimit = 50 * time.Millisecond
+	e.svc.admitLimit, e.svc.admitMargin = 50*time.Millisecond, time.Millisecond
 	e.svc.putBackLimit = 50 * time.Millisecond
 	owner, ws := e.setup()
 	c := owner.create(ws, nil)

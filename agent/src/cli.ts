@@ -11,6 +11,7 @@ import {
 import { defineExtension, defineTool, LiveDoc, type ToolExecutionApi } from '@earendil-works/pi-durable'
 import { obj, str } from '@earendil-works/pi-schema'
 import { ContinuePin, pinHolds } from './continue.js'
+import { ModelRevision } from './revision.js'
 import { ToolAccess } from './taskto-tools.js'
 
 export const CLI_TOOL = 'cli_turn'
@@ -415,6 +416,11 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
         await api.snapshot(ContinuePin, api.conversationId, context),
         await api.snapshot(LiveDoc, api.conversationId, context),
       )
+      const modelRevision = await api.memo(
+        'model-revision',
+        (await api.snapshot(ModelRevision, api.conversationId, context))?.n ?? 0,
+        context,
+      )
       const { prompt, history } = splitTurn(await messagesOf(api.conversationId))
       if (!prompt) return result('there is no new message for the CLI', '', true)
       const helps = new Helps()
@@ -425,7 +431,7 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
           done = await runTurn(
             api,
             access.capability,
-            { turn, cli, model: args.model, prompt, history, replay, pinned },
+            { turn, cli, model: args.model, prompt, history, replay, pinned, modelRevision },
             cli,
             helps,
             signal,

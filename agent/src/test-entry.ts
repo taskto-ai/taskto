@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import type { ToolSpec } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
 
@@ -31,6 +32,15 @@ if (continuePauseMs > 0) {
     console.error('test: the continue is waiting before its commit')
     return new Promise((resolve) => setTimeout(resolve, continuePauseMs))
   }
+}
+
+const continueGate = process.env.TASKTO_AGENT_TEST_CONTINUE_GATE
+if (continueGate) {
+  testHooks.beforeContinueWrite = async () => {
+    console.error('test: the continue is waiting before its commit')
+    while (!existsSync(continueGate)) await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  testHooks.afterContinueWrite = () => console.error('test: the continue ended')
 }
 
 await import('./index.js')

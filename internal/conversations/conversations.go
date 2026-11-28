@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -15,12 +16,12 @@ import (
 type Runtime interface {
 	CreateConversationOn(ctx context.Context, model agentrt.ModelRef) (int64, error)
 	Submit(ctx context.Context, conversation int64, in agentrt.Input) (int64, error)
-	Continue(ctx context.Context, conversation int64, expected *agentrt.ModelRef, model agentrt.ModelRef, afterEntry int64) (int64, agentrt.ModelRef, error)
+	Continue(ctx context.Context, conversation, revision int64, model agentrt.ModelRef, afterEntry int64) (int64, agentrt.ModelRef, error)
 	Note(ctx context.Context, conversation int64, n agentrt.NoteInput) (int64, error)
 	Wait(ctx context.Context, submission int64) (agentrt.Settled, error)
 	Messages(ctx context.Context, conversation int64) ([]agentrt.Message, error)
-	Model(ctx context.Context, conversation int64) (agentrt.ModelRef, error)
-	SetModel(ctx context.Context, conversation int64, expected *agentrt.ModelRef, model agentrt.ModelRef) error
+	Model(ctx context.Context, conversation int64) (agentrt.ModelState, error)
+	SetModel(ctx context.Context, conversation, revision int64, model agentrt.ModelRef) (int64, error)
 	Abort(ctx context.Context, conversation int64) error
 	Entries(ctx context.Context, conversation, before int64, limit int) (json.RawMessage, error)
 	Watch(ctx context.Context, conversation int64) (Watch, error)
@@ -64,7 +65,8 @@ type Service struct {
 
 	readyWait     time.Duration
 	modelWait     time.Duration
-	holdLimit     time.Duration
+	admitLimit    time.Duration
+	admitMargin   time.Duration
 	putBackLimit  time.Duration
 	exportTimeout time.Duration
 	heartbeat     time.Duration
@@ -78,7 +80,7 @@ func New(sqlDB *sql.DB, agent Agent) *Service {
 	closing, end := context.WithCancel(context.Background())
 	return &Service{
 		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{}, modelHolds: map[int64]*modelHold{}, guards: map[int64]*guard{},
-		readyWait: 5 * time.Second, modelWait: modelWait, holdLimit: holdLimit, putBackLimit: putBackLimit, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
+		readyWait: 5 * time.Second, modelWait: modelWait, admitLimit: admitLimit, admitMargin: admitMargin, putBackLimit: putBackLimit, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
 		maxStreams: 16,
 	}
 }
@@ -215,9 +217,24 @@ func (s *Service) touch(ctx context.Context, id, agentID int64) error {
 
 const (
 	modelWait    = 3 * time.Second
-	holdLimit    = 20 * time.Second
+	admitLimit   = 20 * time.Second
+	admitMargin  = 2 * time.Second
 	putBackLimit = 5 * time.Second
 )
+
+func (s *Service) settleAdmission(err error, admitBy time.Time) {
+	var refused *agentrt.StatusError
+	var dial *net.OpError
+	if errors.As(err, &refused) || (errors.As(err, &dial) && dial.Op == "dial") {
+		return
+	}
+	timer := time.NewTimer(time.Until(admitBy.Add(s.admitMargin)))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-s.closing.Done():
+	}
+}
 
 type modelHold struct {
 	turn  chan struct{}

@@ -31,6 +31,7 @@ type fakeRuntime struct {
 	mu            sync.Mutex
 	next          int64
 	models        map[int64]agentrt.ModelRef
+	revs          map[int64]int64
 	created       []agentrt.ModelRef
 	inputs        map[int64][]agentrt.Input
 	notes         map[int64][]agentrt.NoteInput
@@ -60,13 +61,31 @@ type fakeRuntime struct {
 	lateContinue  bool
 	continueCalls int
 	landing       func() error
+
+	enforceAdmitBy bool
+	deadlines      []time.Time
 }
 
 var errModelChanged = &agentrt.StatusError{Code: http.StatusConflict, Message: "the conversation is on another model", Reason: "model_changed"}
 
-func (f *fakeRuntime) expects(conv int64, expected *agentrt.ModelRef) error {
-	if expected != nil && f.models[conv] != *expected {
+var errTooLate = &agentrt.StatusError{Code: http.StatusServiceUnavailable, Message: "the time to admit this request has passed", Reason: "too_late"}
+
+func (f *fakeRuntime) expects(conv int64, expected *int64) error {
+	if expected != nil && f.revs[conv] != *expected {
 		return errModelChanged
+	}
+	return nil
+}
+
+func (f *fakeRuntime) write(conv int64, model agentrt.ModelRef) int64 {
+	f.models[conv] = model
+	f.revs[conv]++
+	return f.revs[conv]
+}
+
+func (f *fakeRuntime) admitted(by time.Time) error {
+	if f.enforceAdmitBy && !by.IsZero() && time.Now().After(by) {
+		return errTooLate
 	}
 	return nil
 }
@@ -74,7 +93,7 @@ func (f *fakeRuntime) expects(conv int64, expected *agentrt.ModelRef) error {
 var setupToken = auth.NewSetupToken()
 
 func newFakeRuntime() *fakeRuntime {
-	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, notes: map[int64][]agentrt.NoteInput{}, aborts: map[int64]int{}, resumes: map[int64]int{}}
+	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, revs: map[int64]int64{}, inputs: map[int64][]agentrt.Input{}, notes: map[int64][]agentrt.NoteInput{}, aborts: map[int64]int{}, resumes: map[int64]int{}}
 }
 
 var defaultModel = agentrt.ModelRef{Provider: "script", ModelID: "script-1"}
@@ -98,6 +117,8 @@ func (f *fakeRuntime) Submit(ctx context.Context, conv int64, in agentrt.Input) 
 	f.mu.Lock()
 	hook := f.onSubmit
 	stall := f.stallSend
+	by, _ := ctx.Deadline()
+	f.deadlines = append(f.deadlines, by)
 	f.mu.Unlock()
 	if stall {
 		<-ctx.Done()
@@ -114,7 +135,10 @@ func (f *fakeRuntime) Submit(ctx context.Context, conv int64, in agentrt.Input) 
 	if f.submitErr != nil {
 		return 0, f.submitErr
 	}
-	if err := f.expects(conv, in.ExpectModel); err != nil {
+	if err := f.admitted(by); err != nil {
+		return 0, err
+	}
+	if err := f.expects(conv, in.ExpectRevision); err != nil {
 		return 0, err
 	}
 	f.inputs[conv] = append(f.inputs[conv], in)
@@ -127,7 +151,7 @@ type continueCall struct {
 	after int64
 }
 
-func (f *fakeRuntime) Continue(ctx context.Context, conv int64, expected *agentrt.ModelRef, model agentrt.ModelRef, after int64) (int64, agentrt.ModelRef, error) {
+func (f *fakeRuntime) Continue(ctx context.Context, conv, revision int64, model agentrt.ModelRef, after int64) (int64, agentrt.ModelRef, error) {
 	if f.onContinue != nil {
 		f.onContinue()
 	}
@@ -137,11 +161,13 @@ func (f *fakeRuntime) Continue(ctx context.Context, conv int64, expected *agentr
 	}
 	f.mu.Lock()
 	f.continueCalls++
+	by, _ := ctx.Deadline()
+	f.deadlines = append(f.deadlines, by)
 	if f.lateContinue && f.continueCalls == 1 {
 		f.landing = func() error {
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			_, _, err := f.admitContinue(conv, expected, model, after)
+			_, _, err := f.admitContinue(conv, revision, by, model, after)
 			return err
 		}
 		f.mu.Unlock()
@@ -155,14 +181,17 @@ func (f *fakeRuntime) Continue(ctx context.Context, conv int64, expected *agentr
 	if f.err != nil {
 		return 0, agentrt.ModelRef{}, f.err
 	}
-	return f.admitContinue(conv, expected, model, after)
+	return f.admitContinue(conv, revision, by, model, after)
 }
 
-func (f *fakeRuntime) admitContinue(conv int64, expected *agentrt.ModelRef, model agentrt.ModelRef, after int64) (int64, agentrt.ModelRef, error) {
-	if err := f.expects(conv, expected); err != nil {
+func (f *fakeRuntime) admitContinue(conv, revision int64, by time.Time, model agentrt.ModelRef, after int64) (int64, agentrt.ModelRef, error) {
+	if err := f.admitted(by); err != nil {
 		return 0, agentrt.ModelRef{}, err
 	}
-	f.models[conv] = model
+	if err := f.expects(conv, &revision); err != nil {
+		return 0, agentrt.ModelRef{}, err
+	}
+	f.write(conv, model)
 	f.resumed = append(f.resumed, continueCall{model, after})
 	f.resumes[conv]++
 	return int64(3000 + f.resumes[conv]), model, nil
@@ -216,13 +245,13 @@ func (f *fakeRuntime) Wait(ctx context.Context, _ int64) (agentrt.Settled, error
 	return agentrt.Settled{Status: "done"}, err
 }
 
-func (f *fakeRuntime) Model(_ context.Context, conv int64) (agentrt.ModelRef, error) {
+func (f *fakeRuntime) Model(_ context.Context, conv int64) (agentrt.ModelState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.models[conv], f.err
+	return agentrt.ModelState{ModelRef: f.models[conv], Revision: f.revs[conv]}, f.err
 }
 
-func (f *fakeRuntime) SetModel(ctx context.Context, conv int64, expected *agentrt.ModelRef, model agentrt.ModelRef) error {
+func (f *fakeRuntime) SetModel(ctx context.Context, conv, revision int64, model agentrt.ModelRef) (int64, error) {
 	if f.onSetModel != nil {
 		f.onSetModel()
 	}
@@ -230,19 +259,19 @@ func (f *fakeRuntime) SetModel(ctx context.Context, conv int64, expected *agentr
 	if f.stallPutBack && len(f.calls) > 0 && strings.HasPrefix(f.calls[len(f.calls)-1], "set-model ") {
 		f.mu.Unlock()
 		<-ctx.Done()
-		return ctx.Err()
+		return 0, ctx.Err()
 	}
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return f.err
+		return 0, f.err
 	}
-	if err := f.expects(conv, expected); err != nil {
-		return err
+	if err := f.expects(conv, &revision); err != nil {
+		return 0, err
 	}
-	f.models[conv] = model
+	next := f.write(conv, model)
 	f.calls = append(f.calls, "set-model "+model.Provider+"/"+model.ModelID)
 	f.sets++
-	return nil
+	return next, nil
 }
 
 func (f *fakeRuntime) Abort(ctx context.Context, conv int64) error {
@@ -429,6 +458,7 @@ func newEnv(t *testing.T, off bool) *env {
 		agent = func(context.Context) (Runtime, error) { return e.rt, nil }
 	}
 	e.svc = New(sqlDB, agent)
+	e.svc.admitLimit, e.svc.admitMargin = 300*time.Millisecond, 20*time.Millisecond
 	e.runnable = []providers.Choice{
 		{Provider: "script", Name: "Scripted", Scope: providers.ScopeInstance, Models: []providers.ModelChoice{{ID: "script-1", Name: "Scripted"}}},
 		{Provider: "backup", Name: "Backup", Scope: providers.ScopeInstance, Models: []providers.ModelChoice{{ID: "b-1", Name: "B one"}}},
