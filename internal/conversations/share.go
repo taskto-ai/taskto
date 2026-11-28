@@ -54,10 +54,13 @@ func stillReaches(ctx context.Context, tx *sql.Tx, c Conversation, actor int64) 
 	return nil
 }
 
-func (s *Service) members(ctx context.Context, id int64) (Members, error) {
+func (s *Service) members(ctx context.Context, c Conversation) (Members, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT u.id, u.name, m.role, m.added_at
-		FROM conversation_members m JOIN users u ON u.id = m.user_id
-		WHERE m.conversation_id = ? ORDER BY m.added_at, u.id`, id)
+		FROM conversation_members m
+		JOIN conversations c ON c.id = m.conversation_id
+		JOIN users u ON u.id = m.user_id
+		WHERE c.id = ? AND c.workspace_id = ? AND c.owner_id = ? AND c.agent_id = ?
+		ORDER BY m.added_at, u.id`, c.ID, c.WorkspaceID, c.Owner.ID, c.agentID)
 	if err != nil {
 		return Members{}, err
 	}
@@ -193,7 +196,7 @@ func (s *Service) handleMembers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	list, err := s.members(r.Context(), c.ID)
+	list, err := s.members(r.Context(), c)
 	if err != nil {
 		serverError(w, r, err)
 		return

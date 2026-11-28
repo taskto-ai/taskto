@@ -249,8 +249,6 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	if err := notifier.AttachScheduler(scheduler); err != nil {
 		return err
 	}
-	stopPush := notifier.Start(ctx)
-	defer stopPush()
 	deletions := accountdeletion.New(accountdeletion.Options{
 		DB: sqlDB, DataDir: cfg.DataDir, Scheduler: scheduler, Knowledge: kb, CLI: cliAccounts, Browsers: purgeBrowsers,
 	})
@@ -308,6 +306,8 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	}
 	convs.SetCLIQuestions(cliAccounts)
 	notifier.SetConversations(convs)
+	stopPush := notifier.Start(ctx)
+	defer stopPush()
 
 	if cfg.InsecureCookies {
 		slog.Warn("the session cookie is sent over plain http (insecure_cookies): use this only on localhost")

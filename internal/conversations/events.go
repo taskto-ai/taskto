@@ -172,9 +172,7 @@ func (e *eventWriter) event(data []byte) error {
 	if bytes.ContainsAny(data, "\r\n") {
 		return errBadLine
 	}
-	buf := make([]byte, 0, len(data)+8)
-	buf = append(buf, "data: "...)
-	buf = append(buf, data...)
+	buf := append([]byte("data: "), data...)
 	return e.write(append(buf, '\n', '\n'))
 }
 

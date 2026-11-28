@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
+
+	"taskto.ai/taskto/internal/agentrt"
 )
 
 func (e *env) shareWith(owner *client, ws, conv int64, reader *client) {
@@ -59,11 +62,16 @@ func TestAReadInProgressWritesNothingAfterAccessEnds(t *testing.T) {
 			owner := e.invite(admin, ws, "owner2@example.com")
 			reader := e.invite(admin, ws, "reader@example.com")
 			conv := owner.create(ws, nil)
-			owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", conv.ID)), map[string]any{"content": "the owner's question"})
+			e.rt.mu.Lock()
+			e.rt.inputs[conv.agentIDForTest(t, e)] = []agentrt.Input{{Content: "the owner's question"}}
+			e.rt.mu.Unlock()
 			e.shareWith(owner, ws, conv.ID, reader)
+			var once sync.Once
 			e.rt.onRead = func(got string) {
 				if got == op {
-					admin.expect(http.StatusNoContent, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, reader.id), nil)
+					once.Do(func() {
+						admin.expect(http.StatusNoContent, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, reader.id), nil)
+					})
 				}
 			}
 			rec := reader.do(http.MethodGet, path(ws, fmt.Sprintf("/%d/%s", conv.ID, op)), nil)
@@ -139,5 +147,35 @@ func TestAStaleActorCannotWriteAShare(t *testing.T) {
 				t.Fatalf("a refused share left %d rows", n)
 			}
 		})
+	}
+}
+
+func TestARosterReadBelongsToTheConversationThatWasAuthorized(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	reader := e.invite(owner, ws, "reader@example.com")
+	other := e.invite(owner, ws, "other@example.com")
+	conv := owner.create(ws, nil)
+	e.shareWith(owner, ws, conv.ID, reader)
+	read, err := e.svc.reach(t.Context(), ws, owner.id, conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.svc.members(t.Context(), read); err != nil || len(got.Members) != 1 {
+		t.Fatalf("the roster of the conversation itself = %+v, %v", got, err)
+	}
+	if _, err := e.db.Exec(`DELETE FROM conversations WHERE id = ?`, conv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`INSERT INTO conversations (id, workspace_id, owner_id, agent_id, title) VALUES (?, ?, ?, 9999, '')`,
+		conv.ID, ws, other.id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`INSERT INTO conversation_members (conversation_id, user_id, role, added_by) VALUES (?, ?, 'viewer', ?)`,
+		conv.ID, reader.id, other.id); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.svc.members(t.Context(), read); err != nil || len(got.Members) != 0 {
+		t.Fatalf("the roster of a conversation that took the ID = %+v, %v; want nothing", got, err)
 	}
 }
