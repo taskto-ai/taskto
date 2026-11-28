@@ -32,7 +32,8 @@ func (e *turnEnv) turnWith(ctx context.Context, conversation int64, b turnBody) 
 	for sc.Scan() {
 		var ev cliworker.Event
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
-			e.t.Fatalf("event %q: %v", sc.Text(), err)
+			e.t.Errorf("event %q: %v", sc.Text(), err)
+			return events
 		}
 		events = append(events, ev)
 	}
