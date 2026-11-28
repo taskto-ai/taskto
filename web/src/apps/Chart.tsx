@@ -75,9 +75,11 @@ function lineText(line: ChartLine, t: T, f: Format): string {
   return line.label === '' ? t('apps.chart.value') : pointText(line, t, f)
 }
 
+const DIGITS = { maximumFractionDigits: 10 }
+
 function cell(value: number | null, unit: string, f: Format): string {
   if (value === null) return '-'
-  return unit === '' ? f.number(value) : `${f.number(value)} ${unit}`
+  return unit === '' ? f.number(value, DIGITS) : `${f.number(value, DIGITS)} ${unit}`
 }
 
 const num = (n: number) => String(Math.round(n * 100) / 100)
@@ -227,7 +229,7 @@ function ChartDrawing({
                 y2={num(y)}
               />
               <text className="ui-chart-tick" x={LEFT - 6} y={num(y + 4)} textAnchor="end">
-                {f.number(tick)}
+                {f.number(tick, DIGITS)}
               </text>
             </g>
           )
