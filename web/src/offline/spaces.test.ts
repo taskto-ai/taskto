@@ -15,3 +15,11 @@ for (const c of shared.cases as Case[]) {
     expect(parseField(field, c.input)).toBe(c.stored === null ? undefined : c.stored)
   })
 }
+
+test('a long run of spaces inside a text is trimmed in linear time', () => {
+  const value = `x${' '.repeat(200_000)}x`
+  const field = { name: 'f', type: 'string', max_length: 400_000 } as Parameters<typeof parseField>[0]
+  const started = performance.now()
+  expect(parseField(field, ` ${value} `)).toBe(value)
+  expect(performance.now() - started).toBeLessThan(1000)
+})
