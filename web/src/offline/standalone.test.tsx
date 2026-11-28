@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import 'fake-indexeddb/auto'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
@@ -45,6 +45,12 @@ function download(app: number, name: string): Download {
     modifiable: [],
     operations: {},
   }
+}
+
+function inputOf(label: string): HTMLInputElement {
+  const input = screen.getByText(label).closest('a2ui-basic-textfield')?.querySelector('input')
+  if (!input) throw new Error(`no input for ${label}`)
+  return input
 }
 
 beforeEach(async () => {
@@ -167,4 +173,31 @@ test('the app shown follows the address when Back returns to a run address after
   await screen.findByRole('heading', { level: 1, name: 'Mileage' })
   expect(screen.queryByRole('region', { name: 'Expenses' })).toBeNull()
   expect(screen.getByRole('link', { name: 'Open in taskto' }).getAttribute('href')).toBe('/w/1/apps/2-2')
+})
+
+test('the notice that a save was kept stays with the app that was saved in when Back returns to the other app', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))),
+  )
+  window.history.replaceState(null, '', '/w/1/run/2-2')
+  render(<App />)
+  await screen.findByRole('heading', { level: 1, name: 'Mileage' })
+  fireEvent.click(screen.getByRole('link', { name: 'Open in taskto' }))
+  await screen.findByRole('button', { name: 'Open Expenses' })
+  fireEvent.click(screen.getByRole('button', { name: 'Open Expenses' }))
+  await screen.findByRole('region', { name: 'Expenses' })
+  await screen.findByText('Description')
+  fireEvent.input(inputOf('Description'), { target: { value: 'Lunch' } })
+  fireEvent.input(inputOf('Amount'), { target: { value: '12.25' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+  const panel = () => within(document.querySelector('.ui-offline-app') as HTMLElement)
+  await panel().findByText(/Saved on this device/)
+
+  act(() => {
+    window.history.back()
+  })
+  await screen.findByRole('heading', { level: 1, name: 'Mileage' })
+  expect(screen.getByRole('region', { name: 'Mileage' })).toBeTruthy()
+  expect(panel().queryByText(/Saved on this device/)).toBeNull()
 })

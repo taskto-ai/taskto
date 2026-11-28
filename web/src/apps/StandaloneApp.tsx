@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
-import { ACCESS_LOST, ApiError, api, type Me, type Space, ws } from '../api'
+import { ACCESS_LOST, ApiError, accessLostConcerns, api, type Me, type Space, ws } from '../api'
 import { setPreferences, useT } from '../i18n'
 import { useLoad } from '../load'
 import { routePath } from '../router'
@@ -58,7 +58,8 @@ export function StandaloneApp({
     } else if (!spaces.error) setDenied(false)
   }, [spaces.loading, spaces.error, reload])
   useEffect(() => {
-    const lost = () => {
+    const lost = (e: Event) => {
+      if (!accessLostConcerns(e, workspace, space)) return
       setDenied(true)
       if (reloading.current) outdated.current = true
       else reload()
@@ -74,7 +75,7 @@ export function StandaloneApp({
       window.removeEventListener('focus', wake)
       document.removeEventListener('visibilitychange', wake)
     }
-  }, [reload])
+  }, [reload, workspace, space])
   const locale = member?.locale ?? null
   useEffect(() => {
     void setPreferences({ workspace: locale })

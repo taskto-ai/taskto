@@ -137,6 +137,7 @@ export function OfflineShell({
               {t('offline.shell.back')}
             </Button>
             <OfflineApp
+              key={download.key}
               runtime={runtime}
               download={download}
               items={data.items.filter((i) => i.scopeKey === download.key)}
