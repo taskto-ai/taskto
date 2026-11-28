@@ -363,6 +363,28 @@ func TestAReattachNeverWritesOrAnnouncesAModel(t *testing.T) {
 	})
 }
 
+func TestAReattachThatMovesTheTurnToAnotherAccountWritesNoModel(t *testing.T) {
+	e, conv, models := switchEnv(t, false)
+	body := turnBody{Turn: "t1", CLI: "claude", Model: "opus", Prompt: "do it"}
+	if d := lastDone(e.turn(conv, body)); d.Continue || d.Status == cliworker.StatusOK {
+		t.Fatalf("the first request = %+v: with switching off it should end with the limit", d)
+	}
+	e.owner.setSwitching(map[string]any{"enabled": true, "queue": []map[string]any{{"account": "claude"}, {"account": "codex"}}})
+	events := e.turn(conv, body)
+	moved := false
+	for _, ev := range events {
+		if ev.Type == cliworker.EventNotice && strings.Contains(ev.Text, "continuing on Codex") {
+			moved = true
+		}
+	}
+	if !moved {
+		t.Fatalf("the reattach did not move the turn to Codex: the test shows nothing: %+v", events)
+	}
+	if len(models.refs) != 0 {
+		t.Fatalf("the reattach wrote a model: %v", models.refs)
+	}
+}
+
 func TestAReattachAfterACancellationRacingAnAnswerSendsNoWrite(t *testing.T) {
 	answers := map[string]error{
 		"the runtime says busy":     fmt.Errorf("conflict: %w", ErrModelBusy),

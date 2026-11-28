@@ -517,7 +517,9 @@ func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversat
 	s.mu.Lock()
 	s.switches[nextID] = notice
 	s.mu.Unlock()
-	s.switchModel(ctx, p, t.Spec().CLI, next.cli())
+	if mayHop {
+		s.switchModel(ctx, p, t.Spec().CLI, next.cli())
+	}
 	return tn, notice
 }
 

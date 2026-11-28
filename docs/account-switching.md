@@ -227,7 +227,9 @@ turns on. The turn ends with the limit's message, as before.
   sidecar reconnecting) ends with the turn's recorded outcome, as it would without a model in the
   queue: no notice, no `continue`, and no write to the agent runtime, whatever the queue or the
   setting is by then. A reconnect after the hop therefore ends with the limit's message. A re-attach
-  may still move a turn to the next account, as before.
+  may still move a turn to the next account, as before, but it does not change the conversation's
+  model when that account is another CLI's: the model stays what the conversation had, and only
+  the first request of a turn writes one.
 - **The write is bounded by its caller.** The server's request to the agent runtime ends when the
   caller of the turn is gone and after 15 seconds. That bounds how long the server waits; it does
   not take the write back, because the agent runtime commits a write it has already admitted
