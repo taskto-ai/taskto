@@ -225,6 +225,9 @@ func (c *Checker) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 		c.fail(w, r, err)
 		return
 	}
+	for _, h := range c.removedHooks {
+		h(s.ID, userID)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
