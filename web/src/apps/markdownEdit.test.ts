@@ -126,3 +126,10 @@ test('Windows line breaks are one break, and an edit leaves the others as they w
   expect(keepBreaks('one\r\ntwo', 'one\ntwo\nmore')).toBe('one\r\ntwo\nmore')
   expect(keepBreaks('one\ntwo', 'one\ntwo!')).toBe('one\ntwo!')
 })
+
+test('an edit across lines keeps each break inside its range as stored, and a new break stays a plain one', () => {
+  expect(keepBreaks('one\r\ntwo\r\nthree', '**one**\n**two**\nthree')).toBe('**one**\r\n**two**\r\nthree')
+  expect(keepBreaks('one\r\n\r\ntwo', '**one**\n\n**two**')).toBe('**one**\r\n\r\n**two**')
+  expect(keepBreaks('one\rtwo\r\nthree', '- one\n- two\n- three')).toBe('- one\r- two\r\n- three')
+  expect(keepBreaks('one\r\ntwo', '**one**\n**two**\n**more**')).toBe('**one**\r\n**two**\n**more**')
+})

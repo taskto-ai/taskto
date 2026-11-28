@@ -159,15 +159,15 @@ scenario('formatting a record saved with Windows line breaks changes only the ch
   assert.equal(await box.inputValue(), 'one\ntwo\nthree')
   await box.evaluate((el) => {
     el.focus()
-    el.setSelectionRange(4, 7)
+    el.setSelectionRange(0, 7)
   })
   await page.getByRole('button', { name: 'Bold' }).click()
-  assert.equal(await box.inputValue(), 'one\n**two**\nthree')
+  assert.equal(await box.inputValue(), '**one**\n**two**\nthree')
   await Promise.all([
     page.waitForResponse((r) => r.request().method() === 'POST' && r.url().endsWith('/actions') && r.ok()),
     page.getByRole('button', { name: 'Save changes' }).click(),
   ])
-  assert.deepEqual(await notes(context, app), ['one\r\n**two**\r\nthree'])
+  assert.deepEqual(await notes(context, app), ['**one**\r\n**two**\r\nthree'])
 })
 
 scenario('a dictation that finishes while Preview is open lands in the text', async (s) => {

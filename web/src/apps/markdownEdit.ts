@@ -99,7 +99,11 @@ export function keepBreaks(previous: string, next: string): string {
   }
   starts.push(previous.length)
   const { at, removed, insert } = splice(was, next)
-  return previous.slice(0, starts[at]) + insert + previous.slice(starts[at + removed])
+  const replaced = previous.slice(starts[at], starts[at + removed])
+  const separators = replaced.match(/\r\n?|\n/g) ?? []
+  let used = 0
+  const kept = insert.replace(/\n/g, () => separators[used++] ?? '\n')
+  return previous.slice(0, starts[at]) + kept + previous.slice(starts[at + removed])
 }
 
 export const HEADING_PREFIX = '### '

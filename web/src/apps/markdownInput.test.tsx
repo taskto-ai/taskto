@@ -308,6 +308,20 @@ test('a person who picks text with Windows line breaks formats it without touchi
   expect(seen).toHaveBeenLastCalledWith('one\r\n- **two**\r\nthree')
 })
 
+test.each([
+  ['Bold', '**one**\r\n**two**\r\nthree'],
+  ['Italic', '_one_\r\n_two_\r\nthree'],
+  ['Heading', '### one\r\n### two\r\nthree'],
+  ['Bulleted list', '- one\r\n- two\r\nthree'],
+  ['Checklist', '- [ ] one\r\n- [ ] two\r\nthree'],
+])('%s over several lines with Windows line breaks keeps each break inside the range', (name, stored) => {
+  const seen = vi.fn()
+  render(<Harness start={'one\r\ntwo\r\nthree'} seen={seen} />)
+  select(box(), 0, 7)
+  fireEvent.click(screen.getByRole('button', { name }))
+  expect(seen).toHaveBeenLastCalledWith(stored)
+})
+
 test('typing in text with Windows line breaks keeps the breaks it did not touch', () => {
   const seen = vi.fn()
   render(<Harness start={'one\r\ntwo'} seen={seen} />)
