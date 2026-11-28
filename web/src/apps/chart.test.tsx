@@ -430,11 +430,14 @@ describe('the numbers behind the picture', () => {
     expect(runs([null])).toEqual([])
   })
 
-  test('few short names are all shown, many or long ones are first, middle and last', () => {
+  test('names that fit are all shown, otherwise evenly spaced ones, never more than three for many points', () => {
     expect(axisPicks(4, 6)).toEqual([0, 1, 2, 3])
     expect(axisPicks(7, 3)).toEqual([0, 3, 6])
-    expect(axisPicks(4, 14)).toEqual([0, 1, 3])
+    expect(axisPicks(12, 3)).toEqual([0, 6, 11])
+    expect(axisPicks(4, 14)).toEqual([0, 3])
+    expect(axisPicks(5, 14)).toEqual([0, 4])
     expect(axisPicks(2, 14)).toEqual([0, 1])
+    expect(axisPicks(6, 60)).toEqual([0])
   })
 
   test('reading takes only own properties and keeps the series in step with the points', () => {

@@ -125,8 +125,10 @@ export function runs(values: readonly (number | null)[]): Run[] {
   return out
 }
 
-export function axisPicks(count: number, longest: number, width = 272, charWidth = 6.2): number[] {
-  const all = Array.from({ length: count }, (_, i) => i)
-  if (count <= 6 && longest * charWidth <= width / count) return all
-  return count > 2 ? [0, Math.floor((count - 1) / 2), count - 1] : all
+export function axisPicks(count: number, longest: number, width = 272, charWidth = 6.2, gap = 10): number[] {
+  const room = Math.floor((width + gap) / (longest * charWidth + gap))
+  const wanted = Math.max(1, Math.min(count, count > 6 ? Math.min(room, 3) : room))
+  if (wanted >= count) return Array.from({ length: count }, (_, i) => i)
+  if (wanted === 1) return [0]
+  return Array.from({ length: wanted }, (_, i) => Math.round((i * (count - 1)) / (wanted - 1)))
 }
