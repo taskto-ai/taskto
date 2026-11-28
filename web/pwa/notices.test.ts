@@ -34,3 +34,15 @@ test("the notices carry the fonts' licence and copyright line", () => {
   expect(text).toContain('Copyright 2020 The JetBrains Mono Project Authors')
   expect(text).toContain('SIL OPEN FONT LICENSE Version 1.1')
 })
+
+test('the notices carry JSZip under the MIT licence it is used under, and name the Word renderer as Apache-2.0', () => {
+  const text = thirdPartyNotices(root)
+  const read = (name: string) =>
+    JSON.parse(readFileSync(join(root, 'node_modules', name, 'package.json'), 'utf8')) as { version: string }
+  expect(text).toContain(`jszip ${read('jszip').version} (MIT, chosen from MIT OR GPL-3.0-or-later)`)
+  expect(text).toContain('Copyright (c) 2009-2016 Stuart Knightley, David Duponchel, Franz Buchinger, António Afonso')
+  expect(text).toContain('The above copyright notice and this permission notice shall be included in')
+  expect(text).toContain(`docx-preview ${read('docx-preview').version} (Apache-2.0)`)
+  expect(text).toContain('Copyright (c) 2016-2023 Volodymyr Baydalka')
+  expect(text).not.toContain('GPL version 3')
+})

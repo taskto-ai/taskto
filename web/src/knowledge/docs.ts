@@ -27,6 +27,7 @@ export const isStale = (e: unknown) => e instanceof ApiError && (e.status === 40
 export const isNamedConflict = (e: unknown) =>
   e instanceof ApiError && e.status === 409 && !!e.code && e.code !== 'doc_conflict' && has(`errors.${e.code}`)
 export const isMarkdown = (path: string) => /\.md$/i.test(path)
+export const isWord = (path: string) => /\.docx$/i.test(path)
 export const isVideo = (path: string) => /\.(mp4|m4v|mov|webm|ogv)$/i.test(path)
 export const isAudio = (path: string) => /\.(mp3|m4a|aac|wav|flac|ogg|oga|opus|weba)$/i.test(path)
 

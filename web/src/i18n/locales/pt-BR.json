@@ -2593,6 +2593,12 @@
     "documents": "Documentos",
     "sizeUnversioned": "{size} · sem versões",
     "notVersioned": "Sem versões: só a versão atual fica guardada.",
+    "preview": {
+      "loading": "Carregando a prévia",
+      "tooLarge": "Este arquivo passa de {size} e não tem prévia. Baixe-o para abri-lo.",
+      "failed": "Não foi possível mostrar a prévia deste arquivo; baixe-o para abri-lo.",
+      "label": "Prévia de {name}"
+    },
     "conflict": "Ele pode ter mudado desde que você o abriu, ou o nome já está em uso.",
     "reload": "Recarregar",
     "spaces": {

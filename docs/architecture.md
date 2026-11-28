@@ -156,6 +156,31 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   ([agent-browser.md](agent-browser.md)).
 - **Install:** `docker compose up` (Go binary + agent sidecar + optional Ollama); see [install.md](install.md).
 
+## Previews of uploaded files
+
+The knowledge base shows a Word file (`.docx`) on its page, formatted and read-only, instead of
+only a Download link. It is drawn in the browser, not on the server: the bytes are the same
+`?raw=true` download a person could make (the server changes nothing, and an older version in the
+history is asked for with its `at` commit), and the library that reads them (`docx-preview`, with
+`jszip`) is a separate chunk loaded when the first such file is opened (the service worker does not
+precache it). A file is previewed only if it is within 20 MB, expands to no more than 100 MB over
+at most 2000 parts (the archive is read through once, stopping at the budget, before the renderer
+sees it), and the renderer does not draw HTML embedded in the archive. The preview of a version
+is drawn again when the file's version changes, and a download that outlives the person who
+asked for it is dropped. The alternative, converting
+with an office suite on the server, would put a very large program that parses untrusted files
+into the image, with its own sandbox, CPU per view and a cache with access rules; the browser has
+none of that to keep, and nothing leaves it.
+
+The rendered document never enters the app's DOM. It is written into an `<iframe>` whose `sandbox`
+is `allow-same-origin` alone (no scripts, forms, popups or navigation), whose own policy
+(`default-src 'none'`, inline styles, `data:` and `blob:` images, `data:` fonts) lets it fetch
+nothing, and in which a click on a link opens only an `http` or `https` address, in a new tab with
+no opener. `allow-same-origin` without `allow-scripts` is what lets the app write into the frame
+while nothing inside can run. Files over 20 MB, and files the library can't read, show a notice
+and keep the Download link. The code is `web/src/knowledge/preview/`; other formats join it by
+adding a renderer.
+
 ## Integrations with outside services
 
 An app can't call an outside service, hold a secret or receive a webhook by itself, and the
