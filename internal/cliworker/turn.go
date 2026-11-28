@@ -9,6 +9,7 @@ const maxLogBytes = 4 << 20
 
 type Turn struct {
 	spec   TurnSpec
+	acct   account
 	cancel context.CancelFunc
 
 	mu       sync.Mutex

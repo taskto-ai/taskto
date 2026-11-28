@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 type Config struct {
@@ -28,6 +30,8 @@ type Config struct {
 	Overrides        map[CLI]Overrides
 	Helper           string
 	Isolation        *Isolation
+	AdoptLegacy      bool
+	OneServer        bool
 	UnsafePrivileged bool
 
 	MaxTurns, MaxTurnsPerUser int
@@ -40,23 +44,46 @@ type Config struct {
 type Worker struct {
 	cfg Config
 
-	mu             sync.Mutex
-	turns          map[string]*Turn
-	logins         map[loginKey]*Login
-	running        int
-	perUser        map[int64]int
-	freed          chan struct{}
-	named          chan struct{}
-	closed         bool
-	wg             sync.WaitGroup
-	gates          []*gate
-	helpers        map[*helperRun]struct{}
-	groups         map[int]groupRec
-	groupWait      time.Duration
-	groupSeq       uint64
-	helperLaunches atomic.Int64
-	loginRuns      map[*Login]struct{}
-	marks          sync.Mutex
+	mu                   sync.Mutex
+	turns                map[string]*Turn
+	logins               map[loginKey]*Login
+	running              int
+	perUser              map[string]int
+	freed                chan struct{}
+	named                chan struct{}
+	closed               bool
+	wg                   sync.WaitGroup
+	gates                []*gate
+	helpers              map[*helperRun]struct{}
+	groups               map[int]groupRec
+	groupWait            time.Duration
+	groupSeq             uint64
+	helperLaunches       atomic.Int64
+	helpersBuilt         atomic.Int64
+	dialHookForTest      func()
+	detachHookForTest    func() error
+	retiredHookForTest   func(identity string)
+	arrivedHookForTest   func(boot string)
+	provisionHookForTest func() error
+	handOffHookForTest   func()
+	loginRuns            map[*Login]struct{}
+	accountsMu           sync.Mutex
+	volumeLock           *os.File
+	bootsMu              sync.Mutex
+	boots                []bootEntry
+	bootSeq              int64
+	authorityLost        string
+	installation         string
+	reserved             map[string]reservation
+	reservedTop          int64
+	nextFree             int64
+	usedHomes            map[int64]bool
+	censusMu             sync.Mutex
+	accounts             map[string]accountRecord
+	unsyncedRecords      map[string]bool
+	allocateHookForTest  func() error
+	adoptHookForTest     func() error
+	browsers             Browsers
 
 	approvals     net.Listener
 	approveSocket string
@@ -67,7 +94,6 @@ var (
 	ErrUnavailable = errors.New("this CLI is not installed on the worker")
 	ErrTurnClash   = errors.New("a different turn has this ID")
 	ErrClosed      = errors.New("the worker is shutting down")
-	ErrForgotten   = errors.New("this user's CLI files were removed with their account")
 )
 
 func New(cfg Config) (*Worker, error) {
@@ -122,11 +148,14 @@ func New(cfg Config) (*Worker, error) {
 		if iso.UIDBase == 0 {
 			iso.UIDBase = 100000
 		}
-		if iso.UIDBase < minUIDBase {
-			return nil, fmt.Errorf("cliworker: the first uid must be %d or more", minUIDBase)
+		if err := checkUIDBase(iso.UIDBase); err != nil {
+			return nil, err
 		}
-		if iso.Passwd == "" {
-			iso.Passwd = "/etc/passwd"
+		if err := checkPidfds(); err != nil {
+			return nil, fmt.Errorf("cliworker: %w", err)
+		}
+		if iso.UserFile == "" {
+			iso.UserFile = "/etc/passwd"
 		}
 		if iso.Group == "" {
 			iso.Group = "/etc/group"
@@ -136,15 +165,21 @@ func New(cfg Config) (*Worker, error) {
 	if err := os.MkdirAll(cfg.Layout.Root, rootMode); err != nil {
 		return nil, err
 	}
+	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[string]int{}, accounts: map[string]accountRecord{}, freed: make(chan struct{}), named: make(chan struct{}), helpers: map[*helperRun]struct{}{}, groups: map[int]groupRec{}, groupWait: defaultGroupWait, loginRuns: map[*Login]struct{}{}}
+	if err := w.openVolume(); err != nil {
+		w.closeVolume()
+		return nil, err
+	}
 	if err := os.Chmod(cfg.Layout.Root, rootMode); err != nil {
+		w.closeVolume()
 		return nil, err
 	}
-	w := &Worker{cfg: cfg, turns: map[string]*Turn{}, logins: map[loginKey]*Login{}, perUser: map[int64]int{}, freed: make(chan struct{}), named: make(chan struct{}), helpers: map[*helperRun]struct{}{}, groups: map[int]groupRec{}, groupWait: defaultGroupWait, loginRuns: map[*Login]struct{}{}}
-	if err := os.MkdirAll(w.stateDir(), 0o700); err != nil {
+	if err := w.sweep(); err != nil {
+		w.closeVolume()
 		return nil, err
 	}
-	w.sweep()
 	if err := w.listenApprovals(); err != nil {
+		w.closeVolume()
 		return nil, err
 	}
 	return w, nil
@@ -152,12 +187,42 @@ func New(cfg Config) (*Worker, error) {
 
 func (w *Worker) stateDir() string { return filepath.Join(w.cfg.Layout.Root, ".worker") }
 
+type Browsers interface {
+	StopAll(ctx context.Context, a cliowner.Account) error
+	Unforget(again func(identity string) bool, before time.Time)
+}
+
+func (w *Worker) SetBrowsers(b Browsers) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.browsers = b
+}
+
+func (w *Worker) browserStopper() Browsers {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.browsers
+}
+
 func (w *Worker) Available(cli CLI) bool { return w.cfg.Bins[cli] != "" }
 
-func (w *Worker) sweep() {
+func (w *Worker) sweep() error {
 	if iso := w.cfg.Isolation; iso != nil {
-		if n := killUIDs(iso.UIDBase); n > 0 {
+		n, err := killUIDs(iso.UIDBase)
+		if n > 0 {
 			slog.Warn("cliworker: stopped the CLI processes an earlier worker left running", "processes", n)
+		}
+		if err != nil {
+			return fmt.Errorf("cliworker: stopping what an earlier worker left running: %w", err)
+		}
+	}
+	if err := w.sweepDetached(); err != nil {
+		return err
+	}
+	partial, _ := filepath.Glob(filepath.Join(w.cfg.Layout.Root, provisionPrefix+"*"))
+	for _, p := range partial {
+		if err := removeTree(p, w.cfg.Isolation != nil); err != nil {
+			return fmt.Errorf("cliworker: removing a home an earlier worker was making: %w", err)
 		}
 	}
 	records, _ := filepath.Glob(filepath.Join(w.stateDir(), "*.pid"))
@@ -174,6 +239,7 @@ func (w *Worker) sweep() {
 		}
 		_ = os.Remove(rec)
 	}
+	return nil
 }
 
 func parseRecord(s string) (pid int, start string, ok bool) {
@@ -193,25 +259,26 @@ func (w *Worker) Start(spec TurnSpec) (t *Turn, attached bool, err error) {
 	if bin == "" {
 		return nil, false, ErrUnavailable
 	}
+	acct, err := w.resolve(spec.Account(), true)
+	if err != nil {
+		return nil, false, err
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
 		return nil, false, ErrClosed
 	}
-	if w.isForgotten(spec.User) {
-		return nil, false, ErrForgotten
-	}
-	if w.gated(spec.User, spec.CLI, spec.Slot) {
-		return nil, false, ErrRemoving
+	if err := w.admissible(acct, spec.CLI, spec.Slot); err != nil {
+		return nil, false, err
 	}
 	if old, ok := w.turns[spec.ID]; ok {
-		if old.spec.User != spec.User || old.spec.CLI != spec.CLI || old.spec.Slot != spec.Slot || old.spec.Conversation != spec.Conversation {
+		if old.acct.id != acct.id || old.spec.User != spec.User || old.spec.CLI != spec.CLI || old.spec.Slot != spec.Slot || old.spec.Conversation != spec.Conversation {
 			return nil, false, ErrTurnClash
 		}
 		return old, true, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	t = &Turn{spec: spec, cancel: cancel, changed: make(chan struct{}), ended: make(chan struct{})}
+	t = &Turn{spec: spec, acct: acct, cancel: cancel, changed: make(chan struct{}), ended: make(chan struct{})}
 	w.turns[spec.ID] = t
 	w.wg.Add(1)
 	go func() {
@@ -235,8 +302,25 @@ func (w *Worker) Turn(id string) (*Turn, bool) {
 	return t, ok
 }
 
+func (w *Worker) TurnOf(a cliowner.Account, id string) (*Turn, bool) {
+	if w.retired(a.Identity) {
+		return nil, false
+	}
+	t, ok := w.Turn(id)
+	if !ok || t.acct.id != a.Identity || t.spec.User != a.User {
+		return nil, false
+	}
+	return t, true
+}
+
 func (w *Worker) Stop(id string) {
 	if t, ok := w.Turn(id); ok {
+		t.stop()
+	}
+}
+
+func (w *Worker) StopTurnOf(a cliowner.Account, id string) {
+	if t, ok := w.TurnOf(a, id); ok {
 		t.stop()
 	}
 }
@@ -257,15 +341,23 @@ func (w *Worker) Close() {
 	}
 	w.closeApprovals()
 	w.wg.Wait()
+	w.closeVolume()
+}
+
+func (w *Worker) closeVolume() {
+	if w.volumeLock != nil {
+		_ = w.volumeLock.Close()
+		w.volumeLock = nil
+	}
 }
 
 func (w *Worker) acquire(ctx context.Context, t *Turn) error {
 	waiting := false
 	for {
 		w.mu.Lock()
-		if w.running < w.cfg.MaxTurns && w.perUser[t.spec.User] < w.cfg.MaxTurnsPerUser {
+		if w.running < w.cfg.MaxTurns && w.perUser[t.acct.id] < w.cfg.MaxTurnsPerUser {
 			w.running++
-			w.perUser[t.spec.User]++
+			w.perUser[t.acct.id]++
 			w.mu.Unlock()
 			return nil
 		}
@@ -283,12 +375,12 @@ func (w *Worker) acquire(ctx context.Context, t *Turn) error {
 	}
 }
 
-func (w *Worker) release(user int64) {
+func (w *Worker) release(id string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.running--
-	if w.perUser[user]--; w.perUser[user] <= 0 {
-		delete(w.perUser, user)
+	if w.perUser[id]--; w.perUser[id] <= 0 {
+		delete(w.perUser, id)
 	}
 	close(w.freed)
 	w.freed = make(chan struct{})
@@ -306,7 +398,7 @@ func (w *Worker) run(ctx context.Context, t *Turn, bin string) {
 		t.finish(Event{Type: EventDone, Status: StatusStopped, Text: "stopped before it started"})
 		return
 	}
-	defer w.release(t.spec.User)
+	defer w.release(t.acct.id)
 	spec := t.spec
 	done, missing := w.runCLI(ctx, t, bin, spec)
 	if missing && ctx.Err() == nil {
@@ -330,7 +422,7 @@ func (w *Worker) runCLI(ctx context.Context, t *Turn, bin string, spec TurnSpec)
 		return Event{Type: EventDone, Status: StatusFailed, Text: "the CLI could not start: " + msg}, false
 	}
 	c := turnCommand(spec)
-	cmd, header, err := w.helperCommand(spec.User, helperRequest{
+	cmd, header, err := w.helperCommand(t.acct, helperRequest{
 		Op: "exec", CLI: spec.CLI, Slot: spec.Slot, Proxy: spec.Proxy, Tools: spec.Tools, Bin: bin, Args: c.args, Conversation: spec.Conversation, PromptFile: c.promptFile,
 	})
 	if err != nil {
@@ -348,7 +440,10 @@ func (w *Worker) runCLI(ctx context.Context, t *Turn, bin string, spec TurnSpec)
 		return failed("%v", err)
 	}
 	pgid := cmd.Process.Pid
-	w.trackGroup(pgid, spec.User, spec.CLI, spec.Slot)
+	defer w.trackGroup(pgid, t.acct.id, spec.CLI, spec.Slot)()
+	if !turnIDPattern.MatchString(spec.ID) {
+		return failed("invalid turn ID")
+	}
 	record := filepath.Join(w.stateDir(), spec.ID+".pid")
 	if start, err := startTime(pgid); err == nil {
 		if err := os.WriteFile(record, []byte(strconv.Itoa(pgid)+" "+start+"\n"), 0o600); err != nil {
@@ -442,7 +537,7 @@ func (w *Worker) runCLI(ctx context.Context, t *Turn, bin string, spec TurnSpec)
 		if thread == "" {
 			thread = spec.Session
 		}
-		if limits := w.codexLimits(spec.User, spec.Slot, thread); len(limits) > 0 {
+		if limits := w.codexLimits(t.acct, spec.Slot, thread); len(limits) > 0 {
 			t.emit(Event{Type: EventUsage, Limits: limits})
 		}
 	}

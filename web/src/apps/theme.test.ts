@@ -35,6 +35,7 @@ const OWN = [
   'Show',
   'SignatureInput',
   'Stat',
+  'Table',
 ]
 
 const CONTROLS = [

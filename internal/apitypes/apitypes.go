@@ -9,10 +9,13 @@ import (
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/desk"
 	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/notifications"
+	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/updatestatus"
 )
 
@@ -51,6 +54,7 @@ func Roots() []Root {
 		root[conversations.Conversation]("Conversation"),
 		root[conversations.Members]("ConversationMembers"),
 		root[conversations.Member]("ConversationMember"),
+		root[conversations.NoteReply]("NoteReply"),
 		root[notifications.Item]("NotificationItem"),
 		root[notifications.List]("NotificationList"),
 
@@ -71,6 +75,11 @@ func Roots() []Root {
 		root[apps.HomeItem]("HomeItem"),
 		root[apps.HomeView]("HomeView"),
 		root[apps.AvailableApp]("AvailableApp"),
+		root[desk.Desk]("Desk"),
+		root[desk.DeskList]("DeskList"),
+		root[desk.DeskSummary]("DeskSummary"),
+		root[desk.LayoutWrite]("DeskLayoutWrite"),
+		root[desk.DeskChanged]("DeskChanged"),
 
 		root[integrations.Integration]("Integration"),
 		root[integrations.SpaceIntegration]("SpaceIntegration"),
@@ -79,5 +88,7 @@ func Roots() []Root {
 
 		root[updatestatus.Report]("UpdateReport"),
 		root[updatestatus.Requested]("UpdateRequested"),
+		root[cliaccounts.WorkerStatus]("CLIWorkerStatus"),
+		root[search.PaletteResults]("SearchPalette"),
 	}
 }

@@ -15,6 +15,7 @@ import (
 type Runtime interface {
 	CreateConversationOn(ctx context.Context, model agentrt.ModelRef) (int64, error)
 	Submit(ctx context.Context, conversation int64, in agentrt.Input) (int64, error)
+	Note(ctx context.Context, conversation int64, n agentrt.NoteInput) (int64, error)
 	Wait(ctx context.Context, submission int64) (agentrt.Settled, error)
 	Messages(ctx context.Context, conversation int64) ([]agentrt.Message, error)
 	Model(ctx context.Context, conversation int64) (agentrt.ModelRef, error)
@@ -174,8 +175,8 @@ func (s *Service) list(ctx context.Context, workspace, user int64, archived, sha
 
 func (s *Service) insert(ctx context.Context, workspace, user, agentID int64, title string) (Conversation, error) {
 	var id int64
-	if err := s.db.QueryRowContext(ctx, `INSERT INTO conversations (workspace_id, owner_id, agent_id, title)
-		VALUES (?, ?, ?, ?) RETURNING id`, workspace, user, agentID, title).Scan(&id); err != nil {
+	if err := s.db.QueryRowContext(ctx, `INSERT INTO conversations (workspace_id, owner_id, agent_id, title, usage_mark)
+		VALUES (?, ?, ?, ?, 0) RETURNING id`, workspace, user, agentID, title).Scan(&id); err != nil {
 		return Conversation{}, err
 	}
 	return s.reach(ctx, workspace, user, id)

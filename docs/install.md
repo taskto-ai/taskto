@@ -703,7 +703,12 @@ docker compose --profile cli up -d --build
   `TASKTO_CLI_WORKER_MEMORY` (default `4g`) and `TASKTO_CLI_WORKER_CPUS` (default `2`).
 - Each user's CLI logins and sessions are on the `cli-homes` volume, which `taskto backup`
   doesn't cover. If it is lost, users sign in again, and their conversations start new CLI
-  sessions with the conversation so far.
+  sessions with the conversation so far. The worker keeps each account's files in a home of its
+  own, by an identity the account keeps for good and no other is ever given, never by its user
+  number: after a restore of the server's data gives a number again, the new person gets a new,
+  empty home and never someone else's logins ([cli-workers.md](cli-workers.md#accounts-and-their-homes)).
+  At every start the server tells the worker which accounts exist, and the worker removes the
+  homes of the others.
 - The worker needs the internet to reach Anthropic, OpenAI and xAI. The server's egress
   policies don't apply to it. It reaches the internet and nothing else: it is alone on a
   network of its own (`worker`, the bridge `taskto-worker`), so the other services don't
@@ -721,6 +726,61 @@ docker compose --profile cli up -d --build
   its profile in their directory on `cli-homes`. `taskto cli-worker -browser-idle 5m` sets how
   long a browser runs unused, and `-browser-max 4` how many run at once. Chromium takes
   about 300–500 MB each, so raise `TASKTO_CLI_WORKER_MEMORY` with `-browser-max`.
+
+### One installation per CLI worker
+
+The CLI worker's volume (`cli-homes`) belongs to one taskto installation: the first server whose
+census reaches it ([cli-workers.md](cli-workers.md#one-installation)). A restore of the same
+server's data is the same installation. A new data directory (a move to another host, a fresh
+install) is another: the worker refuses its census, deletions and new accounts until an operator
+hands the volume over (`taskto cli-worker trust-server -boot <boot> -installation <installation>`,
+with both values from Settings → About or the server's log; [cli-workers.md](cli-workers.md#authority-lost)
+has the steps). Stop the old server before the new one starts, and never run two copies of one
+data directory against one worker: to the worker they are one installation.
+
+### Upgrading to account homes
+
+The version that keys the CLI worker's files by each account's identity (account homes,
+[cli-workers.md](cli-workers.md#accounts-and-their-homes)) changes the worker's directory once:
+
+- **Container mode** (`-cli-workers container`): keep the worker's `-uid-base` for this upgrade
+  (changing it needs a new, empty worker volume: the worker doesn't start when a directory from
+  before belongs to a uid the new base would give a new account). The directories the worker made
+  before (`/homes/u<number>`) are removed at the first start, never handed to anyone, since nothing on
+  the volume can tell an upgrade from a restore of the server's data that gave numbers again.
+  Each person loses, once, their **CLI sign-ins** (they sign in to Claude Code, Codex and Grok
+  Build again in Settings), the **working files** the CLIs left in their conversations'
+  directories, and their **agent browser's personal profile** (its cookies and sign-ins to
+  websites). Conversations themselves are the server's and stay: their next CLI turn starts a new
+  session with the conversation so far.
+- **Local mode** (`-cli-workers local`): no file is lost. The first request of each account moves
+  its directory (`<data>/cli/u<number>`) to its home, once, and a stop in the middle is finished
+  by the next request. A conversation's working directory moves with it, and Claude Code finds a
+  session by its working directory: a conversation's next turn may start a new CLI session with
+  the conversation so far instead of resuming the one from before the upgrade.
+
+To go back to an older version afterwards, the steps depend on the mode.
+
+**Container mode:** start the older version with the worker on a
+**new, empty** `cli-homes` volume and keep the upgraded one aside (detached, not mounted by
+anything): an older worker reads directories by user number and must never see the homes. People
+sign in to their CLIs again on the older version. **Upgrading again does not bring the kept
+volume back.** The database you rolled back to is from before account homes: it has no account
+identities and no installation, and upgrading it again makes new ones, which none of the kept
+homes has, and the kept volume belongs to the first upgrade's installation, so the worker would
+refuse it. After the second upgrade the worker starts on the empty volume, and people sign in to
+their CLIs once more. The kept volume is usable only with the database it goes with: to get those
+homes back, restore the backup the upgraded server made (the one from right before the rollback)
+instead of upgrading the rolled-back data again, and give that server the kept volume. Keep it
+detached until you have decided, and delete it then.
+
+**Local mode:** the CLI files are in the data directory, so the backup from before the upgrade
+already holds `<data>/cli` as the older version left it, matched to its database. In local mode,
+leave the restored `<data>/cli` as it is: the older version finds everyone's sign-ins and files
+there, and upgrading again moves them to homes as the first upgrade did. Don't move it aside, and
+there is no worker volume to keep. What the CLIs did after the upgrade is in the upgraded data
+directory, which the rollback replaces; it comes back only by restoring the upgraded server's own
+backup, the one from right before the rollback, instead.
 
 ### Agents never run as root
 
@@ -861,7 +921,7 @@ mappings and everything the CLI worker kept for them (including the agent browse
 agent runtime's providers file and key files (which hold their provider accounts), their unfinished
 photo uploads in shared apps, their access tokens, sessions, push subscriptions, notification
 settings, email ledger, two-factor data and single sign-on identities, the invitations to their
-address, the search index's rows for all of it, and the account.
+address, the search index's rows for all of it, their daily agent usage rows, and the account.
 
 A private space's files go under the knowledge base's own lock for that space, with the apps'
 photo writes in it held too: a write already under way finishes first, and one that comes after
@@ -921,8 +981,8 @@ is a decision about the workspace's records, not an account's.
   It also rewrites the runtime's providers file, stops the
   person's agent browsers (none starts meanwhile, and their live views close) and, once their
   processes are gone, removes their profile, and then removes the CLI worker's directory of the
-  person, which is left alone while a browser step is still recorded: `<data>/cli/u<id>` if the
-  local worker ever ran here, and
+  person, which is left alone while a browser step is still recorded: the account's home in
+  `<data>/cli/` if the local worker ever ran here, and
   the worker container's own copy if the container worker ever did, which only that worker can
   remove, so that step waits for a start with `-cli-workers container` (a start in local mode doesn't
   clear it). The server records each kind of worker it starts (`cli_worker_history`); an install that
@@ -1294,10 +1354,33 @@ invitations (they expire, and accepting one needs the address's own account), an
 and two-factor codes, which are as the backup had them (a person who changed them since changes
 them again).
 
+**The CLI worker's homes are tidied at the next start.** The `cli-homes` volume isn't in the
+backup, so it may hold the CLI logins, files and browser profiles of people who had user numbers
+after the backup, which the restored server gives again. None of it is ever handed to someone else:
+the worker keeps each account's files in a home of its own, by the account's identity, so a person
+given one of those numbers gets a new, empty home from their first request, before anything is
+tidied. At its next start the server tells the worker which accounts exist, and the worker removes
+the homes of the others ([cli-workers.md](cli-workers.md#accounts-and-their-homes)).
+
+**A backup from before account homes** (made by a version before migration `0062`, which gives
+each account its identity and the server its installation) has neither: when the upgraded server
+restores it, the migration makes new ones, which no home on the worker's volume has, and the
+volume belongs to the installation from before the restore. The worker then refuses the restored
+server's census, deletions and new accounts as another installation's
+([cli-workers.md](cli-workers.md#one-installation)). The homes on the volume can't be used with
+that database: start the worker on a new, empty `cli-homes` volume (keep the old one aside,
+detached, if you may want its files: they go only with the database they came from), and in
+container mode everyone signs in to their CLIs once more and loses the CLIs' working files and the
+agent browser's personal profile (their conversations stay, from the backup). Nothing reaches
+anyone else's: it is the safe outcome of a backup that can't say who had which home.
+
 From an archive file:
 
 `docker compose down` stops the backup schedule too when its profile is in `.env`'s
-`COMPOSE_PROFILES`; it uses the data volume, which can't be removed while it runs.
+`COMPOSE_PROFILES`; it uses the data volume, which can't be removed while it runs. The
+`docker compose up -d` at the end starts again the profiles `COMPOSE_PROFILES` names: with the CLI
+worker container, keep `cli` among them (or add `--profile cli`), or the server waits for a worker
+that isn't there, and the CLIs and the agent browser answer `cli_worker_not_ready` until it starts.
 
 ```sh
 docker compose down                       # stops the server; the volume stays
@@ -1411,6 +1494,15 @@ installed with [deploy/INSTALL.md](../deploy/INSTALL.md) upgrades itself every n
 ([Automatic updates](#automatic-updates)); when an upgrade fails after the new server has
 started, it stops and tells you, and the way back is the by-hand one that follows.
 
+**CLI sign-ins after the upgrade to account homes.** From the version in which the CLI worker keeps
+each account's files in a home of its own ([Upgrading to account homes](#upgrading-to-account-homes)),
+a container worker no longer hands over a directory it made before: nothing can tell an upgrade
+from a restore made by an older version. So after that upgrade each person signs in to their CLIs
+once more (Settings → CLI accounts), and loses the CLIs' working files and the agent browser's
+personal profile; their conversations go on, with new CLI sessions. In local mode every file is
+kept (a conversation's next turn may still start a new CLI session). **Going back** from that version to an older one, in container mode, the older worker must
+start on a new, empty `cli-homes` volume: the roll back below says how.
+
 **Upgrade**, say from v0.1.0 to v0.2.0:
 
 ```sh
@@ -1429,17 +1521,62 @@ pull` and `docker compose up -d --no-build` instead of `--build`. Without the pr
 The old image stays as `taskto:v0.1.0` until you remove it.
 
 **Roll back** to v0.1.0 with the data from before the upgrade (anything written since is
-lost):
+lost). Set `TASKTO_VERSION=v0.1.0` in `.env` first. The commands run as one script that stops at
+the first one that fails (`bash -euo pipefail`): nothing after a failed step runs, so a volume is
+never emptied after its copy failed. If v0.1.0 is from before
+[account homes](#upgrading-to-account-homes) and the CLI workers run in container mode, the older
+worker must start on a new, empty `cli-homes` volume: an older worker reads directories by user
+number and must never see the homes. Set `HOMES=1` for that (in container mode only): the script
+then takes a backup of the upgraded server (`after-v0.2.0.tar.gz`) while it still runs. If that
+file already exists, the script stops before it changes anything and tells you: it never writes
+over a backup, and never picks a second name, so move the old one away first. Otherwise it writes
+`after-v0.2.0.tar.gz.partial`, checks it (`gzip -t`: the script stops if it is empty or
+damaged), and renames it into place, stopping if the rename did nothing or the
+backup in place doesn't pass the same check (a directory there does not). It then stops the whole
+deployment, the CLI
+worker container too (`--profile cli`, whether or not `COMPOSE_PROFILES` names it), with the
+upgraded version's own `compose.yaml`, and only then checks out the old one. It keeps the
+upgraded volume aside, in a new volume named for the time (`taskto_cli-homes_kept_<time>`,
+mounted by nothing), and empties the one the worker mounts only once the copy has succeeded,
+before anything starts. That backup is the only one that matches the kept volume: keep the two
+together.
 
 ```sh
+HOMES=0   # 1: back to a version from before account homes, in container mode
+bash -euo pipefail -s "$HOMES" <<'EOF'
+if [ "$1" = 1 ]; then PROFILE="--profile cli"; else PROFILE=""; fi
+if [ "$1" = 1 ]; then
+  AFTER=after-v0.2.0.tar.gz
+  if [ -e "$AFTER" ]; then echo "$AFTER already exists: move it away first" >&2; exit 1; fi
+  docker compose exec -T taskto taskto backup - > "$AFTER.partial" </dev/null
+  gzip -t "$AFTER.partial"
+  mv -n "$AFTER.partial" "$AFTER"
+  test ! -e "$AFTER.partial"
+  gzip -t "$AFTER"
+fi
+docker compose $PROFILE down </dev/null
 git checkout v0.1.0
-# in .env: TASKTO_VERSION=v0.1.0
-docker compose down
-docker volume rm taskto_data
-docker compose build
+docker volume rm taskto_data </dev/null
+docker compose $PROFILE build </dev/null
 docker compose run --rm -T taskto restore - < before-v0.2.0.tar.gz
-docker compose up -d
+if [ "$1" = 1 ]; then
+  KEPT="taskto_cli-homes_kept_$(date +%Y%m%d%H%M%S)"
+  docker run --rm </dev/null -v taskto_cli-homes:/from -v "$KEPT":/to alpine cp -a /from/. /to/
+  docker run --rm </dev/null -v taskto_cli-homes:/homes alpine find /homes -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  echo "the upgraded worker's volume is kept in $KEPT; its server's backup is $AFTER"
+fi
+docker compose $PROFILE up -d </dev/null
+EOF
 ```
+
+`HOMES=1` is for container mode only. Upgrading the rolled-back data again doesn't bring the kept
+volume back: that data gets new account identities and a new installation, which the kept homes
+don't have ([Upgrading to account homes](#upgrading-to-account-homes)). The kept volume goes back
+only with the upgraded server's own backup, `after-v0.2.0.tar.gz`, the one file the script took
+right before the rollback. In local mode,
+leave the restored `<data>/cli` as it is, with `HOMES=0`: the backup from before the upgrade
+holds it as the older version left it, matched to its database, so people keep their CLI
+sign-ins and files from then.
 
 The base images are pinned by digest in the `Dockerfile`, so rebuilding a version uses the
 same bases; their security updates come with new versions.
