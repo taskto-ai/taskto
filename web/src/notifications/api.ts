@@ -8,6 +8,7 @@ export type NotificationKind =
   | 'card_due'
   | 'card_overdue'
   | 'app_effect_failed'
+  | 'app_schedule_failed'
   | 'integration_event'
   | 'changed'
 
@@ -42,6 +43,7 @@ export type EmailKind =
   | 'card_due'
   | 'card_overdue'
   | 'app_effect_failed'
+  | 'app_schedule_failed'
 export const EMAIL_KINDS: EmailKind[] = [
   'card_assigned',
   'card_comment',
@@ -49,6 +51,7 @@ export const EMAIL_KINDS: EmailKind[] = [
   'card_due',
   'card_overdue',
   'app_effect_failed',
+  'app_schedule_failed',
 ]
 export type EmailAddress = { email: string; state: 'unverified' | 'pending' | 'verified' }
 export type EmailChoices = {

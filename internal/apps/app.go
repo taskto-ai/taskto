@@ -20,7 +20,7 @@ const ProtocolVersion = "v0.9"
 
 const CatalogID = "https://taskto.ai/catalogs/apps/v1.json"
 
-const DefinitionVersion = 3
+const DefinitionVersion = 4
 
 const firstVersion = 1
 
@@ -39,6 +39,7 @@ type Definition struct {
 	Series            map[string]Series          `json:"series,omitempty"`
 	Contributions     *Contributions             `json:"contributions,omitempty"`
 	Integrations      map[string]IntegrationSlot `json:"integrations,omitempty"`
+	Schedules         map[string]Schedule        `json:"schedules,omitempty"`
 }
 
 type Collection struct {
@@ -433,6 +434,16 @@ func (d Definition) Check() (Definition, error) {
 	if usesIntegrations && d.DefinitionVersion < integrationsVersion {
 		return Definition{}, invalidf("definition_version %d can't use integrations: they are for version %d (leave definition_version out for the current one)",
 			d.DefinitionVersion, integrationsVersion)
+	}
+	if out.Schedules, err = d.checkSchedules(out); err != nil {
+		return Definition{}, err
+	}
+	if len(out.Schedules) > 0 {
+		if d.DefinitionVersion < schedulesVersion {
+			return Definition{}, invalidf("definition_version %d can't use schedules: they are for version %d (leave definition_version out for the current one)",
+				d.DefinitionVersion, schedulesVersion)
+		}
+		out.Requires = mergeSorted(out.Requires, []string{SchedulesCapability})
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {

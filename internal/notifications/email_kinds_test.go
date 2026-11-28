@@ -86,7 +86,7 @@ func TestEveryKindThatIsMailedHasItsOwnChoiceOffByDefault(t *testing.T) {
 	got := decode[notifications.EmailChoices](t, w.bob.do(http.MethodGet, w.emailPath(), nil))
 	want := []string{
 		notifications.KindCardAssigned, notifications.KindCardComment, notifications.KindCardMention,
-		notifications.KindCardDue, notifications.KindCardOverdue, notifications.KindAppEffectFailed,
+		notifications.KindCardDue, notifications.KindCardOverdue, notifications.KindAppEffectFailed, notifications.KindAppScheduleFailed,
 	}
 	kinds := notifications.EmailKinds()
 	slices.Sort(kinds)

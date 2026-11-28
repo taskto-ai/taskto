@@ -1,5 +1,6 @@
 {
   "capabilities": [
+    "app.schedules",
     "component.BarcodeInput",
     "component.Button",
     "component.Card",
@@ -216,7 +217,7 @@
       "weight"
     ]
   },
-  "definition_version": 3,
+  "definition_version": 4,
   "functions": [
     "and",
     "email",

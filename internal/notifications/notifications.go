@@ -20,14 +20,15 @@ import (
 )
 
 const (
-	KindCardAssigned     = "card_assigned"
-	KindCardComment      = "card_comment"
-	KindCardMention      = "card_mention"
-	KindAppEffectFailed  = "app_effect_failed"
-	KindCardDue          = "card_due"
-	KindCardOverdue      = "card_overdue"
-	KindIntegrationEvent = "integration_event"
-	KindChanged          = "changed"
+	KindCardAssigned      = "card_assigned"
+	KindCardComment       = "card_comment"
+	KindCardMention       = "card_mention"
+	KindAppEffectFailed   = "app_effect_failed"
+	KindAppScheduleFailed = "app_schedule_failed"
+	KindCardDue           = "card_due"
+	KindCardOverdue       = "card_overdue"
+	KindIntegrationEvent  = "integration_event"
+	KindChanged           = "changed"
 )
 
 const (
@@ -63,7 +64,7 @@ var errUnknownKind = errors.New("notifications: unknown kind")
 
 func Add(ctx context.Context, tx *sql.Tx, n Notice) error {
 	switch n.Kind {
-	case KindCardAssigned, KindCardComment, KindCardMention, KindAppEffectFailed, KindCardDue, KindCardOverdue, KindIntegrationEvent:
+	case KindCardAssigned, KindCardComment, KindCardMention, KindAppEffectFailed, KindAppScheduleFailed, KindCardDue, KindCardOverdue, KindIntegrationEvent:
 	default:
 		return errUnknownKind
 	}

@@ -518,6 +518,40 @@ func TestAnAppsFailedEffectNotificationNamesTheAppOnlyWhileItIsViewable(t *testi
 	}
 }
 
+func TestAScheduledRunsFailureNamesTheAppOnlyWhileItIsViewable(t *testing.T) {
+	w := newWorld(t, true)
+	var app int64
+	if err := w.db.QueryRow(`INSERT INTO apps (space_id, name, definition) VALUES (?, 'Standup', '{}') RETURNING id`, w.space.ID).Scan(&app); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := w.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	notice := notifications.Notice{UserID: w.bob.id, WorkspaceID: w.ws, Kind: notifications.KindAppScheduleFailed,
+		Ref: notifications.Ref{Space: w.space.ID, App: app}, DedupeKey: "schedule:job:1"}
+	for i := 0; i < 2; i++ {
+		if err := notifications.Add(context.Background(), tx, notice); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	got := w.inbox(w.bob, "").Notifications
+	if len(got) != 1 || got[0].Kind != notifications.KindAppScheduleFailed || got[0].Params["app"] != "Standup" ||
+		got[0].Target.Section != "apps" || got[0].Target.Item != fmt.Sprintf("%d-%d", w.space.ID, app) {
+		t.Fatalf("inbox = %+v", got)
+	}
+	if _, err := w.db.Exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, w.space.ID, w.bob.id); err != nil {
+		t.Fatal(err)
+	}
+	got = w.inbox(w.bob, "").Notifications
+	if len(got) != 1 || got[0].Kind != notifications.KindChanged || len(got[0].Params) != 0 {
+		t.Fatalf("inbox after losing the space = %+v", got)
+	}
+}
+
 func TestAddRefusesWhoIsNotInTheWorkspaceAndUnknownKinds(t *testing.T) {
 	w := newWorld(t, true)
 	tx, _ := w.db.Begin()

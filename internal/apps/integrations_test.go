@@ -72,8 +72,8 @@ func TestTheInvoiceDeclarationIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.DefinitionVersion != 3 {
-		t.Fatalf("definition_version = %d, want 3", d.DefinitionVersion)
+	if d.DefinitionVersion != DefinitionVersion {
+		t.Fatalf("definition_version = %d, want %d", d.DefinitionVersion, DefinitionVersion)
 	}
 	if !slices.Contains(d.Requires, "effect.create_payment_link") {
 		t.Fatalf("requires = %v", d.Requires)

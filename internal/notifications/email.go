@@ -38,7 +38,7 @@ const (
 )
 
 func EmailKinds() []string {
-	return []string{KindCardAssigned, KindCardComment, KindCardMention, KindCardDue, KindCardOverdue, KindAppEffectFailed}
+	return []string{KindCardAssigned, KindCardComment, KindCardMention, KindCardDue, KindCardOverdue, KindAppEffectFailed, KindAppScheduleFailed}
 }
 
 func emailKind(kind string) bool {

@@ -119,6 +119,9 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 		platform.Payments = opts.Integrations
 	}
 	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(platform)
+	if opts.Scheduler != nil {
+		appsService.WithScheduler(opts.Scheduler)
+	}
 	if kb != nil {
 		appsService.WithSpaceHolder(kb)
 	}

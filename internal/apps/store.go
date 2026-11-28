@@ -15,6 +15,7 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/paylink"
 	"taskto.ai/taskto/internal/quota"
+	"taskto.ai/taskto/internal/schedule"
 )
 
 type Actor struct {
@@ -163,6 +164,7 @@ type Service struct {
 	quota            *quota.Service
 	deletedRetention time.Duration
 	budget           *tokenBudget
+	sched            *schedule.Service
 }
 
 type outboxHooks struct {
@@ -650,6 +652,11 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 		if err != nil {
 			return err
 		}
+		if ch.Archived != nil {
+			if err := s.syncSchedules(ctx, tx, appID, 0); err != nil {
+				return err
+			}
+		}
 		updated, err = app(ctx, tx, sp.ID, appID)
 		return err
 	})
@@ -711,6 +718,9 @@ func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, 
 			UPDATE apps SET space_id = ?, version = version + 1, updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?
 			WHERE id = ?`, to.ID, now(), a.UserID, a.Agent, via(a), appID)
 		if err != nil {
+			return err
+		}
+		if err := s.syncSchedules(ctx, tx, appID, 0); err != nil {
 			return err
 		}
 		moved, err = app(ctx, tx, to.ID, appID)
