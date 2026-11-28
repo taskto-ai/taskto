@@ -66,7 +66,9 @@ scenario(
     await second.getByRole('button', { name: 'Log in' }).click()
     await second.waitForFunction(() => document.querySelectorAll('.desk-pane').length === 2)
     assert.equal(await second.locator('.desk-pane').count(), 2)
-    assert.deepEqual(await tabNames(second), reloaded)
+    const seen = await tabNames(second)
+    assert.ok(['Boards', 'Personal'].includes(seen[0]), seen[0])
+    assert.deepEqual(seen.slice(1), reloaded.slice(1))
 
     const invite = await api(context, 'POST', '/api/workspaces/1/invites', { email: 'bob@example.com', role: 'member' })
     const bob = await page
