@@ -4,7 +4,14 @@ import { expect, test } from 'vitest'
 
 const src = resolve(__dirname)
 
-const SHELL_AND_SYNC = ['App.tsx', 'notifications/usePushSync.ts', 'shell/AccountMenu.tsx', 'shell/Shell.tsx']
+const SHELL_AND_SYNC = [
+  'App.tsx',
+  'desk/Desk.tsx',
+  'desk/Pane.tsx',
+  'notifications/usePushSync.ts',
+  'shell/AccountMenu.tsx',
+  'shell/Shell.tsx',
+]
 
 function sources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -30,7 +37,7 @@ function importsModuleNavigate(source: string): boolean {
   return [...imports].some((m) => (m[1] ?? '').split(',').some((name) => importedName(name) === 'navigate'))
 }
 
-test('only the shell, the app and the notification sync use the router’s own navigate', () => {
+test('only the shell, the desk, the app and the notification sync use the router’s own navigate', () => {
   const users = sources(src)
     .filter((file) => importsModuleNavigate(readFileSync(file, 'utf8')))
     .map((file) => relative(src, file))

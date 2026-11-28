@@ -2526,6 +2526,16 @@
       "offline": "Offline, the app's screens still open, but your conversations, documents and boards need the connection to the server."
     }
   },
+  "desk": {
+    "tabs": "Tabs",
+    "closeTab": "Close {title}",
+    "newTab": "New tab",
+    "resize": "Resize panes",
+    "splitInline": "Split to the side",
+    "splitBlock": "Split below",
+    "saveFailed": "Your desk layout could not be saved.",
+    "loadFailed": "Your saved desk could not be loaded."
+  },
   "shell": {
     "sections": {
       "conversations": "Conversations",

@@ -36,6 +36,14 @@ export const ALLOWED = new Map([
     },
   ],
   [
+    'src/desk/TabStrip.tsx',
+    {
+      button: 1,
+      reason:
+        'a tab of a pane, whose close button is its sibling and not its child (a button cannot hold a button), with the roving tabindex and arrow keys of a tab list; Tabs draws tabs with no close button',
+    },
+  ],
+  [
     'src/boards/BoardCard.tsx',
     {
       button: 1,

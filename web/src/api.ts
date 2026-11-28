@@ -63,6 +63,7 @@ export type RequestInit = {
   bytes?: Blob
   headers?: Record<string, string>
   signal?: AbortSignal
+  keepalive?: boolean
 }
 
 async function send(path: string, init: RequestInit) {
@@ -77,6 +78,7 @@ async function send(path: string, init: RequestInit) {
   const res = await fetch(path, {
     method,
     ...(init.signal ? { signal: init.signal } : {}),
+    ...(init.keepalive ? { keepalive: true } : {}),
     ...(init.bytes !== undefined
       ? { headers: { ...extra, 'Content-Type': 'application/octet-stream' }, body: init.bytes }
       : init.body !== undefined
