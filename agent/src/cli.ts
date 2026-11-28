@@ -58,7 +58,12 @@ export function installCliDriver(models: ReturnType<typeof createModels>, p: Cli
   models.setProvider(faux.provider)
 }
 
-export type MessagesOf = (conversationId: number) => Promise<readonly Message[]>
+export type ContextView = {
+  messages: readonly Message[]
+  entries: readonly { id: unknown }[]
+  contributions: readonly (readonly Message[])[]
+}
+export type MessagesOf = (conversationId: number) => Promise<ContextView>
 
 type CliEvent = {
   seq?: number
@@ -255,9 +260,23 @@ function isAnswer(m: Message | undefined): boolean {
   return !(Array.isArray(m.content) && m.content.some((part) => part?.type === 'toolCall'))
 }
 
-export function splitTurn(messages: readonly Message[]): { prompt: string; history: { role: string; text: string }[] } {
+export function runStartOf(view: ContextView, first: unknown): number {
+  const at = first === undefined ? -1 : view.entries.findIndex((entry) => entry.id === first)
+  if (at < 0) return 0
+  for (const message of view.contributions.slice(at).flat()) {
+    if (message.role === 'system') continue
+    const index = view.messages.indexOf(message)
+    if (index >= 0) return index
+  }
+  return 0
+}
+
+export function splitTurn(
+  messages: readonly Message[],
+  runFrom = 0,
+): { prompt: string; history: { role: string; text: string }[] } {
   let from = messages.length
-  while (from > 0 && !isAnswer(messages[from - 1])) from--
+  while (from > runFrom && !isAnswer(messages[from - 1])) from--
   const run = messages.slice(from)
   const first = run.findIndex((m) => m.role === 'user')
   const start = first < 0 ? messages.length : from + first
@@ -517,11 +536,10 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
       let round = 1
       while ((await api.memo(`turn-${round + 1}`, context)) !== undefined) round++
 
-      const pinned = pinHolds(
-        await api.snapshot(ContinuePin, api.conversationId, context),
-        await api.snapshot(LiveDoc, api.conversationId, context),
-      )
-      const { prompt, history } = splitTurn(await messagesOf(api.conversationId))
+      const live = await api.snapshot(LiveDoc, api.conversationId, context)
+      const pinned = pinHolds(await api.snapshot(ContinuePin, api.conversationId, context), live)
+      const view = await messagesOf(api.conversationId)
+      const { prompt, history } = splitTurn(view.messages, runStartOf(view, live?.run?.first))
       if (!prompt) return result('there is no new message for the CLI', '', true)
       const helps = new Helps()
       for (;;) {

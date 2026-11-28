@@ -73,7 +73,7 @@ if (toolsSocket) {
   registry.install(
     cliTools(toolsSocket, async (id) => {
       const conv = await harness.conversation(id as ConversationId, context)
-      return conv ? (await conv.context(context)).messages : []
+      return conv ? await conv.context(context) : { messages: [], entries: [], contributions: [] }
     }),
   )
 }

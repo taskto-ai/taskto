@@ -585,6 +585,84 @@ func TestASteerPlacedDuringAFailedRunIsContinuedOnACLIWithEveryRequestAndResult(
 	}
 }
 
+func TestACLITurnStartsAtItsOwnRequestNotAtAnEarlierFailedRun(t *testing.T) {
+	const earlier = "fail-after-tool:script;tool:pause_safe:200"
+	cli := ModelRef{Provider: "cli-claude", ModelID: "default"}
+	failEarlier := func(t *testing.T, s *sidecar, conv int64) {
+		t.Helper()
+		id, err := s.client.Submit(ctxFor(t), conv, Input{Content: earlier, Capability: "cap"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settled, err := s.client.Wait(ctxFor(t), id); err != nil || settled.Reason != "model_error" {
+			t.Fatalf("the earlier request settled %+v, %v; want model_error after its tool call finished", settled, err)
+		}
+	}
+	check := func(t *testing.T, rec *turnRecorder) {
+		t.Helper()
+		prompts := rec.asked()
+		if len(prompts) != 1 {
+			t.Fatalf("the CLI worker ran %d turns, want 1", len(prompts))
+		}
+		if !strings.Contains(prompts[0], "only the new request") {
+			t.Fatalf("the CLI's prompt %q lacks the new request", prompts[0])
+		}
+		for _, unwanted := range []string{earlier, "pause_safe", "paused 200ms"} {
+			if strings.Contains(prompts[0], unwanted) {
+				t.Fatalf("the CLI's prompt %q carries %q of an earlier, separate run", prompts[0], unwanted)
+			}
+		}
+	}
+
+	t.Run("a new message sent on the CLI after a failed run", func(t *testing.T) {
+		rec := &turnRecorder{}
+		s := cliSidecar(t, rec)
+		ctx := ctxFor(t)
+		conv, err := s.client.CreateConversation(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		failEarlier(t, s, conv)
+		if err := s.client.SetModel(ctx, conv, cli); err != nil {
+			t.Fatal(err)
+		}
+		id, err := s.client.Submit(ctx, conv, Input{Content: "only the new request", Capability: "cap"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settled, err := s.client.Wait(ctx, id); err != nil || settled.Status != "done" {
+			t.Fatalf("the new request settled %+v, %v; want done", settled, err)
+		}
+		check(t, rec)
+	})
+
+	t.Run("a second failed run continued on the CLI", func(t *testing.T) {
+		rec := &turnRecorder{}
+		s := cliSidecar(t, rec)
+		ctx := ctxFor(t)
+		conv, err := s.client.CreateConversation(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		failEarlier(t, s, conv)
+		id, err := s.client.Submit(ctx, conv, Input{Content: "fail:script;only the new request", Capability: "cap"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settled, err := s.client.Wait(ctx, id); err != nil || settled.Reason != "model_error" {
+			t.Fatalf("the new request settled %+v, %v; want its own model_error", settled, err)
+		}
+		sub, _, err := s.client.Continue(ctx, conv, cli, lastEntryID(t, s.client, conv))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+			t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+		}
+		check(t, rec)
+	})
+}
+
 func answered(t *testing.T, s *sidecar, conv int64, text string) bool {
 	t.Helper()
 	msgs, err := s.client.Messages(ctxFor(t), conv)
