@@ -76,6 +76,10 @@ const (
 	AppIntegrationApproved  = "app_integration_approved"
 	AppIntegrationRejected  = "app_integration_rejected"
 	AppIntegrationRevoked   = "app_integration_revoked"
+	AppDataSourceRequested  = "app_data_source_requested"
+	AppDataSourceApproved   = "app_data_source_approved"
+	AppDataSourceRejected   = "app_data_source_rejected"
+	AppDataSourceRevoked    = "app_data_source_revoked"
 )
 
 const (
@@ -88,4 +92,5 @@ const (
 	TargetSharedAccount  = "shared_cli_account"
 	TargetIntegration    = "integration"
 	TargetAppIntegration = "app_integration_approval"
+	TargetAppDataSource  = "app_data_source_approval"
 )

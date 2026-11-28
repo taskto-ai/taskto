@@ -69,6 +69,10 @@ export const AUDIT_ACTIONS = [
   'app_integration_approved',
   'app_integration_rejected',
   'app_integration_revoked',
+  'app_data_source_requested',
+  'app_data_source_approved',
+  'app_data_source_rejected',
+  'app_data_source_revoked',
   'data_export_started',
   'workspace_export_started',
   'server_update_requested',
@@ -88,6 +92,7 @@ export const AUDIT_TARGETS = [
   'shared_cli_account',
   'integration',
   'app_integration_approval',
+  'app_data_source_approval',
 ] as const
 
 export const AUDIT_DETAILS = [

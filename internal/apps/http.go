@@ -54,6 +54,13 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("GET "+apps+"/{app}/offline", read(s.handleOffline))
 	mux.Handle("GET "+apps+"/{app}/integrations", read(s.handleIntegrationStatus))
 	mux.Handle("POST "+apps+"/{app}/integrations/{slot}/request", write(s.handleRequestApproval))
+	mux.Handle("GET "+apps+"/{app}/data-sources", read(s.appHandler(func(req request, r *http.Request) (any, error) {
+		return s.dataSourceStatus(r.Context(), req.space, req.actor, req.app)
+	})))
+	mux.Handle("POST "+apps+"/{app}/data-sources/{slot}/request", write(s.handleRequestDataSource))
+	mux.Handle("GET "+apps+"/{app}/data-sources/values", tokenRead(s.appHandler(func(req request, r *http.Request) (any, error) {
+		return s.sourceMessages(r.Context(), req.space, req.actor, req.app, r.URL.Query().Get("release"))
+	})))
 	mux.Handle("GET "+apps+"/{app}/roles", read(s.handleRoles))
 	mux.Handle("PUT "+apps+"/{app}/roles", write(s.handleSetRoles))
 	if s.dataDir != "" {

@@ -36,6 +36,32 @@ export type AppAccess = {
   modify_records: string
 }
 
+export type AppDataSourceApproval = {
+  id: number
+  app_id: number
+  app_name: string
+  space_id: number
+  space_name: string
+  space_kind: string
+  slot: string
+  kind: string
+  contract: AppsDataSourceContract
+  contract_hash: string
+  status: string
+  requested_by: AppsAuthor | null
+  requested_at: string
+  decided_by: AppsAuthor | null
+  decided_at: string | null
+}
+
+export type AppDataSourceApprovalList = {
+  approvals: AppDataSourceApproval[]
+}
+
+export type AppDataSourceStatus = {
+  slots: AppsDataSourceSlotStatus[]
+}
+
 export type AppEffect = {
   id: number
   operation: string
@@ -235,6 +261,27 @@ export type AppsContributions = {
   pin?: Pin
 }
 
+export type AppsDataSourceContract = {
+  version: number
+  kind: string
+  scope: string
+  read: string[]
+}
+
+export type AppsDataSourceSlot = {
+  kind: string
+  read: string[] | null
+}
+
+export type AppsDataSourceSlotStatus = {
+  slot: string
+  kind: string
+  contract: AppsDataSourceContract
+  contract_hash: string
+  status: string
+  approval_id: number | null
+}
+
 export type AppsDefinition = {
   definition_version: number
   requires: string[]
@@ -247,6 +294,7 @@ export type AppsDefinition = {
   series?: Record<string, AppsSeries>
   contributions?: AppsContributions
   integrations?: Record<string, AppsIntegrationSlot>
+  data_sources?: Record<string, AppsDataSourceSlot>
 }
 
 export type AppsEffect = {

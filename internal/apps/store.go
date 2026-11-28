@@ -799,21 +799,7 @@ func launchable(ctx context.Context, q queryer, spaceID, appID int64) (App, erro
 }
 
 func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, appID int64, which, screen string) ([]Message, error) {
-	if err := may(sp, access.Read); err != nil {
-		return nil, err
-	}
-	acc, err := s.appAccess(ctx, actor, sp.ID, appID)
-	if err != nil {
-		return nil, err
-	}
-	if err := need(acc, access.CapView); err != nil {
-		return nil, err
-	}
-	a, err := launchable(ctx, s.db, sp.ID, appID)
-	if err != nil {
-		return nil, err
-	}
-	def, err := screenOf(ctx, s.db, a, acc, which)
+	a, def, acc, err := s.viewDefinition(ctx, sp, actor, appID, which)
 	if err != nil {
 		return nil, err
 	}
@@ -827,7 +813,7 @@ func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, app
 			return nil, invalidf("screen must name one of the app's screens that doesn't show a record")
 		}
 	}
-	return openedAt(Surface(SurfaceID(a.ID), def, rows), SurfaceID(a.ID), def, rows, screen), nil
+	return withSources(openedAt(Surface(SurfaceID(a.ID), def, rows), SurfaceID(a.ID), def, rows, screen), s.sourceValues(ctx, sp, actor, appID, def)), nil
 }
 
 func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) ([]Message, error) {

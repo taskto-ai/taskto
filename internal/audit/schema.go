@@ -75,6 +75,7 @@ var (
 	clis                 = oneOf("claude", "codex", "grok")
 	integrationProviders = oneOf("stripe", "square")
 	integrationKinds     = oneOf("payments")
+	dataSourceKinds      = oneOf("storage_usage")
 	integrationModes     = oneOf("test", "live")
 	cascadeFlag          = boolean
 )
@@ -178,4 +179,9 @@ var schemas = map[string]map[string]kind{
 	},
 	AppIntegrationRejected: {"kind": integrationKinds, "app_id": number},
 	AppIntegrationRevoked:  {"kind": integrationKinds, "app_id": number, "integration_id": number},
+
+	AppDataSourceRequested: {"kind": dataSourceKinds, "app_id": number},
+	AppDataSourceApproved:  {"kind": dataSourceKinds, "app_id": number},
+	AppDataSourceRejected:  {"kind": dataSourceKinds, "app_id": number},
+	AppDataSourceRevoked:   {"kind": dataSourceKinds, "app_id": number},
 }

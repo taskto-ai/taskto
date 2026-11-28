@@ -219,6 +219,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_integration_kind_mismatch` | 422 | The integration's provider doesn't do the kind `kind`. |
 | `app_integration_disabled` | 409 | The integration is switched off. |
 | `app_integration_space_not_allowed` | 409 | The integration isn't allowed in the app's space (approve with `allow_space`, or allow it first). |
+| `app_data_source_unapproved` | 409 | The release has no approved contract for the data source `slot`. |
+| `app_data_source_slot_unknown` | 404 | The draft declares no data source `slot`. |
+| `app_data_source_contract_changed` | 409 | The draft's data source contract is no longer the one the request named: read it again. |
 | `integration_unavailable` | — | A failed `create_payment_link` entry: the live release's approved contract no longer covers it, the integration is switched off or not allowed in the app's space, or its key can't be read. |
 | `integration_amount_refused` | — | A failed `create_payment_link` entry: the amount is zero or less, not a number, or has more decimals than the currency. |
 | `integration_amount_above_max` | — | A failed `create_payment_link` entry: the amount is above the admin's ceiling (params: `max`, `currency`). |
@@ -3580,6 +3583,48 @@ installed template carry the slots and no approval, so they can't be published u
 contract is approved. Moving an app to another space deletes its approvals. All changes are in
 the [audit log](audit.md): `app_integration_requested`, `_approved`, `_rejected` and `_revoked`, which
 name the app and the integration, never the slot's name or any record.
+
+### Data sources of an app
+
+An app may show data that is not its own records, starting with the viewer's own storage use. It
+declares a **slot** of a **kind** in the top-level `data_sources` block of its definition (version 3,
+strictly checked when saved, at most 4 slots) and which of the kind's values it reads:
+
+```json
+"data_sources": {"usage": {"kind": "storage_usage", "read": ["used_mb", "quota_mb", "used_percent"]}}
+```
+
+`kind` is `storage_usage`, whose values are `used_bytes`, `quota_bytes` (`0` is unlimited),
+`used_mb` and `quota_mb` (one decimal) and `used_percent` (absent when unlimited); `read` is 1 to 16
+of them, each once. A definition with a slot requires the capability `data.sources`. Data sources
+are read-only and always the **viewer's own** data. See [data-sources.md](data-sources.md).
+
+- `GET …/apps/{app}/data-sources` (designers and publishers) lists the draft's slots with their
+  contract (`kind`, `scope`, the sorted `read` list), its `contract_hash`, and the `status` of that
+  hash: `none`, `requested`, `approved`, `rejected` or `revoked`, with the `approval_id`.
+- `POST …/apps/{app}/data-sources/{slot}/request` with `{"contract_hash"}` asks for the draft's
+  contract to be approved (publishers only; `409 app_data_source_contract_changed` if the draft
+  changed, `404 app_data_source_slot_unknown`). Asking again for a contract that waits or is
+  approved returns the same request.
+- `GET /api/workspaces/{workspace}/data-source-approvals?status=` (workspace admins; `requested` by
+  default, or `approved`, `rejected`, `revoked`, `all`; the latest 200) is the admins' queue, and
+  `POST …/data-source-approvals/{approval}/approve`, `reject` and `revoke` with `{}` decide: `403`
+  for anyone but a workspace admin, `404` for a request of another workspace, `409
+  app_integration_not_pending` or `app_integration_not_approved` when it isn't in the state the
+  decision needs.
+- `GET …/apps/{app}/data-sources/values` (readers of the app; `?release=` as for the surface) gives
+  one `updateDataModel` message for `/_sources`: `{"<slot>": {"<value>": …}}`. A slot whose contract
+  isn't approved, or that can't be read, is `{"_unavailable": true}`. The app's surface carries the
+  same `_sources` in its data model, so a component binds `/_sources/<slot>/<value>`.
+
+**The gate.** Publishing and rolling back are refused (`409 app_data_source_unapproved`, `slot`)
+unless every slot of the release that would become live has an approved request for its contract's
+hash. A changed `read` list is another hash and needs a new approval. Values are given only while the
+contract of the release being shown is approved, checked on every read: a revocation stops them at
+once, and the draft of an unapproved contract shows none. A duplicate carries the slots and no
+approval, and moving an app deletes its approvals. The [audit log](audit.md) records
+`app_data_source_requested`, `_approved`, `_rejected` and `_revoked`, with the kind and the app,
+never the slot's name or what it reads. The offline copy has no `/_sources`.
 
 ### `GET …/apps/{app}/surface`
 

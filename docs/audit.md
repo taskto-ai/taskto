@@ -98,6 +98,10 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `app_integration_approved` | an admin approves a contract and binds an integration | the workspace | app integration approval | `kind`, `app_id`, `integration_id`, `provider`, `space_allowed` (whether approving also allowed the space) |
 | `app_integration_rejected` | an admin turns a request down | the workspace | app integration approval | `kind`, `app_id` |
 | `app_integration_revoked` | an admin withdraws an approval | the workspace | app integration approval | `kind`, `app_id`, `integration_id` |
+| `app_data_source_requested` | someone who may publish an app asks for a data source's contract to be approved (asking again for one that waits or is approved records nothing) | the workspace | app data source approval | `kind`, `app_id` (never the slot's name or what it reads) |
+| `app_data_source_approved` | an admin approves a contract | the workspace | app data source approval | `kind`, `app_id` |
+| `app_data_source_rejected` | an admin turns a request down | the workspace | app data source approval | `kind`, `app_id` |
+| `app_data_source_revoked` | an admin withdraws an approval | the workspace | app data source approval | `kind`, `app_id` |
 
 The names a person gives things (a token's, a space's, a shared account's label, an integration's name, a model's) are
 not recorded: they are free text, and people paste secrets into such boxes. The target's id

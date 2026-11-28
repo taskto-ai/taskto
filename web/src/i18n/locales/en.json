@@ -1122,6 +1122,9 @@
     "app_integration_kind_mismatch": "This integration can't be used for {kind}.",
     "app_integration_disabled": "This integration is switched off.",
     "app_integration_space_not_allowed": "This integration isn't allowed in the app's space yet.",
+    "app_data_source_unapproved": "An admin hasn't approved what this app reads from the data source \"{slot}\" in its current form. Ask an admin to approve it.",
+    "app_data_source_slot_unknown": "This draft doesn't declare a data source called \"{slot}\".",
+    "app_data_source_contract_changed": "The app changed since you read what it reads from the data source. Read it again and ask for that.",
     "base_url_invalid": "Enter an http or https URL of up to {max} characters, without a query or fragment.",
     "base_url_credentials": "The URL can't contain a user name or password: put the key in the API key field.",
     "base_url_insecure": "Use https: a key is only sent over plain http to this machine.",
@@ -2198,6 +2201,10 @@
         "app_integration_approved": "App's use of an integration approved",
         "app_integration_rejected": "App's use of an integration turned down",
         "app_integration_revoked": "App's use of an integration revoked",
+        "app_data_source_requested": "App's use of a data source requested",
+        "app_data_source_approved": "App's use of a data source approved",
+        "app_data_source_rejected": "App's use of a data source turned down",
+        "app_data_source_revoked": "App's use of a data source revoked",
         "data_export_started": "Data export started",
         "workspace_export_started": "Workspace export started",
         "server_update_requested": "Update requested",
@@ -2218,7 +2225,8 @@
         "provider_account": "Model provider account",
         "shared_cli_account": "Shared CLI account",
         "integration": "Integration",
-        "app_integration_approval": "App integration approval"
+        "app_integration_approval": "App integration approval",
+        "app_data_source_approval": "App data source approval"
       },
       "details": {
         "account": "Account",

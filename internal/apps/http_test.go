@@ -56,6 +56,7 @@ func newEnv(t *testing.T) *env {
 	spaces.Routes(mux)
 	s.Routes(mux)
 	s.ApprovalRoutes(mux, accounts)
+	s.DataSourceRoutes(mux, accounts)
 	s.HomeRoutes(mux, accounts)
 	s.TemplateRoutes(mux, accounts)
 	key, err := serverkey.Load(t.TempDir())

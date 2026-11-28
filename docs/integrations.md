@@ -428,6 +428,9 @@ app at once. Removing an integration is refused while an approval of an app name
 
 ## Apps and approval
 
+Data an app reads from the server beyond its own records follows the same rule, with approvals of
+its own: [data-sources.md](data-sources.md).
+
 An app declares what it uses of an outside service in the `integrations` block of its definition
 ([api.md](api.md#integrations-of-an-app)), strictly checked when it is saved: a slot of a kind, the
 effect that asks for a payment link, and for each event of the kind the fields it may set, with a

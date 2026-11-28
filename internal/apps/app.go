@@ -39,6 +39,7 @@ type Definition struct {
 	Series            map[string]Series          `json:"series,omitempty"`
 	Contributions     *Contributions             `json:"contributions,omitempty"`
 	Integrations      map[string]IntegrationSlot `json:"integrations,omitempty"`
+	DataSources       map[string]DataSourceSlot  `json:"data_sources,omitempty"`
 }
 
 type Collection struct {
@@ -433,6 +434,17 @@ func (d Definition) Check() (Definition, error) {
 	if usesIntegrations && d.DefinitionVersion < integrationsVersion {
 		return Definition{}, invalidf("definition_version %d can't use integrations: they are for version %d (leave definition_version out for the current one)",
 			d.DefinitionVersion, integrationsVersion)
+	}
+	usesSources, err := d.checkDataSources()
+	if err != nil {
+		return Definition{}, err
+	}
+	if usesSources {
+		if d.DefinitionVersion < dataSourcesVersion {
+			return Definition{}, invalidf("definition_version %d can't use data_sources: they are for version %d (leave definition_version out for the current one)",
+				d.DefinitionVersion, dataSourcesVersion)
+		}
+		out.Requires = withNeeds(out.Requires, []string{DataSourcesCapability})
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {
