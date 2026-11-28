@@ -236,9 +236,11 @@ no extra process); it has no feature of its own.
   Go code of each feature registers a handler for its kind at startup, before the worker starts,
   and nothing else can name one. A **dedupe key**, unique per owner and kind, names what the job is
   for, so the same reminder can't be scheduled twice; `Schedule` leaves an existing one alone,
-  `Reschedule` replaces it (and re-arms one that already ran), `Cancel` removes it. All three take
-  the caller's transaction, so a job is made, moved or removed in the same commit as the change that
-  needs it, and a rolled-back change leaves no job.
+  `Reschedule` replaces it (and re-arms one that already ran), `Cancel` removes it, `CancelMatching`
+  removes those of a kind whose key matches a pattern, and `Relocate` moves a pending or running
+  job to another space of its workspace without a new revision. All take the caller's transaction,
+  so a job is made, moved or removed in the same commit as the change that needs it, and a
+  rolled-back change leaves no job.
 - **At least once, safe across restarts.** The worker takes a due job with a lease and runs its
   handler with a time limit. A server that dies leaves the job running until the lease ends, and
   the next server (or the same one, restarted) takes it again, so a handler runs more than once
@@ -299,11 +301,17 @@ no extra process); it has no feature of its own.
   the person who created it, keyed by app, record and reminder name and holding only those IDs. The
   jobs are made, moved and cancelled in the transaction of every write of a record
   (`apps.Service.syncRecordReminders`: an action, a system write, a restore) and of what changes
-  who is reminded or when (`syncAppReminders`: a release, a rollback, an app archived or moved; the
-  same hooks as the boards' for a space archived, a member added and a time zone changed), and the
-  handler (`apps.Service.remindRecord`) trusts none of it: it asks `Holds`, the creator's access
-  to the space and the app, the live release, the record and its condition and the time again, and
-  makes an `app_reminder` notification keyed by `Job.Occurrence()`. The notification's text is read
+  who is reminded or when (`syncAppReminders`: a release, a rollback, an app archived or moved, an
+  app's roles changed (`access.Checker.OnAppGrantsChanged`) and an account enabled again
+  (`auth.Service.OnMemberEnabled`); the same hooks as the boards' for a space archived, a member
+  added and a time zone changed). A sync first cancels the jobs of reminders the live release no
+  longer declares (`Service.CancelMatching`), so they never hold the slot of their replacements, and
+  an app that moves has the space of its unchanged jobs changed in place (`Service.Relocate`, which
+  keeps the occurrence: a job that was claimed or awaits a retry is told once). The wall-clock time
+  is resolved with `schedule.LocalTime`, hour and minute together. The handler
+  (`apps.Service.remindRecord`) trusts none of it: it asks `Holds`, the creator's access to the
+  space the job is in now and the app, the live release, the record and its condition and the time
+  again, and makes an `app_reminder` notification keyed by `Job.Occurrence()`. The notification's text is read
   from the record when the inbox is (`notifications.ReminderSource`, which `apps.Service`
   implements, because `internal/notifications` can't import `internal/apps`).
 
