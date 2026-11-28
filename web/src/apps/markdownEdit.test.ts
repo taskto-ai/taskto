@@ -1,5 +1,15 @@
 import { expect, test } from 'vitest'
-import { CHECKLIST_PREFIX, HEADING_PREFIX, LIST_PREFIX, link, prefixLines, wrap } from './markdownEdit'
+import {
+  CHECKLIST_PREFIX,
+  HEADING_PREFIX,
+  keepBreaks,
+  LIST_PREFIX,
+  link,
+  normalizeBreaks,
+  prefixLines,
+  splice,
+  wrap,
+} from './markdownEdit'
 
 test('wrap surrounds the selection and keeps it selected', () => {
   expect(wrap('make it loud', 8, 12, '**', 'x')).toEqual({ text: 'make it **loud**', start: 10, end: 14 })
@@ -71,4 +81,48 @@ test('taking a prefix off keeps the caret where it was, and a caret in the prefi
 
 test('adding a prefix moves a caret in the line along with its text', () => {
   expect(prefixLines('task', 2, 2, LIST_PREFIX)).toEqual({ text: '- task', start: 4, end: 4 })
+})
+
+test('wrap marks each paragraph of a selection on its own, so each one is bold', () => {
+  expect(wrap('one\n\ntwo', 0, 8, '**', 'x').text).toBe('**one**\n\n**two**')
+  expect(wrap('one\ntwo', 0, 7, '**', 'x').text).toBe('**one**\n**two**')
+  expect(wrap('  one\n\n two ', 0, 12, '**', 'x').text).toBe('  **one**\n\n **two** ')
+})
+
+test('wrap over several lines takes the markers off when every line has them, and skips lines that have them', () => {
+  expect(wrap('**one**\n\n**two**', 0, 16, '**', 'x').text).toBe('one\n\ntwo')
+  expect(wrap('**one**\ntwo', 0, 11, '**', 'x').text).toBe('**one**\n**two**')
+})
+
+test('wrap keeps spaces at the ends of the selection outside the markers', () => {
+  expect(wrap('a  b  c', 1, 6, '**', 'x')).toEqual({ text: 'a  **b**  c', start: 5, end: 6 })
+  expect(wrap('a   c', 1, 4, '**', 'x').text).toBe('a   **x**c')
+})
+
+test('wrap uses the in-word marker when a letter or digit touches the selection', () => {
+  expect(wrap('ordinary', 2, 5, '_', 'x', '*').text).toBe('or*din*ary')
+  expect(wrap('a ordinary', 2, 10, '_', 'x', '*').text).toBe('a _ordinary_')
+  expect(wrap('x2y', 1, 2, '_', 'x', '*').text).toBe('x*2*y')
+})
+
+test('wrap takes either italic marker off again, and never takes one star off a bold pair', () => {
+  expect(wrap('or*din*ary', 3, 6, '_', 'x', '*').text).toBe('ordinary')
+  expect(wrap('_one_', 1, 4, '_', 'x', '*').text).toBe('one')
+  expect(wrap('**one**', 2, 5, '_', 'x', '*').text).toBe('**_one_**')
+  expect(wrap('**one**', 0, 7, '_', 'x', '*').text).toBe('_**one**_')
+})
+
+test('splice finds the one range an edit changes', () => {
+  expect(splice('plan the week', 'plan the **week**')).toEqual({ at: 9, removed: 4, insert: '**week**' })
+  expect(splice('a **b** c', 'a b c')).toEqual({ at: 2, removed: 5, insert: 'b' })
+  expect(splice('same', 'same')).toEqual({ at: 4, removed: 0, insert: '' })
+})
+
+test('Windows line breaks are one break, and an edit leaves the others as they were', () => {
+  expect(normalizeBreaks('a\r\nb\rc\nd')).toBe('a\nb\nc\nd')
+  expect(keepBreaks('one\r\ntwo\r\nthree', 'one\n**two**\nthree')).toBe('one\r\n**two**\r\nthree')
+  expect(keepBreaks('one\r\ntwo', 'one\r\ntwo'.replace('\r', ''))).toBe('one\r\ntwo')
+  expect(keepBreaks('one\r\ntwo', 'onetwo')).toBe('onetwo')
+  expect(keepBreaks('one\r\ntwo', 'one\ntwo\nmore')).toBe('one\r\ntwo\nmore')
+  expect(keepBreaks('one\ntwo', 'one\ntwo!')).toBe('one\ntwo!')
 })

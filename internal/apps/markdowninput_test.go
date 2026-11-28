@@ -86,3 +86,30 @@ func TestAStringFieldWithNoMarkdownInputHasNoLimitInTheModel(t *testing.T) {
 		t.Fatalf("fields model = %v", got)
 	}
 }
+
+func TestAMarkdownInputWritesWhereItIsBoundToItsOwnField(t *testing.T) {
+	for value, wantOK := range map[string]bool{
+		`{"path": "/draft/notes"}`:         true,
+		`{"path": "/record/notes"}`:        true,
+		`"template"`:                       false,
+		`{"path": "/draft/title"}`:         false,
+		`{"path": "/record/title"}`:        false,
+		`{"path": "/draft/notes/inner"}`:   false,
+		`{"path": "notes"}`:                false,
+		`{"path": "/draft/notes", "x": 1}`: false,
+		`{"call": "formatString", "args": {"value": "x"}, "returnType": "string"}`: false,
+	} {
+		var d Definition
+		src := strings.Replace(markdownApp("notes"), `"label": "Notes", "value": {"path": "/draft/notes"}}`, `"label": "Notes", "value": `+value+`}`, 1)
+		if err := jsonUnmarshal(src, &d); err != nil {
+			t.Fatal(err)
+		}
+		_, err := d.Check()
+		switch {
+		case wantOK && err != nil:
+			t.Errorf("%s: %v", value, err)
+		case !wantOK && (err == nil || !strings.Contains(err.Error(), "value: ")):
+			t.Errorf("%s: %v", value, err)
+		}
+	}
+}

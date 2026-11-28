@@ -20,10 +20,12 @@ function Harness({
   start = '',
   maxLength,
   seen,
+  error,
 }: {
   start?: string
   maxLength?: number
   seen?: (value: string) => void
+  error?: string
 }) {
   const [value, setValue] = useState(start)
   return (
@@ -31,6 +33,7 @@ function Harness({
       label="Notes"
       value={value}
       maxLength={maxLength}
+      error={error}
       onChange={(next) => {
         setValue(next)
         seen?.(next)
@@ -290,4 +293,178 @@ test('the scan for dictation hosts finds the input in a page that has no app aro
   render(<TextDictation root={root} workspace={1} />)
   expect(root.querySelector('.ui-app-markdown-input .ui-dictate-slot')).not.toBeNull()
   root.remove()
+})
+
+test('a person who picks text with Windows line breaks formats it without touching the other lines', () => {
+  const seen = vi.fn()
+  render(<Harness start={'one\r\ntwo\r\nthree'} seen={seen} />)
+  expect(box().value).toBe('one\ntwo\nthree')
+  select(box(), 4, 7)
+  fireEvent.click(screen.getByRole('button', { name: 'Bold' }))
+  expect(seen).toHaveBeenLastCalledWith('one\r\n**two**\r\nthree')
+  expect(box().value.slice(box().selectionStart, box().selectionEnd)).toBe('two')
+  select(box(), 8, 8)
+  fireEvent.click(screen.getByRole('button', { name: 'Bulleted list' }))
+  expect(seen).toHaveBeenLastCalledWith('one\r\n- **two**\r\nthree')
+})
+
+test('typing in text with Windows line breaks keeps the breaks it did not touch', () => {
+  const seen = vi.fn()
+  render(<Harness start={'one\r\ntwo'} seen={seen} />)
+  fireEvent.change(box(), { target: { value: 'one\ntwo!' } })
+  expect(seen).toHaveBeenLastCalledWith('one\r\ntwo!')
+  fireEvent.change(box(), { target: { value: 'one\ntwo!\nx' } })
+  expect(seen).toHaveBeenLastCalledWith('one\r\ntwo!\nx')
+})
+
+test('the counter still counts a Windows line break as the two characters the server stores', () => {
+  render(<Harness start={`${'a\r\n'.repeat(30)}`} maxLength={100} />)
+  expect(screen.getByText('90 of 100')).toBeTruthy()
+})
+
+test('bold over several paragraphs marks each one, and the preview shows them bold', () => {
+  const seen = vi.fn()
+  render(<Harness start={'one\n\ntwo words'} seen={seen} />)
+  select(box(), 0, 14)
+  fireEvent.click(screen.getByRole('button', { name: 'Bold' }))
+  expect(box().value).toBe('**one**\n\n**two words**')
+  fireEvent.click(screen.getByRole('tab', { name: 'Preview' }))
+  const panel = screen.getByRole('tabpanel')
+  expect([...panel.querySelectorAll('strong')].map((el) => el.textContent)).toEqual(['one', 'two words'])
+  expect(panel.textContent).not.toContain('*')
+  fireEvent.click(screen.getByRole('tab', { name: 'Write' }))
+  select(box(), 0, box().value.length)
+  fireEvent.click(screen.getByRole('button', { name: 'Bold' }))
+  expect(box().value).toBe('one\n\ntwo words')
+})
+
+test('italic inside a word uses the marker the preview reads inside words', () => {
+  render(<Harness start="ordinary" />)
+  select(box(), 2, 5)
+  fireEvent.keyDown(box(), { key: 'i', ctrlKey: true })
+  expect(box().value).toBe('or*din*ary')
+  fireEvent.click(screen.getByRole('tab', { name: 'Preview' }))
+  expect(screen.getByRole('tabpanel').querySelector('em')?.textContent).toBe('din')
+  fireEvent.click(screen.getByRole('tab', { name: 'Write' }))
+  select(box(), 3, 6)
+  fireEvent.keyDown(box(), { key: 'i', ctrlKey: true })
+  expect(box().value).toBe('ordinary')
+})
+
+test('a selection with spaces at its ends keeps them outside the markers', () => {
+  render(<Harness start="say hello there" />)
+  select(box(), 3, 10)
+  fireEvent.click(screen.getByRole('button', { name: 'Bold' }))
+  expect(box().value).toBe('say **hello** there')
+  expect(box().value.slice(box().selectionStart, box().selectionEnd)).toBe('hello')
+})
+
+function native(): { calls: unknown[][]; restore: () => void } {
+  const calls: unknown[][] = []
+  const original = Object.getOwnPropertyDescriptor(document, 'execCommand')
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true,
+    value: (command: string, _ui: boolean, text: string) => {
+      const el = document.activeElement as HTMLTextAreaElement
+      calls.push([command, text, el.selectionStart, el.selectionEnd])
+      el.setRangeText(text, el.selectionStart, el.selectionEnd, 'end')
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    },
+  })
+  return {
+    calls,
+    restore: () => {
+      if (original) Object.defineProperty(document, 'execCommand', original)
+      else Reflect.deleteProperty(document, 'execCommand')
+    },
+  }
+}
+
+test('toolbar and shortcut edits go through the browser editing command, so native undo has them', () => {
+  const seen = vi.fn()
+  const spy = native()
+  try {
+    render(<Harness start="plan the week" seen={seen} />)
+    select(box(), 9, 13)
+    fireEvent.click(screen.getByRole('button', { name: 'Bold' }))
+    expect(spy.calls).toEqual([['insertText', '**week**', 9, 13]])
+    expect(box().value).toBe('plan the **week**')
+    expect(seen).toHaveBeenCalledTimes(1)
+    expect(box().value.slice(box().selectionStart, box().selectionEnd)).toBe('week')
+    select(box(), 9, 17)
+    fireEvent.keyDown(box(), { key: 'b', ctrlKey: true })
+    expect(spy.calls[1].slice(0, 2)).toEqual(['insertText', 'week'])
+    expect(box().value).toBe('plan the week')
+  } finally {
+    spy.restore()
+  }
+})
+
+test('switching to Preview and back keeps the same text box, with its undo history', () => {
+  render(<Harness start="alpha" />)
+  const before = box()
+  fireEvent.click(screen.getByRole('tab', { name: 'Preview' }))
+  expect(before.isConnected).toBe(true)
+  expect(before.closest('[hidden]')).not.toBeNull()
+  fireEvent.click(screen.getByRole('tab', { name: 'Write' }))
+  expect(box()).toBe(before)
+  expect(before.closest('[hidden]')).toBeNull()
+})
+
+test('text dictated while the Preview is open is in the text when Write comes back', () => {
+  const seen = vi.fn()
+  render(<Harness start="base" seen={seen} />)
+  const area = box()
+  area.setSelectionRange(4, 4)
+  fireEvent.click(screen.getByRole('tab', { name: 'Preview' }))
+  act(() => insertText(area, 'spoken phrase'))
+  expect(seen).toHaveBeenLastCalledWith('base spoken phrase')
+  expect(screen.getByRole('tabpanel').textContent).toContain('base spoken phrase')
+  fireEvent.click(screen.getByRole('tab', { name: 'Write' }))
+  expect(box().value).toBe('base spoken phrase')
+})
+
+test('the microphone stays beside the editor in Preview, so a dictation in flight is not dropped', async () => {
+  fakeFetch({ 'GET /api/workspaces/1/dictation': { body: { engine: 'local', max_seconds: 600 } } })
+  const root = document.createElement('div')
+  document.body.appendChild(root)
+  render(<Harness />, { container: root })
+  render(<TextDictation root={root} workspace={1} />)
+  const slot = root.querySelector('.ui-dictate-slot')
+  expect(slot).not.toBeNull()
+  fireEvent.click(screen.getByRole('tab', { name: 'Preview' }))
+  await act(async () => {
+    await new Promise((done) => setTimeout(done, 20))
+  })
+  expect(root.querySelector('.ui-dictate-slot')).toBe(slot)
+  expect(slot?.isConnected).toBe(true)
+  root.remove()
+})
+
+test('a failed check stays on screen in Preview, where the action can still be taken', async () => {
+  fakeFetch({})
+  const checks = [
+    {
+      condition: { call: 'length', args: { value: { path: '/draft/notes' }, min: 5 } },
+      message: 'Write at least five characters',
+    },
+  ]
+  render(
+    <AppView
+      surfaceId="app-9"
+      label="Meeting"
+      release={release}
+      transport={{ load: async () => structuredClone(messages({ checks })), act: async () => [], files }}
+    />,
+  )
+  fireEvent.change(await screen.findByLabelText('Notes'), { target: { value: 'ab' } })
+  expect(await screen.findByText('Write at least five characters')).toBeTruthy()
+  fireEvent.click(screen.getByRole('tab', { name: 'Preview' }))
+  expect(screen.getByText('Write at least five characters')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('tab', { name: 'Write' }))
+  fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'abcdef' } })
+  fireEvent.click(screen.getByRole('tab', { name: 'Preview' }))
+  await waitFor(() => expect(screen.queryByText('Write at least five characters')).toBeNull())
 })

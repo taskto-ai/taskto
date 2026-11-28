@@ -1,11 +1,22 @@
-import { type KeyboardEvent, useId, useLayoutEffect, useRef, useState } from 'react'
+import { type KeyboardEvent, useId, useRef, useState } from 'react'
 import { useFormat, useT } from '../i18n'
 import { Markdown } from '../markdown'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
+import { Icon } from '../ui/Icon'
 import { Tabs, tabPanelProps } from '../ui/Tabs'
 import { Textarea } from '../ui/Textarea'
-import { CHECKLIST_PREFIX, type Edit, HEADING_PREFIX, LIST_PREFIX, link, prefixLines, wrap } from './markdownEdit'
+import {
+  CHECKLIST_PREFIX,
+  type Edit,
+  HEADING_PREFIX,
+  keepBreaks,
+  LIST_PREFIX,
+  link,
+  prefixLines,
+  splice,
+  wrap,
+} from './markdownEdit'
 import './MarkdownInput.css'
 
 export const COUNTER_SHARE = 0.8
@@ -21,6 +32,26 @@ const TOOLS: readonly { tool: Tool; glyph: string }[] = [
   { tool: 'checklist', glyph: '☐' },
   { tool: 'link', glyph: '↗' },
 ]
+
+function typeInto(el: HTMLTextAreaElement, edit: Edit) {
+  const before = el.value
+  const { at, removed, insert } = splice(before, edit.text)
+  el.focus()
+  el.setSelectionRange(at, at + removed)
+  const done =
+    typeof document.execCommand === 'function' && document.execCommand(insert ? 'insertText' : 'delete', false, insert)
+  if (!done || el.value === before) {
+    el.setRangeText(insert, at, at + removed, 'end')
+    el.dispatchEvent(
+      new InputEvent('input', {
+        bubbles: true,
+        inputType: insert ? 'insertText' : 'deleteContentBackward',
+        data: insert || null,
+      }),
+    )
+  }
+  el.setSelectionRange(edit.start, edit.end)
+}
 
 export function MarkdownField({
   label,
@@ -39,35 +70,21 @@ export function MarkdownField({
   const { number } = useFormat()
   const ids = useId()
   const box = useRef<HTMLTextAreaElement>(null)
-  const pending = useRef<Edit | null>(null)
   const [tab, setTab] = useState<'write' | 'preview'>('write')
   const [active, setActive] = useState<Tool>('bold')
   const toolbar = useRef<HTMLDivElement>(null)
 
-  useLayoutEffect(() => {
-    const edit = pending.current
-    const el = box.current
-    if (!edit || !el) return
-    pending.current = null
-    el.focus()
-    el.setSelectionRange(edit.start, edit.end)
-  })
-
-  const apply = (edit: Edit) => {
-    pending.current = edit
-    onChange(edit.text)
-  }
-
   const run = (tool: Tool) => {
     const el = box.current
     if (!el) return
-    const { selectionStart: from, selectionEnd: to } = el
-    if (tool === 'bold') apply(wrap(value, from, to, '**', t('apps.markdownInput.boldSample')))
-    else if (tool === 'italic') apply(wrap(value, from, to, '_', t('apps.markdownInput.italicSample')))
-    else if (tool === 'heading') apply(prefixLines(value, from, to, HEADING_PREFIX))
-    else if (tool === 'list') apply(prefixLines(value, from, to, LIST_PREFIX))
-    else if (tool === 'checklist') apply(prefixLines(value, from, to, CHECKLIST_PREFIX))
-    else apply(link(value, from, to, t('apps.markdownInput.linkSample'), ADDRESS))
+    const { selectionStart: from, selectionEnd: to, value: text } = el
+    const apply = (edit: Edit) => typeInto(el, edit)
+    if (tool === 'bold') apply(wrap(text, from, to, '**', t('apps.markdownInput.boldSample')))
+    else if (tool === 'italic') apply(wrap(text, from, to, '_', t('apps.markdownInput.italicSample'), '*'))
+    else if (tool === 'heading') apply(prefixLines(text, from, to, HEADING_PREFIX))
+    else if (tool === 'list') apply(prefixLines(text, from, to, LIST_PREFIX))
+    else if (tool === 'checklist') apply(prefixLines(text, from, to, CHECKLIST_PREFIX))
+    else apply(link(text, from, to, t('apps.markdownInput.linkSample'), ADDRESS))
   }
 
   const shortcut = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -109,54 +126,60 @@ export function MarkdownField({
         onChange={(id) => setTab(id === 'preview' ? 'preview' : 'write')}
         id={ids}
       />
-      {tab === 'write' ? (
-        <div {...tabPanelProps(ids, 'write')} className="ui-app-markdown-input-panel">
-          <div
-            ref={toolbar}
-            className="ui-app-markdown-toolbar"
-            role="toolbar"
-            aria-label={t('apps.markdownInput.toolbar')}
-            onKeyDown={roving}
-          >
-            {TOOLS.map(({ tool, glyph }) => (
-              <Button
-                key={tool}
-                variant="ghost"
-                size="sm"
-                className="ui-app-markdown-tool"
-                aria-label={t(`apps.markdownInput.${tool}`)}
-                tabIndex={active === tool ? 0 : -1}
-                onFocus={() => setActive(tool)}
-                onClick={() => run(tool)}
-              >
-                <span aria-hidden="true" className={`ui-app-markdown-glyph ui-app-markdown-glyph-${tool}`}>
-                  {glyph}
-                </span>
-              </Button>
-            ))}
-          </div>
-          <Field label={label ?? t('apps.markdownInput.label')} error={error}>
-            <Textarea
-              ref={box}
-              rows={8}
-              className="ui-app-markdown-textarea"
-              value={value}
-              onChange={(e) => onChange(e.target.value)}
-              onKeyDown={shortcut}
-            />
-          </Field>
+      <div {...tabPanelProps(ids, 'write')} hidden={tab !== 'write'} className="ui-app-markdown-input-panel">
+        <div
+          ref={toolbar}
+          className="ui-app-markdown-toolbar"
+          role="toolbar"
+          aria-label={t('apps.markdownInput.toolbar')}
+          onKeyDown={roving}
+        >
+          {TOOLS.map(({ tool, glyph }) => (
+            <Button
+              key={tool}
+              variant="ghost"
+              size="sm"
+              className="ui-app-markdown-tool"
+              aria-label={t(`apps.markdownInput.${tool}`)}
+              tabIndex={active === tool ? 0 : -1}
+              onFocus={() => setActive(tool)}
+              onClick={() => run(tool)}
+            >
+              <span aria-hidden="true" className={`ui-app-markdown-glyph ui-app-markdown-glyph-${tool}`}>
+                {glyph}
+              </span>
+            </Button>
+          ))}
         </div>
-      ) : (
-        <div {...tabPanelProps(ids, 'preview')} className="ui-app-markdown-input-panel">
-          {value.trim() === '' ? (
+        <Field label={label ?? t('apps.markdownInput.label')} error={tab === 'write' ? error : undefined}>
+          <Textarea
+            ref={box}
+            rows={8}
+            className="ui-app-markdown-textarea"
+            value={value}
+            onChange={(e) => onChange(keepBreaks(value, e.target.value))}
+            onKeyDown={shortcut}
+          />
+        </Field>
+      </div>
+      <div {...tabPanelProps(ids, 'preview')} hidden={tab !== 'preview'} className="ui-app-markdown-input-panel">
+        {tab === 'preview' &&
+          (value.trim() === '' ? (
             <p className="ui-app-markdown-empty">{t('apps.markdownInput.empty')}</p>
           ) : (
             <div className="ui-app-markdown">
               <Markdown text={value} headingShift={2} links="text" />
             </div>
-          )}
-        </div>
-      )}
+          ))}
+        {tab === 'preview' && error && (
+          <div className="ui-field-live" aria-live="polite">
+            <p className="ui-field-error">
+              <Icon name="alert" size={14} />
+              <span>{error}</span>
+            </p>
+          </div>
+        )}
+      </div>
       {over && maxLength !== undefined && (
         <p className="ui-app-markdown-count" aria-live="polite" data-full={used > maxLength ? '' : undefined}>
           {t('apps.markdownInput.count', { used: number(used), max: number(maxLength) })}

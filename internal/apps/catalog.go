@@ -352,6 +352,20 @@ func (c *screenCheck) component(id string, obj map[string]any) error {
 		if f, ok := c.collection.field(field); !ok || f.Type != want {
 			return fmt.Errorf("%s's field %q is not a %s field of the collection", name, field, want)
 		}
+		if name == "MarkdownInput" {
+			if err := markdownBinding(field, obj["value"]); err != nil {
+				return fmt.Errorf("%s: value: %w", name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func markdownBinding(field string, v any) error {
+	bound, _ := v.(map[string]any)
+	path, _ := bound["path"].(string)
+	if len(bound) != 1 || (path != "/draft/"+field && path != "/record/"+field) {
+		return fmt.Errorf(`must be {"path": "/draft/%s"}, or {"path": "/record/%s"} on a screen that shows a record: the editor writes where it is bound, and the limit it counts is the field's`, field, field)
 	}
 	return nil
 }

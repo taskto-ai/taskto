@@ -11,6 +11,10 @@
     min-inline-size: 0;
   }
 
+  .ui-app-markdown-input-panel[hidden] {
+    display: none;
+  }
+
   .ui-app-markdown-toolbar {
     display: flex;
     flex-wrap: wrap;

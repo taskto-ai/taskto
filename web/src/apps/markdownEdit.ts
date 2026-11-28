@@ -4,27 +4,102 @@ export interface Edit {
   end: number
 }
 
-export function wrap(text: string, start: number, end: number, marker: string, placeholder: string): Edit {
-  const size = marker.length
-  const selected = text.slice(start, end)
-  const around = text.slice(start - size, start) === marker && text.slice(end, end + size) === marker
-  if (around && start >= size) {
-    return {
-      text: text.slice(0, start - size) + selected + text.slice(end + size),
-      start: start - size,
-      end: end - size,
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u
+
+const wrapped = (text: string, marker: string) =>
+  text.length >= marker.length * 2 &&
+  text.startsWith(marker) &&
+  text.endsWith(marker) &&
+  (marker.length > 1 || (text[1] !== marker && text[text.length - 2] !== marker))
+
+const touchesWord = (text: string, from: number, to: number) =>
+  LETTER_OR_DIGIT.test(text[from - 1] ?? '') || LETTER_OR_DIGIT.test(text[to] ?? '')
+
+function wrapLines(text: string, from: number, to: number, marker: string, inword: string): Edit {
+  const lines = text.slice(from, to).split('\n')
+  const bodies = lines.map((line) => line.trim())
+  const off = [marker, inword].find((m) => bodies.every((body) => body === '' || wrapped(body, m)))
+  const on = touchesWord(text, from, to) ? inword : marker
+  const body = lines
+    .map((line, i) => {
+      const inner = bodies[i]
+      if (inner === '') return line
+      const at = line.indexOf(inner)
+      const next = off
+        ? inner.slice(off.length, inner.length - off.length)
+        : wrapped(inner, on)
+          ? inner
+          : on + inner + on
+      return line.slice(0, at) + next + line.slice(at + inner.length)
+    })
+    .join('\n')
+  return { text: text.slice(0, from) + body + text.slice(to), start: from, end: from + body.length }
+}
+
+export function wrap(
+  text: string,
+  start: number,
+  end: number,
+  marker: string,
+  placeholder: string,
+  inword = marker,
+): Edit {
+  const raw = text.slice(start, end)
+  const from = start + (raw.length - raw.trimStart().length)
+  const to = raw.trim() === '' ? from : end - (raw.length - raw.trimEnd().length)
+  const selected = text.slice(from, to)
+  if (selected.includes('\n')) return wrapLines(text, from, to, marker, inword)
+  for (const m of new Set([marker, inword])) {
+    const size = m.length
+    const around =
+      from >= size &&
+      text.slice(from - size, from) === m &&
+      text.slice(to, to + size) === m &&
+      (size > 1 || (text[from - 2] !== m && text[to + 1] !== m))
+    if (around) {
+      return {
+        text: text.slice(0, from - size) + selected + text.slice(to + size),
+        start: from - size,
+        end: to - size,
+      }
+    }
+    if (wrapped(selected, m)) {
+      const inner = selected.slice(size, selected.length - size)
+      return { text: text.slice(0, from) + inner + text.slice(to), start: from, end: from + inner.length }
     }
   }
-  if (selected.length >= size * 2 && selected.startsWith(marker) && selected.endsWith(marker)) {
-    const inner = selected.slice(size, selected.length - size)
-    return { text: text.slice(0, start) + inner + text.slice(end), start, end: start + inner.length }
-  }
+  const m = touchesWord(text, from, to) ? inword : marker
   const body = selected === '' ? placeholder : selected
   return {
-    text: text.slice(0, start) + marker + body + marker + text.slice(end),
-    start: start + size,
-    end: start + size + body.length,
+    text: text.slice(0, from) + m + body + m + text.slice(to),
+    start: from + m.length,
+    end: from + m.length + body.length,
   }
+}
+
+export const normalizeBreaks = (text: string) => text.replace(/\r\n?/g, '\n')
+
+export function splice(before: string, after: string) {
+  const most = Math.min(before.length, after.length)
+  let head = 0
+  while (head < most && before[head] === after[head]) head++
+  let tail = 0
+  while (tail < most - head && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail++
+  return { at: head, removed: before.length - head - tail, insert: after.slice(head, after.length - tail) }
+}
+
+export function keepBreaks(previous: string, next: string): string {
+  if (!previous.includes('\r')) return next
+  const was = normalizeBreaks(previous)
+  if (was === next) return previous
+  const starts: number[] = []
+  for (let i = 0; i < previous.length; i++) {
+    starts.push(i)
+    if (previous[i] === '\r' && previous[i + 1] === '\n') i++
+  }
+  starts.push(previous.length)
+  const { at, removed, insert } = splice(was, next)
+  return previous.slice(0, starts[at]) + insert + previous.slice(starts[at + removed])
 }
 
 export const HEADING_PREFIX = '### '
