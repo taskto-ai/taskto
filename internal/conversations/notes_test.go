@@ -108,6 +108,20 @@ func TestNoteOnAnArchivedConversationIsRefused(t *testing.T) {
 	}
 }
 
+func TestNoteIsRefusedToANonOwnerBeforeItsBodyIsRead(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	reader := e.invite(owner, ws, "reader@example.com")
+	stranger := e.invite(owner, ws, "stranger@example.com")
+	c := owner.create(ws, nil)
+	e.shareWith(owner, ws, c.ID, reader)
+
+	reader.expectCode(http.StatusForbidden, "conversation_read_only", http.MethodPost, notesPath(ws, c.ID), map[string]any{"content": "  "})
+	reader.expectCode(http.StatusForbidden, "conversation_read_only", http.MethodPost, notesPath(ws, c.ID), map[string]any{"content": strings.Repeat("x", maxNoteChars+1)})
+	stranger.expectCode(http.StatusNotFound, "conversation_not_found", http.MethodPost, notesPath(ws, c.ID), map[string]any{"content": "  "})
+	owner.expectCode(http.StatusBadRequest, string(apierr.CodeConversationNoteInvalid), http.MethodPost, notesPath(ws, c.ID), map[string]any{"content": "  "})
+}
+
 func TestNoteNeedsTheRuntime(t *testing.T) {
 	e := newEnv(t, false)
 	owner, ws := e.setup()

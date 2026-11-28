@@ -1076,6 +1076,9 @@
     "conversation_title_invalid": "O título pode ter no máximo {max} caracteres, sem caracteres de controle.",
     "conversation_lost": "O agente não tem mais o conteúdo desta conversa. Um operador pode ver o motivo no log do servidor.",
     "conversation_no_model": "Esta conversa não tem modelo: escolha um.",
+    "conversation_read_only": "Esta conversa foi compartilhada com você só para leitura. Apenas o dono pode fazer isso.",
+    "conversation_members_limit": "Uma conversa pode ser compartilhada com no máximo {max} pessoas.",
+    "conversation_member_not_found": "Esta conversa não está compartilhada com essa pessoa.",
     "conversation_busy": "Esta conversa está trabalhando: tente de novo quando ela terminar.",
     "conversation_moved": "Esta conversa mudou enquanto você escolhia: confira a resposta mais recente e tente de novo.",
     "model_unavailable": "Esse modelo não pode ser usado agora: conecte a conta dele ou escolha outro.",
@@ -2193,6 +2196,9 @@
         "space_member_added": "Adicionado a um espaço compartilhado",
         "space_member_role_changed": "Papel em um espaço compartilhado alterado",
         "space_member_removed": "Removido de um espaço compartilhado",
+        "conversation_shared": "Conversa compartilhada para leitura",
+        "conversation_share_changed": "Papel de compartilhamento da conversa alterado",
+        "conversation_unshared": "Conversa deixou de ser compartilhada",
         "provider_account_created": "Conta de provedor de modelos adicionada",
         "provider_account_updated": "Conta de provedor de modelos alterada",
         "provider_account_removed": "Conta de provedor de modelos removida",
@@ -2235,6 +2241,7 @@
         "provider_account": "Conta de provedor de modelos",
         "shared_cli_account": "Conta de CLI compartilhada",
         "integration": "Integração",
+        "conversation": "Conversa",
         "app_integration_approval": "Aprovação de integração de app"
       },
       "details": {
@@ -2808,6 +2815,25 @@
       "routine": "Rotina"
     },
     "nothingArchived": "Nenhuma conversa arquivada.",
+    "nothingShared": "Ninguém compartilhou uma conversa com você.",
+    "sharedWithMe": "Compartilhadas comigo",
+    "sharedBy": "Compartilhada por {owner}",
+    "sharedReadOnly": "Compartilhada por {owner} · somente leitura",
+    "untitledShort": "Sem título",
+    "share": {
+      "button": "Compartilhar",
+      "title": "Compartilhar esta conversa",
+      "help": "As pessoas que você adicionar podem ler esta conversa e ver o agente trabalhando, ao vivo. Não podem escrever nela, pará-la nem alterá-la. Só quem você escolher pode vê-la.",
+      "people": "Pessoas com acesso",
+      "none": "Não está compartilhada com ninguém.",
+      "person": "Adicionar uma pessoa",
+      "choose": "Escolha um membro",
+      "add": "Compartilhar",
+      "noOthers": "Não há mais ninguém para adicionar.",
+      "remove": "Parar de compartilhar com {name}",
+      "removeLabel": "Remover",
+      "done": "Concluir"
+    },
     "none": "Nenhuma conversa ainda.",
     "noneHelp": "Comece uma em Nova, ou peça ao agente para criar um app.",
     "pick": "Escolha uma conversa ou comece uma nova.",
@@ -3315,6 +3341,7 @@
       "card_mention": "Você foi mencionado em um comentário em um cartão: {title}",
       "app_effect_failed": "Uma ação em {app} não terminou e precisa que você tente de novo",
       "integration_event": "Um pagamento de {integration} não foi aplicado e precisa de um administrador",
+      "conversation_shared": "{owner} compartilhou uma conversa com você: {title}",
       "changed": "Algo mudou. Abra para ver o que você ainda pode ver."
     },
     "push": {
@@ -3325,6 +3352,7 @@
       "card_mention": "Você foi mencionado em um comentário",
       "app_effect_failed": "Uma ação de um app precisa da sua atenção",
       "integration_event": "Um pagamento precisa de um administrador",
+      "conversation_shared": "Uma conversa foi compartilhada com você",
       "changed": "Algo mudou"
     },
     "settings": {

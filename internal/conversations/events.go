@@ -25,7 +25,7 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	user, workspace := caller(r)
+	user, _ := caller(r)
 	sessionCtx, stopWatch := s.watchSession(r, s.heartbeat)
 	defer stopWatch()
 	if sessionCtx.Err() != nil {
@@ -81,10 +81,28 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	defer stopHeartbeat()
 	const maxFailedChecks = 3
 	failedChecks := 0
+	filter := new(viewerFilter)
 	for {
 		select {
 		case ev := <-events:
-			if err := out.event(ev.Raw); err != nil {
+			if c.Role != RoleOwner {
+				if err := s.stillSame(ctx, c); err != nil {
+					if r.Context().Err() == nil {
+						_ = out.event(interrupted)
+					}
+					return
+				}
+			}
+			data := []byte(ev.Raw)
+			if c.Role != RoleOwner {
+				var err error
+				if data, err = filter.redact(data); err != nil {
+					slog.WarnContext(ctx, "conversations: an event for a viewer couldn't be read", "conversation", c.ID, "err", err)
+					_ = out.event(interrupted)
+					return
+				}
+			}
+			if err := out.event(data); err != nil {
 				if errors.Is(err, errBadLine) {
 					slog.WarnContext(ctx, "conversations: the agent runtime sent a line with a line break", "conversation", c.ID)
 					_ = out.event(interrupted)
@@ -103,7 +121,7 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		case <-heartbeat:
-			switch _, err := s.find(ctx, workspace, user, c.ID); {
+			switch err := s.stillSame(ctx, c); {
 			case errors.Is(err, errNotFound):
 				_ = out.event(interrupted)
 				return
@@ -155,9 +173,7 @@ func (e *eventWriter) event(data []byte) error {
 	if bytes.ContainsAny(data, "\r\n") {
 		return errBadLine
 	}
-	buf := make([]byte, 0, len(data)+8)
-	buf = append(buf, "data: "...)
-	buf = append(buf, data...)
+	buf := append([]byte("data: "), data...)
 	return e.write(append(buf, '\n', '\n'))
 }
 

@@ -71,6 +71,7 @@ var (
 
 	roles                = oneOf("admin", "member")
 	spaceRoles           = oneOf("editor", "viewer")
+	conversationRoles    = oneOf("viewer", "participant")
 	modes                = oneOf("own_else_shared", "own", "shared")
 	clis                 = oneOf("claude", "codex", "grok")
 	integrationProviders = oneOf("stripe", "square")
@@ -130,6 +131,10 @@ var schemas = map[string]map[string]kind{
 	SpaceMemberAdded:       {"user_id": number, "role": spaceRoles},
 	SpaceMemberRoleChanged: {"user_id": number, "from": spaceRoles, "to": spaceRoles},
 	SpaceMemberRemoved:     {"user_id": number, "role": spaceRoles, "cascade": cascadeFlag},
+
+	ConversationShared:       {"user_id": number, "role": conversationRoles},
+	ConversationShareChanged: {"user_id": number, "role": conversationRoles},
+	ConversationUnshared:     {"user_id": number},
 
 	ServerUpdateRequested: {"channel": oneOf("release", "main")},
 

@@ -52,6 +52,7 @@ type fakeRuntime struct {
 	stallSend    bool
 	stallPutBack bool
 	onEntries    func()
+	onRead       func(op string)
 	onContinue   func()
 }
 
@@ -139,7 +140,14 @@ func (f *fakeRuntime) Note(_ context.Context, conv int64, n agentrt.NoteInput) (
 	return int64(2000 + len(f.notes[conv])), nil
 }
 
+func (f *fakeRuntime) read(op string) {
+	if f.onRead != nil {
+		f.onRead(op)
+	}
+}
+
 func (f *fakeRuntime) Messages(_ context.Context, conv int64) ([]agentrt.Message, error) {
+	f.read("messages")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -171,6 +179,7 @@ func (f *fakeRuntime) Wait(ctx context.Context, _ int64) (agentrt.Settled, error
 }
 
 func (f *fakeRuntime) Model(_ context.Context, conv int64) (agentrt.ModelRef, error) {
+	f.read("model")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.models[conv], f.err
@@ -207,6 +216,7 @@ func (f *fakeRuntime) Abort(ctx context.Context, conv int64) error {
 }
 
 func (f *fakeRuntime) Entries(_ context.Context, conv, before int64, limit int) (json.RawMessage, error) {
+	f.read("entries")
 	if f.onEntries != nil {
 		f.onEntries()
 	}

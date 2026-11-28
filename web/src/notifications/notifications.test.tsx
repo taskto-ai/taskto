@@ -174,6 +174,7 @@ test('nothing is asked or subscribed until the person turns push on, and then on
       card_mention: 'You were mentioned in a comment',
       app_effect_failed: 'An app action needs your attention',
       integration_event: 'A payment needs an admin',
+      conversation_shared: 'A conversation was shared with you',
       changed: 'Something changed',
     },
   })
@@ -362,6 +363,37 @@ test("a due and an overdue card say the date in the reader's format, and lead to
     'Unread: Due Mar 31, 2026: Pay rent',
   ])
   expect(links.map((a) => a.getAttribute('href'))).toEqual(['/w/1/boards/3%3A4%3A2', '/w/1/boards/3%3A4%3A1'])
+})
+
+test('a shared conversation says who shared it, and leads to the conversation', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/notifications': {
+      body: {
+        notifications: [
+          item(2, {
+            kind: 'conversation_shared',
+            params: { title: 'Quarterly plan', owner: 'Ana' },
+            target: { section: 'conversations', item: '9' },
+          }),
+          item(1, {
+            kind: 'conversation_shared',
+            params: { title: '', owner: 'Bo' },
+            target: { section: 'conversations', item: '8' },
+          }),
+        ],
+        more: false,
+        unread: 2,
+      },
+    },
+  })
+  render(<NotificationsPage workspace={1} />)
+  const list = await screen.findByRole('list', { name: 'Notifications' })
+  const links = within(list).getAllByRole('link')
+  expect(links.map((a) => a.textContent)).toEqual([
+    'Unread: Ana shared a conversation with you: Quarterly plan',
+    'Unread: Bo shared a conversation with you: Untitled',
+  ])
+  expect(links.map((a) => a.getAttribute('href'))).toEqual(['/w/1/conversations/9', '/w/1/conversations/8'])
 })
 
 test('the inbox pages older notifications in, and says when there are none', async () => {

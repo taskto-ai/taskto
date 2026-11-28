@@ -555,6 +555,18 @@ export type Conversation = {
   updated_at: string
   cli_permissions: string
   origin: ConversationOrigin | null
+  role: string
+  owner: ConversationsPerson
+}
+
+export type ConversationMember = {
+  user: ConversationsPerson
+  role: string
+  added_at: string
+}
+
+export type ConversationMembers = {
+  members: ConversationMember[] | null
 }
 
 export type ConversationOrigin = {
@@ -567,6 +579,11 @@ export type ConversationOrigin = {
 export type ConversationsModelRef = {
   provider: string
   model_id: string
+}
+
+export type ConversationsPerson = {
+  id: number
+  name: string
 }
 
 export type DeletionReply = {

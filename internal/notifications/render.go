@@ -116,6 +116,15 @@ func (r *reader) describe(ctx context.Context, n stored) (params map[string]stri
 			return nil, Target{}, false, err
 		}
 		return map[string]string{"integration": name}, Target{Section: "settings"}, true, nil
+	case KindConversationShared:
+		if r.s.conversations == nil {
+			return nil, Target{}, false, nil
+		}
+		title, owner, readable, err := r.s.conversations.Readable(ctx, n.workspaceID, r.userID, n.ref.Conversation)
+		if err != nil || !readable {
+			return nil, Target{}, false, err
+		}
+		return map[string]string{"title": title, "owner": owner}, Target{Section: "conversations", Item: strconv.FormatInt(n.ref.Conversation, 10)}, true, nil
 	case KindAppEffectFailed:
 		sp, acc, name, err := r.access.AppNamed(ctx, r.userID, n.ref.Space, n.ref.App)
 		if errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound) {

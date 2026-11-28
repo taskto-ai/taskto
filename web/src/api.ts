@@ -193,7 +193,17 @@ export type Conversation = {
   updated_at: string
   cli_permissions?: 'ask' | 'allow_all'
   origin: { kind: 'app' | 'routine'; space_id?: number; app_id?: number; routine_id?: number } | null
+  role: 'owner' | 'viewer' | 'participant'
+  owner: { id: number; name: string }
 }
+
+export type ConversationMember = {
+  user: { id: number; name: string }
+  role: 'viewer' | 'participant'
+  added_at: string
+}
+
+export type ConversationMembers = { members: ConversationMember[] | null }
 
 export type ModelRef = { provider: string; model_id: string }
 

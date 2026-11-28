@@ -12,17 +12,16 @@ var ErrNoTranscript = errors.New("the conversation's history isn't available")
 const exportPage = maxPageEntries
 
 func (s *Service) ExportList(ctx context.Context, workspace, user int64) ([]Conversation, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM conversations c
-		WHERE workspace_id = ? AND owner_id = ?
-		AND EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = c.workspace_id AND m.user_id = c.owner_id)
-		ORDER BY created_at, id`, workspace, user)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+reachColumns+` `+reachFrom+`
+		WHERE `+reachWhere+` AND c.owner_id = ?1
+		ORDER BY c.created_at, c.id`, user, workspace)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Conversation{}
 	for rows.Next() {
-		c, err := scan(rows)
+		c, err := scanReach(rows)
 		if err != nil {
 			return nil, err
 		}

@@ -47,6 +47,10 @@ const (
 	SpaceMemberRoleChanged = "space_member_role_changed"
 	SpaceMemberRemoved     = "space_member_removed"
 
+	ConversationShared       = "conversation_shared"
+	ConversationShareChanged = "conversation_share_changed"
+	ConversationUnshared     = "conversation_unshared"
+
 	DataExportStarted      = "data_export_started"
 	WorkspaceExportStarted = "workspace_export_started"
 
@@ -88,4 +92,5 @@ const (
 	TargetSharedAccount  = "shared_cli_account"
 	TargetIntegration    = "integration"
 	TargetAppIntegration = "app_integration_approval"
+	TargetConversation   = "conversation"
 )

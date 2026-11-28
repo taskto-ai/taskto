@@ -135,6 +135,17 @@ func (s *Service) lock(ctx context.Context, id int64) (func(), bool) {
 
 func (s *Service) EndStreams() { s.endStreams() }
 
+const (
+	RoleOwner       = "owner"
+	RoleViewer      = "viewer"
+	RoleParticipant = "participant"
+)
+
+type Person struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
 type Conversation struct {
 	ID             int64               `json:"id"`
 	WorkspaceID    int64               `json:"workspace_id"`
@@ -144,8 +155,11 @@ type Conversation struct {
 	UpdatedAt      string              `json:"updated_at"`
 	CLIPermissions string              `json:"cli_permissions"`
 	Origin         *ConversationOrigin `json:"origin"`
+	Role           string              `json:"role"`
+	Owner          Person              `json:"owner"`
 
 	agentID int64
+	viewer  int64
 }
 
 type ConversationOrigin struct {
@@ -157,46 +171,92 @@ type ConversationOrigin struct {
 
 var errNotFound = errors.New("conversation not found")
 
+const reachColumns = `c.id, c.workspace_id, c.agent_id, c.title, c.archived_at, c.created_at, c.updated_at, c.cli_permissions,
+	CASE WHEN c.origin IS NULL THEN NULL ELSE json_object('kind', c.origin_kind, 'space_id', c.origin_space_id, 'app_id', c.origin_app_id, 'routine_id', c.origin_routine_id) END,
+	CASE WHEN c.owner_id = ?1 THEN 'owner' ELSE m.role END, c.owner_id, o.name`
+
 const columns = `id, workspace_id, agent_id, title, archived_at, created_at, updated_at, cli_permissions,
 	CASE WHEN origin IS NULL THEN NULL ELSE json_object('kind', origin_kind, 'space_id', origin_space_id, 'app_id', origin_app_id, 'routine_id', origin_routine_id) END`
+
+const reachFrom = `FROM conversations c
+	JOIN users o ON o.id = c.owner_id AND o.disabled_at IS NULL
+	LEFT JOIN conversation_members m ON m.conversation_id = c.id AND m.user_id = ?1`
+
+const reachWhere = `c.workspace_id = ?2
+	AND EXISTS (SELECT 1 FROM memberships om WHERE om.workspace_id = c.workspace_id AND om.user_id = c.owner_id)
+	AND (c.owner_id = ?1 OR (m.user_id IS NOT NULL
+		AND EXISTS (SELECT 1 FROM memberships um WHERE um.workspace_id = c.workspace_id AND um.user_id = ?1)
+		AND EXISTS (SELECT 1 FROM users cu WHERE cu.id = ?1 AND cu.disabled_at IS NULL)))`
+
+func decodeOrigin(raw sql.NullString, c *Conversation) error {
+	if !raw.Valid {
+		return nil
+	}
+	var value ConversationOrigin
+	if err := json.Unmarshal([]byte(raw.String), &value); err != nil {
+		return err
+	}
+	c.Origin = &value
+	return nil
+}
+
+func scanReach(row interface{ Scan(...any) error }) (Conversation, error) {
+	var c Conversation
+	var origin sql.NullString
+	err := row.Scan(&c.ID, &c.WorkspaceID, &c.agentID, &c.Title, &c.ArchivedAt, &c.CreatedAt, &c.UpdatedAt, &c.CLIPermissions, &origin,
+		&c.Role, &c.Owner.ID, &c.Owner.Name)
+	if err == nil {
+		err = decodeOrigin(origin, &c)
+	}
+	return c, err
+}
 
 func scan(row interface{ Scan(...any) error }) (Conversation, error) {
 	var c Conversation
 	var origin sql.NullString
 	err := row.Scan(&c.ID, &c.WorkspaceID, &c.agentID, &c.Title, &c.ArchivedAt, &c.CreatedAt, &c.UpdatedAt, &c.CLIPermissions, &origin)
-	if err == nil && origin.Valid {
-		var value ConversationOrigin
-		err = json.Unmarshal([]byte(origin.String), &value)
-		if err == nil {
-			c.Origin = &value
-		}
+	if err == nil {
+		err = decodeOrigin(origin, &c)
 	}
 	return c, err
 }
 
-func (s *Service) find(ctx context.Context, workspace, user, id int64) (Conversation, error) {
-	c, err := scan(s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM conversations c
-		WHERE id = ? AND workspace_id = ? AND owner_id = ?
-		AND EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = c.workspace_id AND m.user_id = c.owner_id)
-		AND EXISTS (SELECT 1 FROM users u WHERE u.id = c.owner_id AND u.disabled_at IS NULL)`,
-		id, workspace, user))
+func (s *Service) reach(ctx context.Context, workspace, user, id int64) (Conversation, error) {
+	c, err := scanReach(s.db.QueryRowContext(ctx, `SELECT `+reachColumns+` `+reachFrom+`
+		WHERE c.id = ?3 AND `+reachWhere, user, workspace, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Conversation{}, errNotFound
 	}
+	c.viewer = user
 	return c, err
 }
 
-func (s *Service) list(ctx context.Context, workspace, user int64, archived bool) ([]Conversation, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM conversations
-		WHERE workspace_id = ? AND owner_id = ? AND (archived_at IS NOT NULL) = ?
-		ORDER BY updated_at DESC, id DESC`, workspace, user, archived)
+func (s *Service) stillSame(ctx context.Context, c Conversation) error {
+	now, err := s.reach(ctx, c.WorkspaceID, c.viewer, c.ID)
+	if err != nil {
+		return err
+	}
+	if now.Owner.ID != c.Owner.ID || now.agentID != c.agentID {
+		return errNotFound
+	}
+	return nil
+}
+
+func (s *Service) list(ctx context.Context, workspace, user int64, archived, shared bool) ([]Conversation, error) {
+	who := `c.owner_id = ?1`
+	if shared {
+		who = `c.owner_id <> ?1`
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+reachColumns+` `+reachFrom+`
+		WHERE `+reachWhere+` AND `+who+` AND (c.archived_at IS NOT NULL) = ?3
+		ORDER BY c.updated_at DESC, c.id DESC`, user, workspace, archived)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Conversation{}
 	for rows.Next() {
-		c, err := scan(rows)
+		c, err := scanReach(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -206,12 +266,16 @@ func (s *Service) list(ctx context.Context, workspace, user int64, archived bool
 }
 
 func (s *Service) insert(ctx context.Context, workspace, user, agentID int64, title string) (Conversation, error) {
-	return scan(s.db.QueryRowContext(ctx, `INSERT INTO conversations (workspace_id, owner_id, agent_id, title, usage_mark)
-		VALUES (?, ?, ?, ?, 0) RETURNING `+columns, workspace, user, agentID, title))
+	var id int64
+	if err := s.db.QueryRowContext(ctx, `INSERT INTO conversations (workspace_id, owner_id, agent_id, title, usage_mark)
+		VALUES (?, ?, ?, ?, 0) RETURNING id`, workspace, user, agentID, title).Scan(&id); err != nil {
+		return Conversation{}, err
+	}
+	return s.reach(ctx, workspace, user, id)
 }
 
 func (s *Service) update(ctx context.Context, workspace, user, id int64, title *string, archived *bool, cliPermissions *string) (Conversation, error) {
-	c, err := scan(s.db.QueryRowContext(ctx, `UPDATE conversations SET
+	err := s.db.QueryRowContext(ctx, `UPDATE conversations SET
 		title = coalesce(?1, title),
 		archived_at = CASE WHEN ?2 IS NULL THEN archived_at WHEN ?2 THEN coalesce(archived_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) END,
 		cli_permissions = coalesce(?6, cli_permissions),
@@ -219,11 +283,14 @@ func (s *Service) update(ctx context.Context, workspace, user, id int64, title *
 		WHERE id = ?3 AND workspace_id = ?4 AND owner_id = ?5
 		AND EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = ?4 AND m.user_id = ?5)
 		AND EXISTS (SELECT 1 FROM users u WHERE u.id = ?5 AND u.disabled_at IS NULL)
-		RETURNING `+columns, title, archived, id, workspace, user, cliPermissions))
+		RETURNING id`, title, archived, id, workspace, user, cliPermissions).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Conversation{}, errNotFound
 	}
-	return c, err
+	if err != nil {
+		return Conversation{}, err
+	}
+	return s.reach(ctx, workspace, user, id)
 }
 
 func (s *Service) touch(ctx context.Context, id, agentID int64) error {

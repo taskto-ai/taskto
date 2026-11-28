@@ -52,6 +52,8 @@ func Roots() []Root {
 		root[boards.Thread]("CardThread"),
 
 		root[conversations.Conversation]("Conversation"),
+		root[conversations.Members]("ConversationMembers"),
+		root[conversations.Member]("ConversationMember"),
 		root[conversations.ConversationOrigin]("ConversationOrigin"),
 		root[conversations.SendReply]("SendReply"),
 		root[conversations.SubmissionReply]("SubmissionReply"),

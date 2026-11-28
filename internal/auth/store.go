@@ -489,6 +489,10 @@ func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) e
 		if err != nil {
 			return err
 		}
+		conversations, err := leftConversations(ctx, tx, workspaceID, userID)
+		if err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, `DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`,
 			workspaceID, userID); err != nil {
 			return err
@@ -507,6 +511,12 @@ func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) e
 			if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.SpaceMemberRemoved,
 				TargetType: audit.TargetSpace, Target: sp.id,
 				Details: audit.Details{"user_id": userID, "role": sp.role, "cascade": true}}); err != nil {
+				return err
+			}
+		}
+		for _, c := range conversations {
+			if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.ConversationUnshared,
+				TargetType: audit.TargetConversation, Target: c.id, Details: audit.Details{"user_id": userID}}); err != nil {
 				return err
 			}
 		}
@@ -546,6 +556,12 @@ func leftSpaces(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) ([]c
 	return cascadedRows(ctx, tx, `
 		SELECT sp.id, sp.created_at, sm.role FROM space_members sm JOIN spaces sp ON sp.id = sm.space_id
 		WHERE sp.workspace_id = ? AND sm.user_id = ? ORDER BY sp.id`, workspaceID, userID)
+}
+
+func leftConversations(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) ([]cascaded, error) {
+	return cascadedRows(ctx, tx, `
+		SELECT c.id, c.created_at, cm.role FROM conversation_members cm JOIN conversations c ON c.id = cm.conversation_id
+		WHERE c.workspace_id = ? AND cm.user_id = ? ORDER BY c.id`, workspaceID, userID)
 }
 
 func (s *Service) createInvite(ctx context.Context, workspaceID, by int64, email string, role Role) (Invite, string, error) {

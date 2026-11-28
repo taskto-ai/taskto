@@ -49,6 +49,8 @@ const conversation = {
   archived_at: null,
   created_at: '2026-11-18T10:00:00.000Z',
   updated_at: '2026-11-18T10:00:00.000Z',
+  role: 'owner',
+  owner: { id: 1, name: 'Ana' },
 }
 
 function Page() {

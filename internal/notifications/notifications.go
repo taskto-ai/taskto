@@ -20,14 +20,15 @@ import (
 )
 
 const (
-	KindCardAssigned     = "card_assigned"
-	KindCardComment      = "card_comment"
-	KindCardMention      = "card_mention"
-	KindAppEffectFailed  = "app_effect_failed"
-	KindCardDue          = "card_due"
-	KindCardOverdue      = "card_overdue"
-	KindIntegrationEvent = "integration_event"
-	KindChanged          = "changed"
+	KindCardAssigned       = "card_assigned"
+	KindCardComment        = "card_comment"
+	KindCardMention        = "card_mention"
+	KindAppEffectFailed    = "app_effect_failed"
+	KindCardDue            = "card_due"
+	KindCardOverdue        = "card_overdue"
+	KindIntegrationEvent   = "integration_event"
+	KindConversationShared = "conversation_shared"
+	KindChanged            = "changed"
 )
 
 const (
@@ -42,14 +43,15 @@ const (
 const timeFormat = "2006-01-02T15:04:05.000Z"
 
 type Ref struct {
-	Space       int64  `json:"space,omitempty"`
-	Board       int64  `json:"board,omitempty"`
-	Card        int64  `json:"card,omitempty"`
-	App         int64  `json:"app,omitempty"`
-	Effect      int64  `json:"effect,omitempty"`
-	Integration int64  `json:"integration,omitempty"`
-	Event       int64  `json:"event,omitempty"`
-	Due         string `json:"due,omitempty"`
+	Space        int64  `json:"space,omitempty"`
+	Board        int64  `json:"board,omitempty"`
+	Card         int64  `json:"card,omitempty"`
+	App          int64  `json:"app,omitempty"`
+	Effect       int64  `json:"effect,omitempty"`
+	Integration  int64  `json:"integration,omitempty"`
+	Event        int64  `json:"event,omitempty"`
+	Conversation int64  `json:"conversation,omitempty"`
+	Due          string `json:"due,omitempty"`
 }
 
 type Notice struct {
@@ -63,7 +65,7 @@ var errUnknownKind = errors.New("notifications: unknown kind")
 
 func Add(ctx context.Context, tx *sql.Tx, n Notice) error {
 	switch n.Kind {
-	case KindCardAssigned, KindCardComment, KindCardMention, KindAppEffectFailed, KindCardDue, KindCardOverdue, KindIntegrationEvent:
+	case KindCardAssigned, KindCardComment, KindCardMention, KindAppEffectFailed, KindCardDue, KindCardOverdue, KindIntegrationEvent, KindConversationShared:
 	default:
 		return errUnknownKind
 	}
@@ -115,23 +117,30 @@ type Options struct {
 	Now        func() time.Time
 }
 
+type ConversationReader interface {
+	Readable(ctx context.Context, workspace, user, conversation int64) (title, owner string, ok bool, err error)
+}
+
+func (s *Service) SetConversations(c ConversationReader) { s.conversations = c }
+
 const DefaultContact = "https://taskto.ai"
 
 type Service struct {
-	db           *sql.DB
-	access       *access.Checker
-	key          *serverkey.Key
-	vapid        *vapidKey
-	client       *http.Client
-	contact      string
-	egress       egress.Policy
-	clock        func() time.Time
-	mail         *mail.Service
-	publicURL    string
-	sched        *schedule.Service
-	tidyEvery    time.Duration
-	afterReserve func()
-	betweenReads func(*sql.Tx)
+	db            *sql.DB
+	access        *access.Checker
+	key           *serverkey.Key
+	vapid         *vapidKey
+	client        *http.Client
+	contact       string
+	egress        egress.Policy
+	clock         func() time.Time
+	mail          *mail.Service
+	publicURL     string
+	sched         *schedule.Service
+	conversations ConversationReader
+	tidyEvery     time.Duration
+	afterReserve  func()
+	betweenReads  func(*sql.Tx)
 }
 
 func New(ctx context.Context, sqlDB *sql.DB, spaces *access.Checker, opts Options) (*Service, error) {

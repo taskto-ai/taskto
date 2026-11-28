@@ -139,6 +139,34 @@
     gap: var(--space-1);
   }
 
+  .ui-chat-share {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .ui-chat-share-add {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: var(--space-2);
+  }
+
+  .ui-chat-share-add .ui-field {
+    flex: 1 1 12rem;
+    min-inline-size: 0;
+  }
+
+  .ui-chat-share-heading {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+
+  .ui-chat-share-note {
+    margin: 0;
+    color: var(--color-text-muted);
+  }
+
   .ui-chat-notices {
     display: grid;
     grid-template-columns: minmax(0, 1fr);

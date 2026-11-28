@@ -17,7 +17,7 @@ type CLIQuestions interface {
 func (s *Service) SetCLIQuestions(q CLIQuestions) { s.questions = q }
 
 func (s *Service) handleQuestions(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.conversationInPath(w, r)
+	c, ok := s.ownedInPath(w, r)
 	if !ok {
 		return
 	}
@@ -35,7 +35,7 @@ func (s *Service) handleQuestions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleAnswer(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.conversationInPath(w, r)
+	c, ok := s.ownedInPath(w, r)
 	if !ok {
 		return
 	}

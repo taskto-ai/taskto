@@ -226,6 +226,7 @@ func (s *Service) findOrigin(ctx context.Context, st Start) (Conversation, error
 	if err != nil {
 		return Conversation{}, err
 	}
+	c.Role, c.Owner.ID = RoleOwner, owner
 	if owner != st.User || c.WorkspaceID != st.Workspace || c.Origin == nil || c.Origin.Kind != st.Origin.Kind ||
 		c.Origin.SpaceID != st.Origin.SpaceID || c.Origin.AppID != st.Origin.AppID || c.Origin.RoutineID != st.Origin.RoutineID {
 		return Conversation{}, ErrOrigin
@@ -249,6 +250,7 @@ func (s *Service) insertWithOrigin(ctx context.Context, st Start, agentID int64)
 		st.Workspace, st.User, agentID, st.Title, st.Origin.Key, st.Origin.Kind, nullableID(st.Origin.SpaceID),
 		nullableID(st.Origin.AppID), nullableID(st.Origin.RoutineID)))
 	if err == nil {
+		c.Role, c.Owner.ID = RoleOwner, st.User
 		return c, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {

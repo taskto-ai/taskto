@@ -15,6 +15,8 @@ const conversation = (archived = false) => ({
   archived_at: archived ? '2026-11-18T10:00:00.000Z' : null,
   created_at: '2026-11-18T10:00:00.000Z',
   updated_at: '2026-11-18T10:00:00.000Z',
+  role: 'owner',
+  owner: { id: 1, name: 'Ana' },
 })
 
 const models = {
@@ -122,6 +124,27 @@ test.each([
   await show(entries, {}, options)
   expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
   expect(screen.queryByLabelText('Continue on…')).toBeNull()
+})
+
+test('a person it is shared with to read is offered no way to continue a failed reply', async () => {
+  const calls = fakeFetch({
+    [`GET ${BASE}`]: { body: { ...conversation(), role: 'viewer', owner: { id: 5, name: 'Eve' } } },
+    'GET /api/workspaces/1/models': { body: models },
+    [`GET ${BASE}/model`]: { body: { provider: 'script', model_id: 's' } },
+    [`GET ${BASE}/continue-models`]: { body: continuable },
+  })
+  const { sources, factory } = fakeStreams()
+  render(<ConversationView workspace={1} id={7} backHref="/w/1/conversations" onChanged={() => {}} streams={factory} />)
+  await screen.findByRole('heading', { name: 'Talk' })
+  await waitFor(() => expect(sources).toHaveLength(1))
+  act(() => sources[0].open())
+  act(() => sources[0].send({ type: 'value', value: { entries: [asked, failed], docs: {} } }))
+  await screen.findByText(/rate limit reached/)
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+  expect(screen.queryByLabelText('Continue on…')).toBeNull()
+  expect(screen.queryByLabelText('Model')).toBeNull()
+  expect(calls.filter((c) => c.path.endsWith('/continue-models'))).toEqual([])
+  expect(writes(calls)).toEqual([])
 })
 
 test('Try again continues on the same model, tied to the failure it answers', async () => {
