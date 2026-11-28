@@ -38,7 +38,7 @@ export function useDesk(workspace: number, path: string): DeskState {
   const flush = useCallback(
     (keepalive: boolean) => {
       clearTimeout(timer.current)
-      if (!dirty.current || inflight.current || !alive.current || !same()) return
+      if (!dirty.current || inflight.current || !same()) return
       dirty.current = false
       inflight.current = true
       let refused = false
@@ -48,11 +48,11 @@ export function useDesk(workspace: number, path: string): DeskState {
         keepalive,
       })
         .then((saved) => {
-          if (!alive.current || !same()) return
+          if (!same()) return
           version.current = saved.version
         })
         .catch((e: unknown) => {
-          if (!alive.current || !same()) return
+          if (!same()) return
           if (e instanceof ApiError && e.code === 'desk_changed') {
             const current = (e.body as DeskChanged).current
             version.current = current.version
@@ -66,13 +66,13 @@ export function useDesk(workspace: number, path: string): DeskState {
           }
           refused = true
           dirty.current = true
-          toast({ tone: 'danger', message: say.current('desk.saveFailed') })
+          if (alive.current) toast({ tone: 'danger', message: say.current('desk.saveFailed') })
         })
         .finally(() => {
           inflight.current = false
-          if (alive.current && same() && dirty.current && !refused) {
-            timer.current = setTimeout(() => flushRef.current(false), SAVE_DELAY_MS)
-          }
+          if (!same() || !dirty.current || refused) return
+          if (alive.current) timer.current = setTimeout(() => flushRef.current(false), SAVE_DELAY_MS)
+          else flushRef.current(false)
         })
     },
     [base, same, show, workspace],

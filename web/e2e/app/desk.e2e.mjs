@@ -37,7 +37,7 @@ scenario(
 
     await page.reload()
     await page.getByRole('tablist', { name: 'Tabs' }).first().waitFor()
-    assert.equal(await page.locator('.desk-pane').count(), 2)
+    await page.waitForFunction(() => document.querySelectorAll('.desk-pane').length === 2)
     const reloaded = ['Boards', built[1], built[2]]
     assert.deepEqual(await tabNames(page), reloaded)
     assert.equal(new URL(page.url()).pathname, address)

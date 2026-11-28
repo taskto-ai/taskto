@@ -191,6 +191,57 @@ test('closing a tab with unsaved changes asks first and closes only when told to
   expect(pages()).toEqual(['knowledge', 'boards'])
 })
 
+test('replacing the active page, splitting, and closing a pane each ask the pages’ guards first', async () => {
+  guards.ask = vi.fn()
+  await mount(two, '/w/1/conversations')
+  const asked = () => (guards.ask as unknown as { mock: { calls: unknown[] } }).mock.calls.length
+  const step = (act: () => void, calls: number) => {
+    const before = asked()
+    act()
+    expect(asked() - before).toBe(calls)
+  }
+  step(() => fireEvent.click(screen.getByRole('tab', { name: 'Knowledge base' })), 1)
+  step(() => fireEvent.click(screen.getAllByRole('button', { name: 'New tab' })[0]), 1)
+  step(() => fireEvent.click(screen.getAllByRole('button', { name: 'Split to the side' })[0]), 1)
+  expect(pages()).toEqual(['conversations', 'boards'])
+  expect(screen.getAllByRole('tab')).toHaveLength(3)
+  step(() => fireEvent.click(screen.getByRole('tab', { name: 'Conversations' })), 0)
+  const agree = guards.ask as unknown as { mockImplementation: (fn: (go: () => void) => void) => void }
+  agree.mockImplementation((go) => go())
+  step(() => fireEvent.click(screen.getByRole('button', { name: 'Close Boards' })), 2)
+  expect(pages()).toEqual(['conversations'])
+})
+
+test('a change made while a save is in flight is sent after it even if the desk went away', async () => {
+  let release: () => void = () => undefined
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let first = true
+  const calls = await mount(two, '/w/1/conversations', {
+    'PUT /api/workspaces/1/desks/main/layout': async (call: { body: unknown }) => {
+      const sent = call.body as { version: number; layout: unknown }
+      if (first) {
+        first = false
+        await held
+      }
+      return { body: deskOf(sent.layout, sent.version + 1) }
+    },
+  })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  fireEvent.click(screen.getByRole('tab', { name: 'Knowledge base' }))
+  await wait(SAVE_DELAY_MS)
+  expect(puts(calls)).toHaveLength(1)
+  fireEvent.click(screen.getAllByRole('button', { name: 'New tab' })[0])
+  cleanup()
+  expect(puts(calls)).toHaveLength(1)
+  release()
+  await wait(0)
+  await wait(0)
+  expect(puts(calls)).toHaveLength(2)
+  expect((puts(calls)[1].body as { version: number }).version).toBe(4)
+})
+
 test('several quick changes are saved once, 800 ms after the last, with the version read', async () => {
   const calls = await mount(two, '/w/1/conversations')
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })

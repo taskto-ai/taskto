@@ -1,7 +1,7 @@
 import { type ReactNode, useMemo } from 'react'
 import type { Me, Workspace } from '../api'
 import { useT } from '../i18n'
-import { askPlace, navigate, type Place, PlaceContext, parseRoute } from '../router'
+import { askPlace, beforeLeaving, navigate, type Place, PlaceContext, parseRoute } from '../router'
 import { ErrorBoundary } from '../shell/ErrorBoundary'
 import { SECTION_LABEL } from '../shell/nav'
 import { SectionPage } from '../shell/SectionPage'
@@ -82,10 +82,14 @@ export function Pane({
         tabs={group.tabs.map((x) => ({ id: x.id, title: titleOf(x.id, x.path) }))}
         active={active.id}
         closable={closable}
-        onActivate={(id) => change((l) => activate(l, id))}
-        onClose={(id) => askPlace(id, () => change((l) => closeTab(l, id)))}
-        onNew={() => change((l) => openTab(l, group.group, home))}
-        onSplit={(side: Side) => change((l) => splitGroup(l, group.group, side, home))}
+        onActivate={(id) => id !== active.id && askPlace(active.id, () => change((l) => activate(l, id)))}
+        onClose={(id) =>
+          (group.tabs.length === 1 ? beforeLeaving : (go: () => void) => askPlace(id, go))(() =>
+            change((l) => closeTab(l, id)),
+          )
+        }
+        onNew={() => askPlace(active.id, () => change((l) => openTab(l, group.group, home)))}
+        onSplit={(side: Side) => beforeLeaving(() => change((l) => splitGroup(l, group.group, side, home)))}
       />
       <div className="desk-panel" role="tabpanel" id={panelDomId(group.group)} aria-labelledby={tabDomId(active.id)}>
         <PlaceContext.Provider value={place}>
