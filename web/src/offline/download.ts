@@ -41,6 +41,7 @@ export async function downloadApp(store: OfflineStore, scope: Scope): Promise<Do
     key: scopeKey(scope),
     user: store.user,
     name: r.name,
+    icon: r.icon,
     release: r.release,
     definition: r.definition,
     messages: r.messages,

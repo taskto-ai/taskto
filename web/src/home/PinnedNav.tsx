@@ -1,10 +1,11 @@
 import { useId } from 'react'
 import { api, type HomeView, ws } from '../api'
+import { AppAvatar } from '../apps/AppAvatar'
 import { appPath } from '../apps/route'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
 import { NavLink } from '../shell/NavLink'
-import { Avatar, initialsAmong } from '../ui/Avatar'
+import { initialsAmong } from '../ui/Avatar'
 import { useHomeVersion } from './store'
 
 export function PinnedNav({ workspace, path }: { workspace: number; path: string }) {
@@ -29,7 +30,7 @@ export function PinnedNav({ workspace, path }: { workspace: number; path: string
               <NavLink
                 href={href}
                 current={href === path}
-                leading={<Avatar name={labels[i]} letters={letters[i]} size="sm" shape="square" decorative />}
+                leading={<AppAvatar name={labels[i]} icon={p.app_icon} letters={letters[i]} size="sm" decorative />}
                 label={labels[i]}
                 userText
               />

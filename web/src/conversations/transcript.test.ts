@@ -62,13 +62,58 @@ test('shows tool calls, failures, and that earlier entries are left out', () => 
   expect(t.truncated).toBe(true)
   expect(t.messages).toEqual([
     { key: '4.0', role: 'assistant', text: '', tools: [{ id: 'c1', key: '4.0.0', name: 'search_docs' }] },
-    { key: '5.0', role: 'assistant', text: '', tools: [], error: 'rate limited' },
+    { key: '5.0', role: 'assistant', text: '', tools: [], error: 'rate limited', failed: true },
+  ])
+})
+
+test('a reply that failed is marked, and one the person stopped is not', () => {
+  const t = transcript({
+    entries: [
+      { id: 1, kind: 'pi.assistant', model: [{ role: 'assistant', content: [], stopReason: 'error' }] },
+      { id: 2, kind: 'pi.assistant', model: [{ role: 'assistant', content: [], stopReason: 'aborted' }] },
+    ],
+  })
+  expect(t.messages.map((m) => [m.error, m.failed])).toEqual([
+    ['The reply failed.', true],
+    ['The reply was stopped.', undefined],
   ])
 })
 
 test('passes over what it does not know', () => {
   expect(transcript(null).messages).toEqual([])
   expect(transcript({ entries: [{ id: 1, kind: 'x' }], docs: { 'pi.live': 'odd' } }).messages).toEqual([])
+})
+
+test('uses taskto input metadata and leaves old pi user entries unchanged', () => {
+  const t = transcript({
+    entries: [
+      {
+        id: 1,
+        kind: 'taskto.input',
+        data: { v: 1, author: 7, text: 'what the person typed', attached: [{ conversation: 12, title: 'Earlier' }] },
+        model: [{ role: 'user', content: [{ type: 'text', text: 'what the model saw' }] }],
+      },
+      {
+        id: 2,
+        kind: 'taskto.input',
+        data: { author: 'bad', text: 3, attached: [{ conversation: 0, title: 4 }] },
+        model: [{ role: 'user', content: 'fallback' }],
+      },
+      { id: 3, kind: 'pi.user', data: { text: 'ignored' }, model: [{ role: 'user', content: 'legacy' }] },
+    ],
+  })
+  expect(t.messages).toEqual([
+    {
+      key: '1.0',
+      role: 'user',
+      text: 'what the person typed',
+      tools: [],
+      author: 7,
+      attached: [{ conversation: 12, title: 'Earlier' }],
+    },
+    { key: '2.0', role: 'user', text: 'fallback', tools: [] },
+    { key: '3.0', role: 'user', text: 'legacy', tools: [] },
+  ])
 })
 
 test('a tool use names the app only from a saved result, never from its arguments', () => {

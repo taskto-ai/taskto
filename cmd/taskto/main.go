@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/config"
 	"taskto.ai/taskto/internal/conversations"
@@ -35,6 +37,7 @@ import (
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/live"
 	"taskto.ai/taskto/internal/lockfile"
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/privcheck"
@@ -300,6 +303,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		}
 	}
 	convs := conversations.New(sqlDB, convAgent)
+	liveHub := live.New(live.Config{})
 	convs.SetCapabilities(tools.Capability)
 	if cfg.Agent {
 		index.SetConversations(convs)
@@ -308,6 +312,8 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	notifier.SetConversations(convs)
 	stopPush := notifier.Start(ctx)
 	defer stopPush()
+	providerSvc := providerAPI(store, agent.feed, egressOf(cfg))
+	convs.SetContinueModels(runnableModels(providerSvc, cliAccounts))
 
 	if cfg.InsecureCookies {
 		slog.Warn("the session cookie is sent over plain http (insecure_cookies): use this only on localhost")
@@ -360,9 +366,10 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		Auth:             authOpts,
 		DataDir:          cfg.DataDir,
 		AgentState:       agent.state,
-		Providers:        providerAPI(store, agent.feed, egressOf(cfg)),
+		Providers:        providerSvc,
 		Search:           index,
 		Conversations:    convs,
+		Live:             liveHub,
 		Tools:            tools,
 		CLIAccounts:      cliAccounts,
 		Browser:          browsers,
@@ -396,11 +403,12 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 
 	inflight := drain.New()
 	srv := &http.Server{
-		Handler:           inflight.Handler(wrapHandler(handler, sqlDB)),
+		Handler:           inflight.Handler(wrapHandler(handler, sqlDB, liveHub)),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
 	srv.RegisterOnShutdown(convs.EndStreams)
+	srv.RegisterOnShutdown(liveHub.EndStreams)
 	ln, err := listen(ctx, cfg.Addr)
 	if err != nil {
 		return err
@@ -451,7 +459,7 @@ func keepLock(f *os.File) {
 
 var (
 	shutdownGrace = defaultShutdownGrace
-	wrapHandler   = func(h http.Handler, _ *sql.DB) http.Handler { return h }
+	wrapHandler   = func(h http.Handler, _ *sql.DB, _ *live.Hub) http.Handler { return h }
 	listen        = func(ctx context.Context, addr string) (net.Listener, error) {
 		return new(net.ListenConfig).Listen(ctx, "tcp", addr)
 	}
@@ -460,6 +468,30 @@ var (
 func egressOf(cfg config.Config) providers.Egress {
 	ws, personal := cfg.Egress()
 	return providers.Egress{Workspace: ws, Personal: personal}
+}
+
+func runnableModels(p *providers.Service, cli *cliaccounts.Service) conversations.Models {
+	return func(ctx context.Context, pr conversations.Principal) ([]providers.Choice, error) {
+		all, err := p.Choices(ctx, pr.Workspace, pr.User)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]providers.Choice, 0, len(all))
+		for _, c := range all {
+			if c.Scope == providers.ScopeCLI {
+				models, err := cli.RunnableModels(ctx, pr, cliworker.CLI(strings.TrimPrefix(c.Provider, providers.CLIProviderPrefix)), c.Models)
+				if err != nil {
+					return nil, err
+				}
+				if len(models) == 0 {
+					continue
+				}
+				c.Models = models
+			}
+			out = append(out, c)
+		}
+		return out, nil
+	}
 }
 
 func providerAPI(store *providers.Store, feed *providers.Feed, e providers.Egress) *providers.Service {

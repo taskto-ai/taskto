@@ -111,6 +111,9 @@ func TestOwnerSharesWithAMemberToRead(t *testing.T) {
 		{http.MethodPost, "/cli-permissions/abc", map[string]any{"allow": true}},
 		{http.MethodPut, fmt.Sprintf("/members/%d", outsider.id), map[string]any{"role": "viewer"}},
 		{http.MethodDelete, fmt.Sprintf("/members/%d", owner.id), nil},
+		{http.MethodGet, "/continue-models", nil},
+		{http.MethodPost, "/continue", e.continueBody("script", "script-1", 7)},
+		{http.MethodPost, "/messages", mention("cli-codex", "default", "review this")},
 	}
 	for _, r := range routes {
 		outsider.expectCode(http.StatusNotFound, "conversation_not_found", r.method, one+r.suffix, r.body)

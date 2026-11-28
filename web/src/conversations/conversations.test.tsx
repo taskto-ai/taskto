@@ -5,7 +5,7 @@ import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { SESSION_LOST } from '../api'
-import { type Place, PlaceContext, parseRoute, usePath } from '../router'
+import { navigate, type Place, PlaceContext, parseRoute, usePath } from '../router'
 import { beginSession, endSession } from '../session'
 import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
 import { wholeText } from '../test/text'
@@ -845,4 +845,282 @@ test('each app shows once, at its latest save, and older apps only link', async 
     '/api/workspaces/1/spaces/2/apps/3',
     '/api/workspaces/1/spaces/2/apps/4',
   ])
+})
+
+const agentCatalog = {
+  'GET /api/workspaces/1/models': {
+    body: {
+      providers: [
+        { provider: 'script', name: 'Scripted', scope: 'instance', models: [{ id: 'script-1', name: 'Scripted' }] },
+        { provider: 'cli-codex', name: 'Codex', scope: 'cli', models: [{ id: 'default', name: 'Default' }] },
+      ],
+    },
+  },
+  'GET /api/workspaces/1/conversations/7/model': { body: { provider: 'script', model_id: 'script-1' } },
+  'GET /api/me/cli-accounts': { body: { enabled: true, mode: 'local', accounts: [] } },
+}
+
+test('"@" at the start offers the agents, a choice inserts its token, and a send that switched updates the picker', async () => {
+  let switched = false
+  const { calls } = await openWith({
+    ...agentCatalog,
+    'GET /api/workspaces/1/conversations/7/model': () => ({
+      body: switched ? { provider: 'cli-codex', model_id: 'default' } : { provider: 'script', model_id: 'script-1' },
+    }),
+    'POST /api/workspaces/1/conversations/7/messages': () => {
+      switched = true
+      return { status: 202, body: { submission_id: 12, model: { provider: 'script', model_id: 'script-1' } } }
+    },
+  })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+
+  fireEvent.change(box, { target: { value: 'ask @' } })
+  expect(screen.queryByRole('listbox')).toBeNull()
+  fireEvent.change(box, { target: { value: '@' } })
+  const menu = screen.getByRole('listbox', { name: 'Hand this conversation to an agent' })
+  expect(
+    within(menu)
+      .getAllByRole('option')
+      .map((o) => o.textContent),
+  ).toEqual(['Codex: Default', 'Scripted'])
+
+  fireEvent.keyDown(box, { key: 'Escape' })
+  expect(screen.queryByRole('listbox')).toBeNull()
+  fireEvent.change(box, { target: { value: '@cod' } })
+  expect(
+    within(screen.getByRole('listbox'))
+      .getAllByRole('option')
+      .map((o) => o.textContent),
+  ).toEqual(['Codex: Default'])
+  fireEvent.change(box, { target: { value: '@nobody' } })
+  expect(screen.queryByRole('listbox')).toBeNull()
+
+  fireEvent.change(box, { target: { value: '@' } })
+  fireEvent.keyDown(box, { key: 'ArrowDown' })
+  fireEvent.keyDown(box, { key: 'ArrowUp' })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  expect(box.value).toBe('@[Codex](agent:cli-codex/default) ')
+  expect(screen.queryByRole('listbox')).toBeNull()
+  expect(calls.some((c) => c.method === 'POST')).toBe(false)
+
+  fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) review this' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(box.value).toBe(''))
+  expect(calls.find((c) => c.method === 'POST')?.body).toMatchObject({
+    content: '@[Codex](agent:cli-codex/default) review this',
+  })
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-codex', 'default'])))
+})
+
+test('a menu choice by pointer inserts the token too', async () => {
+  await openWith({ ...agentCatalog })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  fireEvent.change(box, { target: { value: '@' } })
+  fireEvent.pointerUp(within(screen.getByRole('listbox')).getByRole('option', { name: 'Scripted' }))
+  expect(box.value).toBe('@[Scripted](agent:script/script-1) ')
+  fireEvent.change(box, { target: { value: '' } })
+})
+
+test('a leading agent token shows as a chip in the sent message, and a later one stays as typed', async () => {
+  await openWith(
+    {},
+    viewOf([
+      entry(1, 'user', '@[Codex](agent:cli-codex/default) review this'),
+      entry(2, 'assistant', 'Looking.'),
+      entry(3, 'user', 'ask @[Codex](agent:cli-codex/default) again'),
+    ]),
+  )
+  const chip = await screen.findByText('@Codex')
+  expect(chip.getAttribute('title')).toBe('This conversation was handed to Codex')
+  expect(chip.parentElement?.textContent).toBe('@Codex review this')
+  expect(screen.getByText('ask @[Codex](agent:cli-codex/default) again')).toBeTruthy()
+})
+
+test('when the model cannot be read back after a switching send, the picker shows the reloaded one', async () => {
+  const answers = [
+    { body: { provider: 'script', model_id: 'script-1' } },
+    { body: { provider: 'cli-codex', model_id: 'default' } },
+    { status: 500, body: { error: 'down' } },
+    { body: { provider: 'script', model_id: 'script-1' } },
+  ]
+  let read = 0
+  await openWith({
+    ...agentCatalog,
+    'GET /api/workspaces/1/conversations/7/model': () => answers[Math.min(read++, answers.length - 1)],
+    'POST /api/workspaces/1/conversations/7/messages': {
+      status: 202,
+      body: { submission_id: 12, model: { provider: 'cli-codex', model_id: 'default' } },
+    },
+  })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+
+  fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) one' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-codex', 'default'])))
+
+  fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) two' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+})
+
+test('a send with no agent token does not read the model back', async () => {
+  const { calls } = await openWith({
+    ...agentCatalog,
+    'POST /api/workspaces/1/conversations/7/messages': { status: 202, body: { submission_id: 12 } },
+  })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+  const reads = () => calls.filter((c) => c.method === 'GET' && c.path.endsWith('/conversations/7/model')).length
+  const before = reads()
+
+  fireEvent.change(box, { target: { value: 'no mention here' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(box.value).toBe(''))
+  await act(async () => {})
+  expect(reads()).toBe(before)
+})
+
+test('a model read back for a conversation left meanwhile does not reach the next one', async () => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let reads = 0
+  await openWith({
+    ...agentCatalog,
+    'GET /api/workspaces/1/conversations/7/model': async () => {
+      reads++
+      if (reads > 1) await held
+      return {
+        body: reads > 1 ? { provider: 'cli-codex', model_id: 'default' } : { provider: 'script', model_id: 'script-1' },
+      }
+    },
+    'GET /api/workspaces/1/conversations/8': { body: conversation(8, 'Other') },
+    'GET /api/workspaces/1/conversations/8/model': { body: { provider: 'script', model_id: 'script-1' } },
+    'POST /api/workspaces/1/conversations/7/messages': {
+      status: 202,
+      body: { submission_id: 12, model: { provider: 'cli-codex', model_id: 'default' } },
+    },
+  })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+
+  fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) one' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(reads).toBe(2))
+
+  act(() => navigate('/w/1/conversations/8'))
+  await waitFor(() => expect(window.location.pathname).toBe('/w/1/conversations/8'))
+  await act(async () => {
+    release()
+    await held
+  })
+  const next = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(next.value).toBe(JSON.stringify(['script', 'script-1'])))
+})
+
+const threeModels = {
+  ...agentCatalog,
+  'GET /api/workspaces/1/models': {
+    body: {
+      providers: [
+        {
+          provider: 'script',
+          name: 'Scripted',
+          scope: 'instance',
+          models: [
+            { id: 'script-1', name: 'Scripted' },
+            { id: 'script-2', name: 'Scripted two' },
+          ],
+        },
+        { provider: 'cli-codex', name: 'Codex', scope: 'cli', models: [{ id: 'default', name: 'Default' }] },
+      ],
+    },
+  },
+  'PUT /api/workspaces/1/conversations/7/model': (call: Call) => ({ body: call.body }),
+}
+
+test('a send reply that arrives after the person picked another model leaves the picker on their choice', async () => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let replied = false
+  const { calls } = await openWith({
+    ...threeModels,
+    'GET /api/workspaces/1/conversations/7/model': () => ({
+      body: replied ? { provider: 'cli-codex', model_id: 'default' } : { provider: 'script', model_id: 'script-1' },
+    }),
+    'POST /api/workspaces/1/conversations/7/messages': async () => {
+      await held
+      replied = true
+      return { status: 202, body: { submission_id: 12, model: { provider: 'cli-codex', model_id: 'default' } } }
+    },
+  })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+
+  fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) one' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true))
+  fireEvent.change(select, { target: { value: JSON.stringify(['script', 'script-2']) } })
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-2'])))
+  const reads = () => calls.filter((c) => c.method === 'GET' && c.path.endsWith('/conversations/7/model')).length
+  const before = reads()
+
+  await act(async () => {
+    release()
+    await held
+  })
+  await waitFor(() => expect(box.value).toBe(''))
+  await act(async () => {})
+  expect(reads()).toBe(before)
+  expect(select.value).toBe(JSON.stringify(['script', 'script-2']))
+})
+
+test('a failed model read back does not replace a model chosen while it was in flight', async () => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let read = 0
+  await openWith({
+    ...threeModels,
+    'GET /api/workspaces/1/conversations/7/model': async () => {
+      read++
+      if (read === 2) {
+        await held
+        return { status: 500, body: { error: 'down' } }
+      }
+      return { body: { provider: 'script', model_id: 'script-1' } }
+    },
+    'POST /api/workspaces/1/conversations/7/messages': {
+      status: 202,
+      body: { submission_id: 12, model: { provider: 'cli-codex', model_id: 'default' } },
+    },
+  })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+
+  fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) one' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(read).toBe(2))
+  fireEvent.change(select, { target: { value: JSON.stringify(['script', 'script-2']) } })
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-2'])))
+
+  await act(async () => {
+    release()
+    await held
+  })
+  await act(async () => {})
+  expect(select.value).toBe(JSON.stringify(['script', 'script-2']))
+  expect(read).toBe(2)
 })

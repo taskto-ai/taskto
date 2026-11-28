@@ -82,6 +82,7 @@ type turnBody struct {
 	Prompt  string         `json:"prompt"`
 	History []historyEntry `json:"history,omitempty"`
 	Replay  bool           `json:"replay,omitempty"`
+	Pinned  bool           `json:"pinned,omitempty"`
 }
 
 func (e *turnEnv) post(conversation int64, path string, body any) (int, []cliworker.Event, string) {

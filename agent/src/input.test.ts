@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { InputError, MAX_NOTE_CHARS, noteEntry, parseNote } from './input.js'
+import { describe, expect, it, test } from 'vitest'
+import { InputError, MAX_NOTE_CHARS, noteEntry, parseNote, validInputEntry } from './input.js'
 
 describe('parseNote', () => {
   it('accepts a note with an author', () => {
@@ -34,4 +34,20 @@ describe('noteEntry', () => {
     expect(entry).toEqual({ kind: 'taskto.note', data: { v: 1, author: 3, text: 'hello' } })
     expect('model' in entry).toBe(false)
   })
+})
+
+test('accepts a bounded taskto input entry', () => {
+  expect(validInputEntry({ kind: 'taskto.input', data: { v: 1, author: 7 } })).toBe(true)
+})
+
+test('refuses other entry kinds, including pi kinds', () => {
+  expect(validInputEntry({ kind: 'other.input', data: {} })).toBe(false)
+  expect(validInputEntry({ kind: 'pi.user', data: {} })).toBe(false)
+})
+
+test('refuses malformed and oversized entry data', () => {
+  expect(validInputEntry({ kind: 'taskto.input', data: null })).toBe(false)
+  expect(validInputEntry({ kind: 'taskto.input', data: [] })).toBe(false)
+  expect(validInputEntry({ kind: 'taskto.input', data: 'text' })).toBe(false)
+  expect(validInputEntry({ kind: 'taskto.input', data: { text: 'x'.repeat(4097) } })).toBe(false)
 })

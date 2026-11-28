@@ -597,6 +597,7 @@ function offlineApp(patch: Partial<OfflineApp> = {}): OfflineApp {
     app_id: 1,
     space_id: 2,
     name: 'Expenses',
+    icon: '',
     release: 3,
     definition,
     messages: surface,

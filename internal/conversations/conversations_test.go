@@ -22,33 +22,44 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/db"
+	"taskto.ai/taskto/internal/providers"
 )
 
 const password = "a-long-enough-password"
 
 type fakeRuntime struct {
-	mu         sync.Mutex
-	next       int64
-	models     map[int64]agentrt.ModelRef
-	created    []agentrt.ModelRef
-	inputs     map[int64][]agentrt.Input
-	notes      map[int64][]agentrt.NoteInput
-	watches    []*fakeWatch
-	aborts     map[int64]int
-	err        error
-	onAbort    func(ctx context.Context)
-	onRead     func(op string)
-	replies    map[int64][]agentrt.Message
-	rawEntries map[int64][]json.RawMessage
-	settle     chan struct{}
-	waited     atomic.Int64
-	waitErr    error
+	mu           sync.Mutex
+	next         int64
+	models       map[int64]agentrt.ModelRef
+	created      []agentrt.ModelRef
+	inputs       map[int64][]agentrt.Input
+	notes        map[int64][]agentrt.NoteInput
+	calls        []string
+	watches      []*fakeWatch
+	aborts       map[int64]int
+	resumes      map[int64]int
+	resumed      []continueCall
+	sets         int
+	err          error
+	onAbort      func(ctx context.Context)
+	replies      map[int64][]agentrt.Message
+	rawEntries   map[int64][]json.RawMessage
+	settle       chan struct{}
+	waited       atomic.Int64
+	waitErr      error
+	submitErr    error
+	onSubmit     func()
+	stallSend    bool
+	stallPutBack bool
+	onEntries    func()
+	onRead       func(op string)
+	onContinue   func()
 }
 
 var setupToken = auth.NewSetupToken()
 
 func newFakeRuntime() *fakeRuntime {
-	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, notes: map[int64][]agentrt.NoteInput{}, aborts: map[int64]int{}}
+	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, notes: map[int64][]agentrt.NoteInput{}, aborts: map[int64]int{}, resumes: map[int64]int{}}
 }
 
 var defaultModel = agentrt.ModelRef{Provider: "script", ModelID: "script-1"}
@@ -68,14 +79,48 @@ func (f *fakeRuntime) CreateConversationOn(_ context.Context, model agentrt.Mode
 	return f.next, nil
 }
 
-func (f *fakeRuntime) Submit(_ context.Context, conv int64, in agentrt.Input) (int64, error) {
+func (f *fakeRuntime) Submit(ctx context.Context, conv int64, in agentrt.Input) (int64, error) {
+	f.mu.Lock()
+	hook := f.onSubmit
+	stall := f.stallSend
+	f.mu.Unlock()
+	if stall {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return 0, f.err
 	}
+	if f.submitErr != nil {
+		return 0, f.submitErr
+	}
 	f.inputs[conv] = append(f.inputs[conv], in)
+	f.calls = append(f.calls, "submit")
 	return int64(1000 + len(f.inputs[conv])), nil
+}
+
+type continueCall struct {
+	model agentrt.ModelRef
+	after int64
+}
+
+func (f *fakeRuntime) Continue(_ context.Context, conv int64, model agentrt.ModelRef, after int64) (int64, agentrt.ModelRef, error) {
+	if f.onContinue != nil {
+		f.onContinue()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return 0, agentrt.ModelRef{}, f.err
+	}
+	f.resumed = append(f.resumed, continueCall{model, after})
+	f.resumes[conv]++
+	return int64(3000 + f.resumes[conv]), model, nil
 }
 
 func (f *fakeRuntime) Note(_ context.Context, conv int64, n agentrt.NoteInput) (int64, error) {
@@ -133,13 +178,20 @@ func (f *fakeRuntime) Model(_ context.Context, conv int64) (agentrt.ModelRef, er
 	return f.models[conv], f.err
 }
 
-func (f *fakeRuntime) SetModel(_ context.Context, conv int64, model agentrt.ModelRef) error {
+func (f *fakeRuntime) SetModel(ctx context.Context, conv int64, model agentrt.ModelRef) error {
 	f.mu.Lock()
+	if f.stallPutBack && len(f.calls) > 0 && strings.HasPrefix(f.calls[len(f.calls)-1], "set-model ") {
+		f.mu.Unlock()
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
 	f.models[conv] = model
+	f.calls = append(f.calls, "set-model "+model.Provider+"/"+model.ModelID)
+	f.sets++
 	return nil
 }
 
@@ -158,6 +210,9 @@ func (f *fakeRuntime) Abort(ctx context.Context, conv int64) error {
 
 func (f *fakeRuntime) Entries(_ context.Context, conv, before int64, limit int) (json.RawMessage, error) {
 	f.read("entries")
+	if f.onEntries != nil {
+		f.onEntries()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -304,6 +359,8 @@ type env struct {
 	rt  *fakeRuntime
 	svc *Service
 	h   http.Handler
+
+	runnable []providers.Choice
 }
 
 func newEnv(t *testing.T, off bool) *env {
@@ -323,6 +380,11 @@ func newEnv(t *testing.T, off bool) *env {
 		agent = func(context.Context) (Runtime, error) { return e.rt, nil }
 	}
 	e.svc = New(sqlDB, agent)
+	e.runnable = []providers.Choice{
+		{Provider: "script", Name: "Scripted", Scope: providers.ScopeInstance, Models: []providers.ModelChoice{{ID: "script-1", Name: "Scripted"}}},
+		{Provider: "backup", Name: "Backup", Scope: providers.ScopeInstance, Models: []providers.ModelChoice{{ID: "b-1", Name: "B one"}}},
+	}
+	e.svc.SetContinueModels(func(context.Context, Principal) ([]providers.Choice, error) { return e.runnable, nil })
 	t.Cleanup(e.svc.EndStreams)
 	mux := http.NewServeMux()
 	a := auth.New(sqlDB, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
@@ -543,8 +605,20 @@ func TestSend(t *testing.T) {
 	inputs := e.rt.inputs[c.agentIDForTest(t, e)]
 	e.rt.mu.Unlock()
 	want := []agentrt.Input{{Content: "hello"}, {Content: "now this", WhenBusy: "steer", RequestID: "r-1"}, {Content: "later", WhenBusy: "followUp"}}
-	if fmt.Sprint(inputs) != fmt.Sprint(want) {
-		t.Fatalf("the agent runtime got %+v, want %+v", inputs, want)
+	if len(inputs) != len(want) {
+		t.Fatalf("the agent runtime got %+v, want %d messages", inputs, len(want))
+	}
+	for i := range want {
+		if inputs[i].Content != want[i].Content || inputs[i].WhenBusy != want[i].WhenBusy || inputs[i].RequestID != want[i].RequestID {
+			t.Fatalf("the agent runtime got %+v, want %+v", inputs[i], want[i])
+		}
+		var data struct {
+			V      int   `json:"v"`
+			Author int64 `json:"author"`
+		}
+		if inputs[i].Entry == nil || inputs[i].Entry.Kind != "taskto.input" || json.Unmarshal(inputs[i].Entry.Data, &data) != nil || data.V != 1 || data.Author != owner.id {
+			t.Fatalf("the agent runtime got input entry %+v, want taskto.input by %d", inputs[i].Entry, owner.id)
+		}
 	}
 
 	read := decode[struct{ Messages []agentrt.Message }](t, owner.expect(http.StatusOK, http.MethodGet, msgs, nil))
