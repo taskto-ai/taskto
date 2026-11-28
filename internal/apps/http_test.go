@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
+	"unicode"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/auth"
@@ -679,5 +681,172 @@ func TestDataSizeIsCountedInBytes(t *testing.T) {
 	expect(t, rec, http.StatusConflict)
 	if reply := decode[struct{ Error, Code string }](t, rec); !strings.Contains(reply.Error, "MiB") || reply.Code != "app_full" {
 		t.Fatalf("body %s", rec.Body)
+	}
+}
+
+func TestAppIconSetChangeAndClear(t *testing.T) {
+	w := newWorld(t)
+	a, s := w.aliceApp, w.alicePrivate
+	if a.Icon != "" {
+		t.Fatalf("a new app's icon = %q", a.Icon)
+	}
+
+	rec := w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "icon": "🧾"})
+	expect(t, rec, http.StatusOK)
+	a = decode[App](t, rec)
+	if a.Icon != "🧾" || a.Version != 2 || a.Name != "Alice's expenses" {
+		t.Fatalf("with an icon = %+v", a)
+	}
+
+	rec = w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 2, "icon": "🇵🇹"})
+	expect(t, rec, http.StatusOK)
+	if a = decode[App](t, rec); a.Icon != "🇵🇹" {
+		t.Fatalf("a flag = %q", a.Icon)
+	}
+
+	rec = w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 3, "name": "Spending"})
+	expect(t, rec, http.StatusOK)
+	if a = decode[App](t, rec); a.Icon != "🇵🇹" || a.Name != "Spending" {
+		t.Fatalf("renaming kept the icon: %+v", a)
+	}
+
+	rec = w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 3, "icon": "🧾"})
+	expectCode(t, rec, http.StatusConflict, "app_changed")
+	if reply := decode[struct{ Current App }](t, rec); reply.Current.Icon != "🇵🇹" {
+		t.Fatalf("a stale write changed the icon: %+v", reply.Current)
+	}
+
+	rec = w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 4, "icon": ""})
+	expect(t, rec, http.StatusOK)
+	if a = decode[App](t, rec); a.Icon != "" {
+		t.Fatalf("cleared = %q", a.Icon)
+	}
+	list := decode[struct{ Apps []App }](t, w.alice.do(http.MethodGet, appsPath(s, ""), nil)).Apps
+	if len(list) != 1 || list[0].Icon != "" {
+		t.Fatalf("list = %+v", list)
+	}
+}
+
+func TestAppIconRefusesWhatIsNotAnEmoji(t *testing.T) {
+	w := newWorld(t)
+	a, s := w.aliceApp, w.alicePrivate
+	for _, icon := range []string{"ab", "1", "<", "a🧾", "🧾 🧾", strings.Repeat("🧾", 9), strings.Repeat("🧾", 8) + strings.Repeat("\u200d", 8), "\u0007"} {
+		rec := w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "icon": icon})
+		expectCode(t, rec, http.StatusBadRequest, "app_icon_invalid")
+	}
+	if got := w.view(w.alice, s, a); got.Icon != "" || got.Version != 1 {
+		t.Fatalf("refused icons changed the app: %+v", got)
+	}
+}
+
+func TestAppIconNeedsTheRightToDesign(t *testing.T) {
+	w := newWorld(t)
+	s, a := w.shared, w.sharedApp
+
+	expect(t, w.bob.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "icon": "🧾"}), http.StatusForbidden)
+	expect(t, w.mallory.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "icon": "🧾"}), http.StatusNotFound)
+	expect(t, w.alice.do(http.MethodPatch, appPath(w.alicePrivate, w.bobApp.ID, ""), map[string]any{"version": 1, "icon": "🧾"}), http.StatusNotFound)
+	expect(t, w.bob.do(http.MethodPatch, appPath(w.alicePrivate, w.aliceApp.ID, ""), map[string]any{"version": 1, "icon": "🧾"}), http.StatusNotFound)
+
+	w.e.addMember(w.owner, s, w.mallory, access.RoleEditor)
+	w.mustSetRoles(w.alice, s, a, grant(w.mallory.id, access.AppUser), grant(w.alice.id, access.AppRoles...))
+	expectForbidden(t, w.mallory.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "icon": "🧾"}), string(access.CapDesign))
+
+	if got := w.view(w.alice, s, a); got.Icon != "" || got.Version != 1 {
+		t.Fatalf("refused requests changed the app: %+v", got)
+	}
+	expect(t, w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "icon": "🧾"}), http.StatusOK)
+	if got := w.view(w.mallory, s, a); got.Icon != "🧾" {
+		t.Fatalf("a reader sees the icon: %+v", got)
+	}
+}
+
+func TestAppIconAtCreation(t *testing.T) {
+	w := newWorld(t)
+	body := exampleBody(t, "Iconic")
+	body["icon"] = "🧾"
+	rec := w.alice.do(http.MethodPost, appsPath(w.alicePrivate, ""), body)
+	expect(t, rec, http.StatusCreated)
+	if got := decode[App](t, rec); got.Icon != "🧾" {
+		t.Fatalf("created = %+v", got)
+	}
+	body["icon"] = "ab"
+	expectCode(t, w.alice.do(http.MethodPost, appsPath(w.alicePrivate, ""), body), http.StatusBadRequest, "app_icon_invalid")
+}
+
+type iconVectors struct {
+	Pictographic [][2]rune `json:"pictographic"`
+	Valid        []string  `json:"valid"`
+	Invalid      []string  `json:"invalid"`
+}
+
+func loadIconVectors(t *testing.T) iconVectors {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/app_icons.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v iconVectors
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestAppIconIsAnEmojiOrNothing(t *testing.T) {
+	v := loadIconVectors(t)
+	if icon, err := appIcon(""); err != nil || icon != "" {
+		t.Errorf("appIcon(\"\") = %q, %v", icon, err)
+	}
+	for _, icon := range v.Valid {
+		got, err := appIcon(icon)
+		if err != nil || got != icon {
+			t.Errorf("appIcon(%q) = %q, %v", icon, got, err)
+		}
+	}
+	for _, icon := range v.Invalid {
+		if _, err := appIcon(icon); err == nil {
+			t.Errorf("appIcon(%q) was accepted", icon)
+		}
+	}
+}
+
+func TestAppIconPictographsAreThoseOfTheWebApp(t *testing.T) {
+	v := loadIconVectors(t)
+	in := func(r rune) bool {
+		for _, rg := range v.Pictographic {
+			if r >= rg[0] && r <= rg[1] {
+				return true
+			}
+		}
+		return false
+	}
+	for r := rune(1); r <= unicode.MaxRune; r++ {
+		if isPictographic(r) != in(r) {
+			t.Fatalf("U+%04X: server %v, shared table %v", r, isPictographic(r), in(r))
+		}
+	}
+}
+
+func TestTheDatabaseHoldsAnIconToItsByteLimit(t *testing.T) {
+	w := newWorld(t)
+	update := func(icon string) error {
+		_, err := w.e.db.Exec(`UPDATE apps SET icon = ? WHERE id = ?`, icon, w.aliceApp.ID)
+		return err
+	}
+	if err := update(strings.Repeat("🧾", 8)); err != nil {
+		t.Fatalf("32 bytes: %v", err)
+	}
+	if err := update(strings.Repeat("🧾", 8) + "★"); err == nil {
+		t.Fatal("35 bytes of 9 characters was stored")
+	}
+}
+
+func TestAppIconIsNotTrimmedBehindTheCallersBack(t *testing.T) {
+	w := newWorld(t)
+	a, s := w.aliceApp, w.alicePrivate
+	for _, icon := range []string{" 🧾", "🧾 ", "🧾\u200b", "🧾\u202e", "🧾🧾", "🧾\u200d"} {
+		rec := w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": a.Version, "icon": icon})
+		expectCode(t, rec, http.StatusBadRequest, "app_icon_invalid")
 	}
 }

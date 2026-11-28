@@ -46,7 +46,7 @@ export type RequestInit = {
   signal?: AbortSignal
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function send(path: string, init: RequestInit) {
   const method = init.method ?? 'GET'
   const same = sameSession()
   const account = sessionUser()
@@ -66,28 +66,49 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
           ? { headers: extra }
           : {}),
   })
-  if (res.status === 204) return undefined as T
-  const data = await res.json().catch((e) => {
+  return { res, extra, same }
+}
+
+type Sent = Awaited<ReturnType<typeof send>>
+
+function refuse({ res, extra, same }: Sent, data: { error?: unknown; code?: string } | null): never {
+  if (res.status === 401 && same()) {
+    endSession()
+    const expected = Number(extra[EXPECTED_USER_HEADER as keyof typeof extra])
+    window.dispatchEvent(
+      Number.isInteger(expected) && expected > 0 ? sessionLostFor(expected) : new Event(SESSION_LOST),
+    )
+  }
+  if (res.status === 409 && data?.code === ACCOUNT_CHANGED && same()) {
+    const key = Object.keys(extra).find((h) => h.toLowerCase() === EXPECTED_USER_HEADER.toLowerCase())
+    const expected = Number(key === undefined ? undefined : extra[key as keyof typeof extra])
+    window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED_EVENT, { detail: { expected } }))
+  }
+  const message = data && typeof data.error === 'string' ? data.error : `${res.status} ${res.statusText}`
+  throw new ApiError(res.status, message, data)
+}
+
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const sent = await send(path, init)
+  if (sent.res.status === 204) return undefined as T
+  const data = await sent.res.json().catch((e) => {
     if (init.signal?.aborted || (e as { name?: string } | null)?.name === 'AbortError') throw e
     return null
   })
-  if (!res.ok) {
-    if (res.status === 401 && same()) {
-      endSession()
-      const expected = Number(extra[EXPECTED_USER_HEADER as keyof typeof extra])
-      window.dispatchEvent(
-        Number.isInteger(expected) && expected > 0 ? sessionLostFor(expected) : new Event(SESSION_LOST),
-      )
-    }
-    if (res.status === 409 && data?.code === ACCOUNT_CHANGED && same()) {
-      const key = Object.keys(extra).find((h) => h.toLowerCase() === EXPECTED_USER_HEADER.toLowerCase())
-      const expected = Number(key === undefined ? undefined : extra[key as keyof typeof extra])
-      window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED_EVENT, { detail: { expected } }))
-    }
-    const message = data && typeof data.error === 'string' ? data.error : `${res.status} ${res.statusText}`
-    throw new ApiError(res.status, message, data)
-  }
+  if (!sent.res.ok) refuse(sent, data)
   return data as T
+}
+
+export async function apiBytes(path: string, init: Pick<RequestInit, 'signal' | 'headers'> = {}): Promise<ArrayBuffer> {
+  const sent = await send(path, init)
+  if (!sent.res.ok) {
+    const data = await sent.res.json().catch((e) => {
+      if (init.signal?.aborted || (e as { name?: string } | null)?.name === 'AbortError') throw e
+      return null
+    })
+    refuse(sent, data)
+  }
+  return sent.res.arrayBuffer()
 }
 
 export function errorText(e: unknown, fieldLabels?: ReadonlyMap<string, string>): string {
@@ -122,6 +143,25 @@ export type Me = {
   session?: string
 }
 
+export type SubmissionReply = { submission_id: number; model: { provider: string; model_id: string } }
+
+export type ContinueChoice = {
+  provider: string
+  name: string
+  scope: string
+  account?: number
+  models: { id: string; name: string }[] | null
+}
+
+export type ContinueModels = { providers: ContinueChoice[] | null }
+
+export type ContinueRequest = { model: { provider: string; model_id: string }; after_entry: number }
+
+export const continueConversation = (base: string, body: ContinueRequest) =>
+  api<SubmissionReply>(`${base}/continue`, { method: 'POST', body })
+
+export const continueModels = (base: string) => api<ContinueModels>(`${base}/continue-models`)
+
 export type Conversation = {
   id: number
   workspace_id: number
@@ -131,6 +171,10 @@ export type Conversation = {
   updated_at: string
   cli_permissions?: 'ask' | 'allow_all'
 }
+
+export type ModelRef = { provider: string; model_id: string }
+
+export type SendReply = { submission_id: number; model?: ModelRef }
 
 export type CliQuestion = { id: string; turn: string; cli: string; tool: string; input?: string; asked_at: string }
 
@@ -283,6 +327,7 @@ export type App = {
   id: number
   space_id: number
   name: string
+  icon: string
   archived_at: string | null
   version: number
   rows: number
@@ -310,6 +355,7 @@ export type OfflineApp = {
   app_id: number
   space_id: number
   name: string
+  icon: string
   release: number
   definition: {
     definition_version: number
@@ -319,6 +365,18 @@ export type OfflineApp = {
     screens?: { name: string; record?: boolean }[]
     actions: Record<string, { kind: AppActionKind; screen?: string; then?: string }>
     summaries?: Record<string, { kind: 'count' | 'sum'; field?: string; where?: unknown }>
+    series?: Record<
+      string,
+      {
+        kind: 'count' | 'sum' | 'avg'
+        field?: string
+        group_by: string
+        bucket?: 'day' | 'week' | 'month'
+        last?: number
+        split_by?: string
+        where?: unknown
+      }
+    >
   }
   messages: unknown[]
   scope: 'all' | 'own'
@@ -350,6 +408,7 @@ export type HomeItem = {
   space_id: number
   app_id: number
   app_name: string
+  app_icon?: string
   widget_id?: string
   widget?: Widget
   label?: string
@@ -374,12 +433,29 @@ export type Checklist = {
   items: { id: ChecklistStep; state: 'done' | 'todo' | 'skipped'; optional: boolean }[]
 }
 
+export type DeskTab = { id: string; path: string }
+export type DeskLayoutNode = {
+  split?: 'row' | 'column'
+  sizes?: number[]
+  children?: DeskLayoutNode[]
+  group?: string
+  active?: string
+  tabs?: DeskTab[]
+}
+export type DeskLayout = { v: 1; focus: string; root: DeskLayoutNode | null }
+export type Desk = { id: number; name: string; layout: unknown; version: number; updated_at: string }
+export type DeskSummary = { id: number; name: string; updated_at: string }
+export type DeskList = { desks: DeskSummary[] }
+export type DeskLayoutWrite = { version: number; layout: unknown }
+export type DeskChanged = { error: string; code: 'desk_changed'; current: Desk }
+
 export type AvailableApp = {
   space_id: number
   space_name: string
   space_kind: 'private' | 'shared'
   app_id: number
   name: string
+  icon: string
   widgets: Widget[]
   pin: Pin | null
   can_set_defaults: boolean
@@ -704,6 +780,8 @@ export type PaymentLinkOutcome = {
   code?: string
   params?: Params
   object_id: string
+  attempt_seq: number
+  attempt_sends: number
   attempts: PaymentLinkAttempt[]
 }
 export type PaymentLinkAttempt = {
@@ -954,6 +1032,16 @@ export type UpdateAvailable = {
 export type UpdateRequested = { requested_at: string }
 
 export const updatesPath = (workspace: number) => `${ws(workspace)}/updates`
+
+export type CLIWorkerStatus = {
+  mode: string
+  reachable: boolean
+  authority_lost: boolean
+  other_installation: boolean
+  boot?: string
+  installation?: string
+}
+export const cliWorkerPath = (workspace: number) => `${ws(workspace)}/cli-worker`
 export const updateRequestPath = (workspace: number) => `${ws(workspace)}/updates/request`
 
 export type StorageLimits = { workspace: number; user: number }

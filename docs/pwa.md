@@ -253,4 +253,8 @@ in `web/licenses/`, and the server serves it next to the decoder's `.wasm`. The 
 The same package's QR writer draws the secret of [two-factor login](api.md#two-factor-login) in Settings (it is loaded
 on that page, from the app's own files); its `.wasm` (about 670 kB) is covered by the same notice and, since turning
 two-factor login on needs the server anyway, the service worker does not precache it.
+The Word preview of the knowledge base ships `docx-preview` (Apache-2.0) and `jszip` (MIT, chosen from its MIT OR
+GPL-3.0-or-later) in one chunk, `docx-preview-*.js`, fetched the first time a Word file is opened and not precached;
+their notices (JSZip's MIT text with its copyright line, and docx-preview's copyright line under the Apache-2.0 text
+above) are in the same file.
 A test checks that every notice is in it in full.

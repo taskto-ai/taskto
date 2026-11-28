@@ -1,4 +1,4 @@
-import { api, type Me } from './api'
+import { api, forAccount, type Me } from './api'
 
 export const browserTimeZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || ''
 
@@ -14,7 +14,11 @@ export async function reportTimeZone(me: Me): Promise<Me> {
   const zone = browserTimeZone()
   if (me.user.time_zone !== '' || !zone) return me
   try {
-    return await api<Me>('/api/me', { method: 'PATCH', body: { browser_time_zone: zone } })
+    return await api<Me>('/api/me', {
+      method: 'PATCH',
+      body: { browser_time_zone: zone },
+      headers: forAccount(me.user.id),
+    })
   } catch {
     return me
   }

@@ -8,8 +8,9 @@ import {
   fauxText,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
-import { defineExtension, defineTool, type ToolExecutionApi } from '@earendil-works/pi-durable'
+import { defineExtension, defineTool, LiveDoc, type ToolExecutionApi } from '@earendil-works/pi-durable'
 import { obj, str } from '@earendil-works/pi-schema'
+import { ContinuePin, pinHolds } from './continue.js'
 import { ToolAccess } from './taskto-tools.js'
 
 export const CLI_TOOL = 'cli_turn'
@@ -410,6 +411,10 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
       let round = 1
       while ((await api.memo(`turn-${round + 1}`, context)) !== undefined) round++
 
+      const pinned = pinHolds(
+        await api.snapshot(ContinuePin, api.conversationId, context),
+        await api.snapshot(LiveDoc, api.conversationId, context),
+      )
       const { prompt, history } = splitTurn(await messagesOf(api.conversationId))
       if (!prompt) return result('there is no new message for the CLI', '', true)
       const helps = new Helps()
@@ -420,7 +425,7 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
           done = await runTurn(
             api,
             access.capability,
-            { turn, cli, model: args.model, prompt, history, replay },
+            { turn, cli, model: args.model, prompt, history, replay, pinned },
             cli,
             helps,
             signal,

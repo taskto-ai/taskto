@@ -36,6 +36,7 @@ type Definition struct {
 	Collection        Collection                 `json:"collection"`
 	Actions           map[string]Action          `json:"actions" apitypes:"nonnull"`
 	Summaries         map[string]Summary         `json:"summaries,omitempty"`
+	Series            map[string]Series          `json:"series,omitempty"`
 	Contributions     *Contributions             `json:"contributions,omitempty"`
 	Integrations      map[string]IntegrationSlot `json:"integrations,omitempty"`
 	Reminders         []Reminder                 `json:"reminders,omitempty"`
@@ -102,6 +103,7 @@ const (
 	maxOptionLen        = 100
 	maxActions          = 50
 	maxSummaries        = 20
+	maxSeries           = 10
 	DefaultMaxFiles     = 1
 	MaxMaxFiles         = 10
 	DefaultMaxFileBytes = 8 << 20
@@ -364,6 +366,12 @@ func (d Definition) Check() (Definition, error) {
 			}
 		}
 	}
+	if err := d.checkSeries(out.Collection); err != nil {
+		return Definition{}, err
+	}
+	if len(d.Series) > 0 {
+		uses2 = append(uses2, "series")
+	}
 	scope := &screenScope{actions: d.Actions, collection: out.Collection, screens: screens, copied: d.copied}
 	var requires []string
 	if len(d.Screens) > 0 {
@@ -394,6 +402,9 @@ func (d Definition) Check() (Definition, error) {
 	}
 	if monthly {
 		requires = sortedKeys(setOf(append(requires, SummaryMonthCapability)))
+	}
+	if len(d.Series) > 0 {
+		requires = sortedKeys(setOf(append(requires, SeriesCapability)))
 	}
 	contributions, slots, err := d.checkContributions(screens)
 	if err != nil {
@@ -533,6 +544,7 @@ func dataModel(surfaceID string, def Definition, rows []Row, screen string, limi
 		shown = shown[len(shown)-limit:]
 	}
 	value := map[string]any{"items": Items(def, shown), "draft": map[string]any{}}
+	now := seriesNow()
 	if files := def.filesModel(); files != nil {
 		value[FilesKey] = files
 	}
@@ -541,6 +553,9 @@ func dataModel(surfaceID string, def Definition, rows []Row, screen string, limi
 	}
 	for name, s := range def.Summaries {
 		value[name] = summarize(s, def.Collection, rows)
+	}
+	for name, s := range def.Series {
+		value[name] = computeSeries(s, def.Collection, rows, now)
 	}
 	if def.hasScreens() {
 		value[ScreenKey], value[RecordKey] = screen, map[string]any{}
@@ -557,8 +572,12 @@ func Refreshed(surfaceID string, def Definition, rows []Row, clearDraft bool) []
 		return []Message{DataModel(surfaceID, def, rows)}
 	}
 	msgs := []Message{dataMessage(surfaceID, "/"+ItemsKey, Items(def, rows))}
+	now := seriesNow()
 	for _, name := range sortedKeys(def.Summaries) {
 		msgs = append(msgs, dataMessage(surfaceID, "/"+name, summarize(def.Summaries[name], def.Collection, rows)))
+	}
+	for _, name := range sortedKeys(def.Series) {
+		msgs = append(msgs, dataMessage(surfaceID, "/"+name, computeSeries(def.Series[name], def.Collection, rows, now)))
 	}
 	if clearDraft {
 		msgs = append(msgs, dataMessage(surfaceID, "/"+DraftKey, map[string]any{}))

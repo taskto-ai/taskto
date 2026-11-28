@@ -473,13 +473,16 @@ func TestACopyWithoutABoardCannotBePublishedUntilOneIsChosen(t *testing.T) {
 	_ = f.e.db.QueryRow(`SELECT count(*) FROM app_attachments`).Scan(&filesBefore)
 	_ = f.e.db.QueryRow(`SELECT count(*) FROM app_effects`).Scan(&effectsBefore)
 
+	if _, err := f.e.db.Exec(`UPDATE apps SET icon = '🧾' WHERE id = ?`, f.app.ID); err != nil {
+		t.Fatal(err)
+	}
 	rec := f.mallory.do(http.MethodPost, appPath(f.shared, f.app.ID, "/duplicate"), map[string]any{"name": "My inspections"})
 	expect(t, rec, http.StatusCreated)
 	if strings.Contains(rec.Body.String(), "East gate") || strings.Contains(rec.Body.String(), "leaking") {
 		t.Fatalf("the copy carries a record: %s", rec.Body)
 	}
 	copyApp := decode[App](t, rec)
-	if copyApp.ID == f.app.ID || copyApp.Name != "My inspections" || copyApp.Live != nil || copyApp.Rows != 0 || !copyApp.NeedsBoard {
+	if copyApp.ID == f.app.ID || copyApp.Name != "My inspections" || copyApp.Icon != "🧾" || copyApp.Live != nil || copyApp.Rows != 0 || !copyApp.NeedsBoard {
 		t.Fatalf("copy = %+v", copyApp)
 	}
 	for table, want := range map[string]int{"app_rows": recordsBefore, "app_row_history": historyBefore, "app_attachments": filesBefore, "app_effects": effectsBefore} {

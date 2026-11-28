@@ -176,6 +176,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_offline` | 409 | The app is offline: restore it to launch it or run its actions. |
 | `app_changed` | 409 | The app changed since the client read it; `current` is the app as it is now. |
 | `app_name_length` | 400 | An app's name must have 1 to `max` characters. |
+| `app_icon_invalid` | 400 | An app's icon must be one emoji, or empty to show the initials of its name. |
 | `too_many_apps` | 409 | The space has `max` apps. |
 | `app_full` | 409 | The app holds `max_rows` rows or `max_mib` MiB of data. |
 | `app_preview_full` | 409 | A [preview](#post-appsapppreview) holds `max_rows` sample rows already. |
@@ -194,6 +195,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `home_limit` | 409 | A person has at most `max` widgets (or pins) in a workspace, and a space at most `max` default widgets (or pins). |
 | `home_order_invalid` | 400 | The ids to put in order aren't all the caller's own placements of that kind, or one is listed twice. |
 | `home_defaults_shared` | 409 | Defaults are only for the apps of shared spaces. |
+| `desk_changed` | 409 | The desk's `version` is not the stored one; `current` holds the stored desk. |
+| `desk_invalid` | 400 | The layout breaks a rule of the format; `reason` is a closed word such as `too_many_tabs`. |
 | `audit_time_invalid` | 400 | The audit log's `from` or `to` is outside the years 1000 to 9999. |
 | `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
 | `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
@@ -223,16 +226,19 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_credentials_refused` | — | A failed `create_payment_link` entry: the provider didn't accept the integration's key. |
 | `integration_provider_refused` | — | A failed `create_payment_link` entry: the provider refused the request, for good. |
 | `integration_provider_unreachable` | — | A `create_payment_link` entry the provider didn't answer: tried again, then failed. |
-| `integration_account_changed` | — | A failed `create_payment_link` entry whose unfinished payment link was asked in another provider account, or in the other mode (test or live: one Stripe account has both, with one id) than the integration's key belongs to now: nothing is looked up or made in the new account or mode. The old link is neither cancelled nor known to be unpaid: an admin first reconciles the original payment in the original account (if it was paid, nothing is recreated; if not, the old link is made unable to take payment), and only then runs the action again, which is a new entry with a new reference. |
+| `integration_account_changed` | — | A failed `create_payment_link` entry whose unfinished payment link was asked in another provider account, or in the other mode (test or live: one Stripe account has both, with one id) than the integration's key belongs to now (including a key saved after the call's credentials were read and before it was written ahead): nothing is looked up or made in the new account or mode. The old link is neither cancelled nor known to be unpaid: an admin first reconciles the original payment in the original account (if it was paid, nothing is recreated; if not, the old link is made unable to take payment), and only then runs the action again, which is a new entry with a new reference. |
 | `integration_changed` | — | A failed `create_payment_link` entry whose reference was made under another integration than the slot is bound to now, whether or not it has its link: nothing is asked of the provider and the link is never written to the record. The link made is neither cancelled nor known to be unpaid: an admin first reconciles it as above, and only then runs the action again. |
 | `integration_outcome_unknown` | — | A failed `create_payment_link` entry whose call's outcome at the provider never became known: the provider may or may not have made the link, nothing under another key is made (a second link could be paid twice), and for 6 hours the entry looked for the call's object by its own token and asked again under the same key without learning it. An admin checks the provider's account and has the entry retried (if the link is there) or confirms that no link exists ([below](#confirm-that-no-payment-link-exists)). |
 | `integration_link_lookup_pending` | — | A waiting `create_payment_link` entry (not a failure): a call may have run at the provider and nothing said what it made, so only the call's object is looked for and the call asked again under the same key, for at most 6 hours, and nothing under another key is made meanwhile. Failed reads and calls in that time don't end it early or use up the entry's tries. |
-| `integration_condition_changed` | — | A failed `create_payment_link` entry: the record was changed so that it no longer meets the `when` condition of the action's link. Nothing was created and nobody needs to approve anything; make the change again when the record qualifies. |
+| `integration_condition_changed` | — | A failed `create_payment_link` entry: the record was changed so that it no longer meets the `when` condition of the action's link, before the link was asked for. Nothing was created and nobody needs to approve anything; make the change again when the record qualifies. |
+| `integration_condition_changed_link_kept` | — | A failed `create_payment_link` entry: the record was changed while the provider was making the link, so that it no longer meets the `when` condition of the action's link. The link exists at the provider and stays with the entry (a payment on it is still recorded, and the admins are told when the app's rule leaves the record unchanged), but it isn't written to the record. Retry the entry (or run the action again) once the record meets the condition again to write that same link: no second link is made for the record while this one may still be paid. |
 | `app_effect_space_changed` | — | A failed `create_payment_link` entry: the app moved to another space after the payment was queued (a move clears the app's approvals, so what was queued was never approved there). Start the payment again. |
 | `integration_nothing_to_confirm` | 409 | The payment link entry isn't one whose unknown outcome ended in `integration_outcome_unknown` (or it was confirmed already). |
+| `integration_mode_change_refused` | 409 | A change of an integration's key or settings refused because it would switch the integration to the other mode (test or live) while `count` payment links made in its current mode may still be paid. Wait until they are paid or expire (or, for one whose outcome is unknown, confirm that none exists), then change the key. A new key of the same mode is always accepted. |
+| `integration_link_attempt_changed` | 409 | An admin's confirmation that no payment link exists, refused because it names another attempt than the one that waits now, or another call went out under that attempt since the list showed it (the entry was retried): what the admin checked at the provider may not be all there is. They read the list again and check the provider again. |
 | `integration_link_not_confirmable` | 409 | An admin's confirmation that no payment link exists, refused because the server itself saw something of the reference at the provider (a call's answer named an object, or a lookup found one carrying the reference's token, whose state could not be read) or one of the reference's keys was already resolved (an earlier key's object was seen expired, or an earlier confirmation): a new key could make a second payable link. A person reconciles the payment in the provider's account. |
 | `integration_link_already_paid` | — | A failed `create_payment_link` entry whose earlier try's payment link was found paid (a completed Checkout Session), or no longer able to take payment for a reason that doesn't say it wasn't paid (a Payment Link deactivated or at its limit): nothing is made. An admin reconciles that payment in the provider's account before running the action again. |
-| `integration_link_still_open` | — | A failed `create_payment_link` entry: the record's earlier payment link may still take payment (it is open, still being made, or its outcome is unknown) and isn't one this entry can give again: it asks another amount or currency, it reads the same money from other fields of the record than this entry, or the record has more than one such link (left by an older server). No second link is made: a record has one payable link at a time, whatever field it is written to. Once that link has expired at the provider, run the action again. |
+| `integration_link_still_open` | — | A failed `create_payment_link` entry: the record's earlier payment link may still take payment (it is open, still being made, or its outcome is unknown) and isn't one this entry can give again: it asks another amount or currency, it reads the same money from other fields of the record than this entry, the record has more than one such link (left by an older server), or another object under the token of one of the earlier link's keys (left by a call whose answer was lost) may still be paid although the saved link has expired. No second link is made: a record has one payable link at a time, whatever field it is written to. Once that link has expired at the provider, run the action again. |
 | `integration_amount_changed` | — | A failed `create_payment_link` entry: the record's amount or currency is no longer what the entry was queued with (it failed before it made anything, and was retried after the record changed). Nothing was made; run the action again to ask for the record's money as it is now. |
 | `integration_event_unavailable` | — | A failed payment event: the app's approval was withdrawn, the integration is switched off or not allowed in the space, or the live release has no such slot. |
 | `integration_event_integration_changed` | — | A failed payment event: the app's slot is bound to another integration than the one whose payment this is. |
@@ -315,13 +321,18 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `search_query_no_words` | 400 | The search has no words to search for. |
 | `conversation_not_found` | 404 | No such conversation of the caller's in the workspace. |
 | `conversation_archived` | 409 | The conversation is archived: unarchive it first. |
+| `conversation_note_invalid` | 400 | A note must have 1 to `max` characters. |
 | `conversation_title_invalid` | 400 | A title must have at most `max` printable characters. |
 | `conversation_lost` | 410 | The agent runtime no longer has the conversation's content. |
 | `conversation_no_model` | 409 | The conversation has no model: choose one. |
+| `conversation_busy` | 409 | The conversation is working: a continue is only for an idle one. Also, a message that names an agent is still changing the conversation's model, so `PUT …/model` gave up waiting for it (a few seconds), and nothing changed. |
+| `conversation_moved` | 409 | The conversation has entries after the one the continue was for: it was already continued, or changed meanwhile. |
+| `model_unavailable` | 409 | The caller can't run that model now: a CLI whose account isn't connected, or that the member's account mode leaves no account for. |
 | `agent_off` | 503 | The agent runtime is off: the server runs without `-agent`. |
 | `agent_not_ready` | 503 | The agent runtime is starting or restarting; `Retry-After` says when to try again. |
 | `model_unknown` | 400 | The caller may not use that model, or it isn't configured. |
-| `too_many_streams` | 429 | The caller has `max` event streams open: close one first. |
+| `too_many_streams` | 429 | The caller has `max` event streams open (conversations and live resources count separately): close one first. |
+| `live_closed` | 503 | A live stream was asked for while the server is shutting down. |
 | `cli_permission_not_found` | 404 | The CLI's question isn't waiting: answered already, timed out, or its turn is over. |
 | `browser_off` | 409 | The agent browser is off: the server runs without `-browser`. |
 | `browser_cli_workers_off` | 409 | The CLI workers the browser runs with are off. |
@@ -380,6 +391,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `cli_workers_no_boundary` | 409 | CLI workers run in local mode, which allows a single user only (also a list's `reason_code`). |
 | `cli_not_installed` | 503 | The CLI, `cli`, isn't installed on this server. |
 | `cli_worker_closing` | 503 | The CLI worker is shutting down. |
+| `cli_worker_not_ready` | 503 | The CLI worker can't be reached (it is starting, or restarting). This comes before any other answer about the CLIs or the agent browser: the settings' list, a sign-in, a turn and its stop, the browser's routes and its live view. Try again in a moment. |
 | `cli_account_removing` | 409 | The account's CLI files are being removed (it is being disconnected): a sign-in or a check can't start on it meanwhile. |
 | `cli_account_busy` | 409 | A process of the account's CLI is still running after it was stopped: nothing was removed, try again. |
 | `cli_account_forgotten` | 410 | The CLI worker removed this account's files (a purge) and refuses it; after a restore of the server's data it says so until the server has told the worker who is here again, a moment after it starts. |
@@ -1379,7 +1391,7 @@ app's button does both: it posts, then goes to the address.
 | `documents/…` | The current version of every file in the caller's **private space**, under the names it has there, with a file's bytes as they are: Markdown and other versioned files from git, and large files, audio, video and archives (the [unversioned files](#unversioned-files)) from the space's own storage, never as a Git LFS pointer. Older versions aren't included. |
 | `boards/<id>-<name>.json`, `boards/<id>-<name>.md` | Each board of the private space, archived ones too (the personal board): the board and its cards (all columns, archived cards too, in the order of their IDs), each with its thread of comments. The JSON is `{"board": {…}, "cards": [{…card as the API gives it…, "comments": […]}]}`, exactly what `GET …/cards/{card}` answers. The Markdown is the same, for reading: a heading per card, with its column, details, body and comments. The two files are read one after the other, so a card edited between them can differ in them. |
 | `conversations/<id>-<title>.json` | Each conversation the caller owns **in this workspace**, archived ones too: `{"conversation": {…as the conversations API gives it…}, "entries": […], "transcript": "complete"}`. The entries are the agent runtime's, oldest first, in the shape the web app draws, as `GET …/conversations/{conversation}/entries` pages them, as the history was when its export began. If the agent runtime is off, no longer has the conversation or stops answering (each read waits at most 30 seconds), `transcript` is `"unavailable"` (`entries` empty) or `"incomplete"` (the entries read before it stopped), and the manifest says so. |
-| `apps/<id>-<name>.json` | Each app of the private space, offline ones too: `{"app": {id, name, archived_at, created_at, updated_at}, "records": […]}`. The records are the live ones (not deleted), as the agent's `list_app_rows` tool gives them (each field by name, with `id` and `revision`). An attachment field holds each photo's metadata, not its bytes; the app's definition isn't included (copy the app, or see [templates](templates.md)). |
+| `apps/<id>-<name>.json` | Each app of the private space, offline ones too: `{"app": {id, name, icon, archived_at, created_at, updated_at}, "records": […]}`. The records are the live ones (not deleted), as the agent's `list_app_rows` tool gives them (each field by name, with `id` and `revision`). An attachment field holds each photo's metadata, not its bytes; the app's definition isn't included (copy the app, or see [templates](templates.md)). |
 | `manifest.json` | `{"format": 1, "scope": "user", "exported_at", "workspace": {id, name}, "user": {id, name, email}, "counts": {documents, boards, cards, comments, conversations, apps, records}, "skipped": […]}`. `skipped` lists what couldn't be included, as `{"kind", "reason", "ref"}`: `document` with `unavailable` and its path (a file whose bytes the server no longer has), `documents` with `unavailable` (the space's history was rewritten while the export read it) or `off` (the server has no knowledge base), `app` with `unavailable` and its ID (the app was moved out of the private space while the export read it), `conversations` with `off` (the server has none), or `transcript` with `unavailable` or `incomplete` and a conversation's ID; it is capped at 1000 (`"skipped_truncated": true` then). |
 
 **The scope is where a thing is now, and who owns a conversation.** The documents, boards and
@@ -1474,7 +1486,7 @@ admin again, so one who was demoted since gets `403`.
 | `spaces/<id>-<name>/space.json` | The space: `{"id", "name", "archived_at", "created_at", "role"}`, where `role` is the admin's own (`editor` or `viewer`) and `archived_at` is set for an archived space. |
 | `spaces/<id>-<name>/documents/…` | The space's documents, as in the personal export: the current version of every file at one commit, large files from the space's own storage, never as a Git LFS pointer. |
 | `spaces/<id>-<name>/boards/<id>-<name>.json`, `.md` | Each board of the space, archived ones too, with every card and its comments, as in the personal export. Boards come a page at a time, in the order of their IDs. |
-| `spaces/<id>-<name>/apps/<id>-<name>.json` | Each app the admin may open: `{"app": {id, name, archived_at, created_at, updated_at}, "live": {…the live release, with its `definition`…}, "records": […]}`. The records are those the admin may read in the app (all of them, or only their own, by their role in it), as the agent's `list_app_rows` tool gives them; an attachment field holds each photo's metadata, not its bytes. The app, its `live` definition and its records are read in one snapshot of the admin's access, so a publish or a change of roles while the export runs never mixes two states. The draft and earlier releases aren't included. An app the admin holds no role in isn't exported, even if it is listed to them because it has roles and no builder (the way back an admin has to set its roles right): that gives no records, and an export holds what the admin's roles give them. |
+| `spaces/<id>-<name>/apps/<id>-<name>.json` | Each app the admin may open: `{"app": {id, name, icon, archived_at, created_at, updated_at}, "live": {…the live release, with its `definition`…}, "records": […]}`. The records are those the admin may read in the app (all of them, or only their own, by their role in it), as the agent's `list_app_rows` tool gives them; an attachment field holds each photo's metadata, not its bytes. The app, its `live` definition and its records are read in one snapshot of the admin's access, so a publish or a change of roles while the export runs never mixes two states. The draft and earlier releases aren't included. An app the admin holds no role in isn't exported, even if it is listed to them because it has roles and no builder (the way back an admin has to set its roles right): that gives no records, and an export holds what the admin's roles give them. |
 | `manifest.json` | As the personal export's, with `"scope": "workspace"`, `"user"` the exporter, `counts` (`members`, `spaces`, `documents`, `boards`, `cards`, `comments`, `apps`, `records`), `spaces` (`id`, `name`, `dir`, the folder it is in, and `archived_at`) and `skipped`, which adds `"space"` (the shared space an item was in) and the kind `space` with the reason `access_lost` for a space the admin stopped being a member of while the export ran. |
 
 **A space the admin leaves meanwhile is left out from then on.** The spaces are those the admin is a
@@ -1887,6 +1899,12 @@ can't be viewed or restored; `agent` is absent when the user made the change, an
 is 1 to 200, default 50; `next`, when there are more, is the `before` of the next page
 (`?before=<commit>`: `404` if the commit isn't in the space's history, as for `?at=`).
 
+The web app's history view draws a Markdown document's changes from two ordinary reads of
+`GET …/docs/{path}?at=<commit>` (a commit and the one before it that this list shows, or a
+commit and the current version), comparing them in the browser, so a diff needs no route of
+its own and shows nothing the caller can't read already; a version that was taken out of history
+has no diff.
+
 ### `GET /api/workspaces/{workspace}/spaces/{space}/history`
 
 Every commit of the space, newest first, paged the same way, without `change` and
@@ -2173,6 +2191,35 @@ Read access to the space (`404` for one the caller can't read). Query: `q`, `lim
 
 Any member. The same, across the apps of every space of the workspace the caller can read.
 Both routes also take an access token.
+
+### `GET /api/workspaces/{workspace}/search/palette`
+
+Any workspace member with a session. Access tokens are not accepted. Query: required `q`
+(up to 500 bytes) and optional `limit` (5 by default, at most 10). Returns matching spaces,
+apps, boards, documents, cards, records and the caller's own conversations in one reply.
+Name matches ignore case and accents, rank names that start with the query first, then
+shorter names. Private space labels are supplied by the web app and are not searched here.
+Document search is full text only, so typing in the palette never sends a query to an
+embeddings endpoint. `incomplete` is true when card, record or conversation indexing is
+still catching up.
+
+```json
+{
+  "places": {
+    "spaces": [{"id": 3, "name": "Operations", "kind": "shared"}],
+    "apps": [{"space_id": 3, "space_name": "Operations", "app_id": 9, "name": "Expenses"}],
+    "boards": [{"space_id": 3, "space_name": "Operations", "board_id": 4, "name": "Roadmap", "kind": "team"}]
+  },
+  "docs": [],
+  "cards": [],
+  "records": [],
+  "conversations": [],
+  "incomplete": false
+}
+```
+
+Each kind is limited independently by `limit`; document, card, record and conversation
+results use the same access checks as their individual search routes.
 
 ### Searching conversations
 
@@ -2989,7 +3036,7 @@ An app:
 
 ```json
 {
-  "id": 9, "space_id": 4, "name": "Expense tracker",
+  "id": 9, "space_id": 4, "name": "Expense tracker", "icon": "🧾",
   "archived_at": null, "version": 1, "rows": 12,
   "created_at": "…", "created_by": {"id": 2, "name": "Member", "agent": true},
   "updated_at": "…", "updated_by": {"id": 2, "name": "Member", "agent": true},
@@ -3027,10 +3074,12 @@ and kind included.
   "components": [{"id": "root", "component": "Column", "children": ["title", "items", "form"]}, …],
   "collection": {"fields": [
     {"name": "description", "type": "string", "required": true, "max_length": 200},
-    {"name": "amount", "type": "number", "required": true, "min": 0}
+    {"name": "amount", "type": "number", "required": true, "min": 0},
+    {"name": "spent_on", "type": "date"}
   ]},
   "actions": {"add_expense": {"kind": "insert"}, "delete_expense": {"kind": "delete"}},
-  "summaries": {"total": {"kind": "sum", "field": "amount"}}
+  "summaries": {"total": {"kind": "sum", "field": "amount"}},
+  "series": {"by_month": {"kind": "sum", "field": "amount", "group_by": "spent_on", "bucket": "month", "last": 12}}
 }
 ```
 
@@ -3044,9 +3093,19 @@ saying what is wrong) unless:
   (one screen; `string`, `number`, `boolean` and `date` fields; `insert`, `update` and
   `delete`) is still read, checked and drawn exactly as it was; a definition that says `1` can't
   use anything of version 2 (`400`), which is everything in [Screens](#screens-and-navigation),
-  [time and choice fields](#fields-and-rules) and [rules](#fields-and-rules). **Version 3** adds
+  [time and choice fields](#fields-and-rules), [rules](#fields-and-rules), series, and
+  contributions. **Version 3** adds
   [integrations](#integrations-of-an-app) and [reminders](#reminders-of-records): a definition that
   says `1` or `2` can't declare them or use the `create_payment_link` effect (`400`).
+- **series** declares up to 10 count, sum or average aggregates grouped by a choice, boolean, text or
+  date field. A date group needs a `day`, `week` or `month` bucket; it keeps the latest 12 buckets by
+  default, or 1–90 when `last` is set. A series can filter rows with `where` and split into one line
+  per choice option or boolean value. The model at `/<name>` is `{"x":[{"key":"2026-11","label":"2026-11"}],"series":[{"key":"","label":"","values":[3]}]}`.
+  Choice groups follow their declared option order and labels; boolean groups are false then true;
+  text groups keep the 20 most frequent values and combine the rest as `other`. Buckets use UTC and
+  weeks start Monday. Empty averages are `null`. The server computes series over all records the
+  viewer may read, independently of the bounded `/items` list, and reports the `data.series`
+  capability in `requires`.
 - **requires** lists the catalog **capabilities** the screen needs: `component.<Name>` for
   each component it draws and `function.<name>` for each function it calls. The server works
   it out from the screen and replaces whatever was sent, so a definition can't claim less than
@@ -3062,7 +3121,10 @@ saying what is wrong) unless:
   (`internal/apps/catalog.go`): A2UI's basic catalog without `Image`, `Video`,
   `AudioPlayer` and the `openUrl` function (an app is shared, and a picture from
   elsewhere would tell that server who opens it, and could carry the app's data in its
-  address), plus `Stat` (a labelled value), `Show` (draws its child while a rule holds,
+  address), plus `Stat` (a labelled value), `Table` (a sortable table of the records, below), `Markdown` (formatted text from a literal or a
+  binding, drawn by the web app's own renderer, which never makes HTML: links show as text
+  and are never followed, and images show as links, so an app opens nothing outside),
+  `Show` (draws its child while a rule holds,
   [below](#fields-and-rules)), and `PhotoInput` and `Photos` (a photo input and the thumbnails of
   attachments, which upload to and draw from this server's own authenticated routes, never an
   outside address: [Photo attachments](#photo-attachments)), and `LocationInput`, `SignatureInput` and
@@ -3073,6 +3135,22 @@ saying what is wrong) unless:
   component may contain itself, and every button's event must be one of the app's
   actions. The web app's renderer runs with A2UI's strict validation too, against the
   same catalog.
+- **Table** lists the records as a table: `{"id", "component": "Table", "items": {"path": "/items"}, "columns": [{"field", "label"}], "label", "open"?, "sort"?, "dir"?}`.
+  `items` is exactly the data binding `/items` (the records the viewer may read, so a table shows no
+  one else's). `columns` are 1–12 entries, each a `field` (a string, number, boolean, date, time,
+  choice or barcode field of the collection, never a photo, signature or location) and its
+  `label`, a dynamic string. `label` is the table's caption, which screen readers read. `open`
+  names a `navigate` action to a screen with `"record": true`: the first column then holds a button
+  that runs the action with the row's `id`, as a `Button`'s event does (the same path: an update's
+  `expectedRevision` is added, a conflict is reloaded, an error is shown), so the app needs no
+  event of its own for it. `sort` is a field of the same types and `dir` is `asc` (the default) or
+  `desc`: how the table starts; people click a column's header to sort by it. Choice fields show
+  their labels, dates the viewer's format, numbers their locale's, booleans a translated yes or no,
+  and a row with no value comes last whichever way it sorts. The table draws the first 200 rows
+  (after sorting) and says how many there are; a filter or paging is not part of it. Each column
+  that the server sends to a client carries its field's `type`, added to the surface only, never
+  stored in the definition. `app_catalog` describes `Table` and the two kinds of prop it
+  introduces: a field's name of given types and an action's name of given kinds.
 - **Icons**: an `Icon`'s `name` is `{"svgPath": "<path data>"}`, A2UI's own form, and a path is
   the way to give an icon: one SVG path, drawn on a fixed 24 by 24 view box (`0 0 24 24`) and
   filled in the text's colour (nonzero fill). It is written by a model or by whoever edits the app
@@ -3248,8 +3326,8 @@ out unless `?archived=true`, after the others.
 
 ### `POST …/apps`
 
-Writers. `{"name": "Expense tracker", "definition": { … }}` (a name of 1–100
-characters). `201` with the app.
+Writers. `{"name": "Expense tracker", "icon"?: "🧾", "definition": { … }}` (a name of 1–100
+characters; an icon is [one emoji](#app-icons)). `201` with the app.
 
 ### `GET …/apps/{app}`
 
@@ -3257,12 +3335,32 @@ The app, with its definition.
 
 ### `PATCH …/apps/{app}`
 
-Writers. With the `version`: `name` renames it and `definition` replaces the app's **draft**:
-its screen, collection, actions and summaries (these take the design capability), `archived`
+Writers. With the `version`: `name` renames it, `icon` sets its [icon](#app-icons) (`""` goes
+back to the initials) and `definition` replaces the app's **draft**:
+its screen, collection, actions and summaries (these take the design capability, as do the
+name and the icon), `archived`
 takes it offline (`true`) or restores it (`false`; the publish capability). A new definition is
 checked against the catalog, not against the rows, and changes nothing people use: the app
 keeps serving its live release until the draft is published. Fields no longer declared stay in
 the rows, unseen, and come back if declared again. `200` with the app.
+
+#### App icons
+
+An app's `icon` is one emoji, or `""` to show the initials of its name (the colour still comes
+from the name). The server keeps it exactly as sent, never trimmed, at most 32 bytes and 8
+characters, and it is one emoji sequence and nothing else: a pictograph (Unicode's
+`Extended_Pictographic`) with an optional emoji variation selector or skin tone, such pictographs
+joined by U+200D (a family, a person with a profession), a pair of regional indicators (a flag), a
+keycap (`1️⃣`, `#️⃣`, `*️⃣`) or a flag in tag characters (England, Scotland, Wales). A space,
+a control or invisible character anywhere (U+200B, U+202E, a byte order mark, a lone U+200D),
+several emoji, or a letter is `400 app_icon_invalid`, as is anything else. The web app's picker
+holds the same rule, with the same table of pictographs (`web/src/apps/pictographs.ts`, never the
+browser's own Unicode data, which differs between versions), and `internal/apps/testdata/app_icons.json`
+is the table and the list of values that both test. An icon of joined pictographs the system has no
+single glyph for is wider than its avatar, so the avatar clips it. Changing it needs the design capability, bumps the app's
+`version` and records no audit event. The agent's `create_app` and `update_app` take it too, a
+copy of an app keeps it, and Home's items (`app_icon`, left out when empty) and its available
+apps (`icon`) carry it.
 
 ### `POST …/apps/{app}/move`
 
@@ -3558,9 +3656,11 @@ app to keep on the device for [offline use](offline.md). Nothing is stored by th
 snapshot, and the writes made against it come back as ordinary
 [actions](#post-appsappactions) under their `operation` keys.
 
+The app's `icon` (`""` for none) comes with it, so the offline list and the app's header on the device draw it; a copy downloaded before icons existed has none and shows the initials.
+
 ```json
 {
-  "app_id": 9, "space_id": 4, "name": "Expenses", "release": 3,
+  "app_id": 9, "space_id": 4, "name": "Expenses", "icon": "🧾", "release": 3,
   "definition": {
     "definition_version": 2, "requires": ["component.Column", …],
     "collection": {"fields": [ … ]}, "entry": "…", "screens": [{"name": "…", "record": true}],
@@ -3867,7 +3967,11 @@ or taking the space away stops entries that are waiting. Those reads, and the us
 one snapshot. An entry runs only in the space it was queued in: an app that was moved since (which
 clears its approvals) fails the entry with `app_effect_space_changed`, and the payment is started
 again. A record edited so that it no longer meets the `when` of the action's link fails it with
-`integration_condition_changed`: nothing was created.
+`integration_condition_changed`: nothing was created. One edited so while the provider was making the
+link fails it with `integration_condition_changed_link_kept`: the link exists, stays with the entry
+(a payment on it is still recorded) and is written once the entry is retried with the record meeting
+the condition again. A key replaced by one of the other mode while the link was made fails it with
+`integration_account_changed`, and the link is not written.
 
 **Money is exact.** The amount is the number field's value written as the shortest decimal text that
 reads back as the same number, read digit by digit into the currency's smallest unit (2 decimals for
@@ -4321,7 +4425,7 @@ id is `404`, never `403`).
 
 The caller's Home: `{"widgets": […], "pins": […], "hidden": […], "limits": {"widgets": 24,
 "pins": 20}}`. An item is `{"id"?, "default_id"?, "source": "personal"|"default", "kind":
-"widget"|"pin", "space_id", "app_id", "app_name", "widget_id"?, "widget"?, "label"?, "screen"?,
+"widget"|"pin", "space_id", "app_id", "app_name", "app_icon"?, "widget_id"?, "widget"?, "label"?, "screen"?,
 "state", "reason"?, "release"?, "can_manage"?}`. The defaults of the caller's shared spaces
 come first, then their own in the order they chose; an item the caller placed themselves
 replaces the same default. `hidden` are the defaults they hid.
@@ -4329,7 +4433,7 @@ replaces the same default. `hidden` are the defaults they hid.
 ### `GET /api/workspaces/{workspace}/home/available`
 
 The apps the caller may put on Home or pin: those they may view, online and published, in the
-spaces they read, `{"apps": [{"space_id", "space_name", "space_kind", "app_id", "name",
+spaces they read, `{"apps": [{"space_id", "space_name", "space_kind", "app_id", "name", "icon",
 "widgets", "pin", "can_set_defaults", "defaults"}]}`. `can_set_defaults` and the `defaults` set
 are only for those who may [set defaults](#shared-defaults) for the app.
 
@@ -4373,6 +4477,51 @@ reads the space may list them; they are seen only for the apps they may view.
   the app `403 app_forbidden` (`publish`), a private space `409 home_defaults_shared`.
 - `DELETE …/spaces/{space}/home/defaults/{default}`: `204`, with the same rights; `404` for a
   default of another space.
+
+## Desks
+
+Each member has a main desk in each workspace. A desk stores only a window layout and route paths;
+the pages named by those paths load their own data and apply their usual access checks. Layouts are
+per person and workspace, so they follow the person across devices. The main desk is created on its
+first save. Reading it never writes to the database. A desk id belonging to another person or
+workspace is `404 not_found`.
+
+These routes need a browser session and workspace membership. Access tokens are refused.
+
+### `GET /api/workspaces/{workspace}/desks`
+
+Lists the main desk first, then any named desks. Before the main desk has been saved, it is returned
+as `{"id":0,"name":"","updated_at":""}`; after its first save it is listed with its own id, which
+stays. A read does not create a row.
+
+### `GET /api/workspaces/{workspace}/desks/{desk}`
+
+`{desk}` is `main` or a desk id. Before its first save, `main` returns
+`{"id":0,"name":"","layout":{"v":1,"focus":"","root":null},"version":0,"updated_at":""}`.
+
+### `PUT /api/workspaces/{workspace}/desks/{desk}/layout`
+
+Saves a layout using optimistic concurrency. The request is `{"version":0,"layout":{...}}` for a
+new main desk, and each successful save increments the version. If another save has changed the
+version, the server returns `409` with code `desk_changed` and the current desk in `current`.
+
+A version 1 layout has `v: 1`, a `focus` group id and a `root` node. A node is either a group with
+`group`, `tabs` and `active`, or a split with `split` (`row` or `column`), `sizes` and `children`.
+Groups contain 1 to 20 tabs; there are at most 6 groups and 60 tabs, and at most 3 levels of nodes.
+Splits have 2 to 4 children and each size is from 0.1 to 0.9, with the sizes adding to 1 within
+0.01. Group and tab ids are distinct lowercase letters and digits, 1 to 16 characters. Paths are
+at most 512 bytes and must stay under the request's workspace, with one of `home`, `conversations`,
+`knowledge`, `boards`, `apps`, `notifications` or `settings` as the first route, optionally followed
+by one segment that has no slash, backslash, `?`, `#` or control character as written, and is
+neither `.` nor `..`; after percent-decoding it still has no backslash or control character and is
+still neither `.` nor `..`, and (except under `knowledge`) no slash. A percent-encoded `?`, `#` or
+other character stays inside its segment, so it is allowed. Under `knowledge` the segment is what
+the web app builds for a document, `<space>:<path>` percent-encoded as a whole, so a document in a
+folder (`3%3Afolder%2Fnotes.md`) is allowed: after the `<space>:` prefix every folder or file name
+in the decoded path must be non-empty and neither `.` nor `..`, so a leading, trailing or doubled
+slash and `..` are refused. Unknown fields, other workspace paths, malformed layouts, and layouts
+larger than 32 KiB, as sent or as stored, are refused; invalid layouts return `400` with code
+`desk_invalid` and a closed `reason` code.
 
 ## Integrations
 
@@ -4487,7 +4636,12 @@ Admin only. Any of `display_name`, `settings` and `currencies` (each replaces th
 value), `secrets` (replaces the ones named), `max_amount_minor` and `disabled`; the rest stay.
 `disabled: true` switches the integration off (nothing sends or receives through it, and its
 approvals and events are kept) and `false` back on. `200` with the integration; `400` for an
-invalid field or an attempt to change the name or provider; `404`.
+invalid field or an attempt to change the name or provider; `404`; `409
+integration_mode_change_refused` (`params.count`) when the new key or settings would switch the
+integration to the other mode (test or live) while payment links made in its current mode may still be
+paid: their payments could no longer be checked or recorded. Nothing changes; the admin waits until those
+links are paid or expire (or, for one whose outcome is unknown, confirms that none exists), then sets
+the key. A new key of the same mode can be set at any time.
 
 ### `PUT /api/workspaces/{workspace}/integrations/{integration}/spaces`
 
@@ -4553,6 +4707,8 @@ provider and none of its keys was resolved (otherwise a confirmation is refused,
 resolve (an answer named it, or a lookup found it carrying the key's token but couldn't read its amount,
 or found it asking another amount or currency), `""` when none: `can_confirm` is then false, and an
 admin checks that object at the provider; a retry of the entry adopts it once a lookup can check it.
+`attempt_seq` is the number of the attempt that waits (the reference's current key, from 0) and
+`attempt_sends` how many calls went out under it so far: a confirmation names both.
 When `waiting` and `can_confirm` are both false the lookup stopped, and `code` is the code the entry
 failed with (for example `integration_account_changed`), which clients say in words; it is left out
 otherwise. `params` are the values that code's message names, as the entry failed with them (for
@@ -4571,7 +4727,8 @@ account. `403` for a member, `404` for another workspace's integration.
 
 `POST /api/workspaces/{workspace}/integrations/{integration}/payment-links/{effect}/confirm-no-link`
 
-Admin only, body `{}`. For a payment link whose entry failed with `integration_outcome_unknown`: the
+Admin only, body `{"attempt_seq": 0, "attempt_sends": 3}`: the attempt the admin checked, as the
+list above showed it (both required). For a payment link whose entry failed with `integration_outcome_unknown`: the
 admin checked the provider's account for an object of the reference (a Payment Link's
 `metadata.taskto_ref`, a Checkout Session's `client_reference_id`, holding any of the reference's
 tokens) and found none. The key whose outcome was unknown is recorded as abandoned (its record stays),
@@ -4580,7 +4737,10 @@ the user who acted with their access then. Recorded in the audit log
 (`integration_new_link_allowed`). `204`. `403` for a member; `404` for an entry that isn't of this
 integration, or is in a space the admin doesn't manage; `409 integration_nothing_to_confirm` when the
 entry isn't waiting for this decision (not failed with that code, the link was found, or it was
-confirmed already: a second request never allows a second key); `409 integration_link_not_confirmable`
+confirmed already: a second request never allows a second key); `409 integration_link_attempt_changed`
+when the attempt named is not the one that waits now, or another call went out under it since it was
+listed (the entry was retried): what the admin checked at the provider is not all that may be there,
+so they read the list again and check again; `409 integration_link_not_confirmable`
 when the server saw something of the reference that contradicts "none exists" (any of its keys has an
 object on record: a call's answer named one, or a lookup found one by the key's token, and its state
 could not be read) or any of its keys was already resolved (an earlier key whose object was seen
@@ -4983,6 +5143,31 @@ an access token); other admins get `403` `operator_only`. The status, error incl
 scheduled time they were for. A success doesn't clear `last_error`: it is current only if
 `last_error_at` is after `last_success`. With `health` `none`, the other fields are absent.
 A user or a URL's password in an error is replaced by `***`.
+
+### `GET /api/workspaces/{workspace}/cli-worker`
+
+[Operators](#operators) only (an admin of a workspace someone made later gets `403`
+`operator_only`, a member `403`), with a browser session. Whether the CLI worker needs an
+operator ([cli-workers.md](cli-workers.md#authority-lost)):
+
+```json
+{
+  "mode": "container",
+  "reachable": true,
+  "authority_lost": false,
+  "other_installation": true,
+  "boot": "4f…",
+  "installation": "9c…"
+}
+```
+
+`mode` is `off`, `local`, `local-unsafe` (development only) or `container`. `reachable` is false when the worker couldn't be asked;
+the other fields are then false or absent. `authority_lost`: the worker lost its history of
+server boots, and refuses every census and deletion until an operator hands it over.
+`other_installation`: the worker's volume belongs to another taskto installation (another data
+directory). `boot` and `installation` are this server's, present only when the worker needs
+handing over: what `taskto cli-worker trust-server -boot … -installation …` takes (Settings →
+About shows the command with both).
 
 ### `GET /api/workspaces/{workspace}/updates`
 
@@ -5600,6 +5785,29 @@ Sends a message: `{"content": "…", "when_busy": "steer", "request_id": "…", 
 `202 {"submission_id": 12}`; the answer arrives through the events stream. `409` for an
 archived conversation.
 
+A message that starts with an agent token, `@[Codex](agent:<provider>/<model id>)` (the label
+is up to 100 characters with no brackets, backslash or line break; the token is followed by
+whitespace or ends the message), moves the conversation to that model before the message is
+sent, with the hand-off that `PUT …/model` does: the web app's `@` menu inserts one. Only a
+token at the very start counts; one anywhere else is text. The token stays in the message, so
+the agent sees who was addressed. The model is checked as `PUT …/model` checks it: `400
+model_unknown` for one the caller may not use or that isn't configured, and then nothing is
+switched or sent. The reply then also names the model:
+`202 {"submission_id": 12, "model": {"provider": "cli-codex", "model_id": "default"}}`
+(`model` is absent when the message had no token). Conversations belong to their owner, so
+nobody else can send to one and so nobody else can switch its model this way.
+
+While such a message is being sent it holds the conversation's model. `PUT …/model` waits for
+that hold for a few seconds only, then answers `409 conversation_busy` and changes nothing; the
+owner may try again. The send itself runs under a deadline (twenty seconds) covering the read
+and switch of the model and the submission, so a runtime that stops answering ends the send
+with `503`, the model put back, and the hold released.
+
+Each person-sent message is stored as a `taskto.input` entry. Its `data` includes version `1`
+and the sender's user ID; optional `text` and `attached` fields preserve the original text and
+conversation links separately from the content sent to the model. Exported conversations keep
+these entries and their data unchanged. Older `pi.user` entries remain readable.
+
 Sending and switching the model check access and the archive again just before passing the
 request to the agent runtime, after any wait for it to be ready. An archive, or a removal from
 the workspace, that commits while that call is in flight doesn't stop it. That is accepted:
@@ -5607,6 +5815,25 @@ the message ends up as if it had been sent a moment earlier. Archiving doesn't s
 turn either, and someone removed can't read the conversation any more. Closing the window
 would mean holding the database's write lock across the call, which would stall every write
 on the server whenever the agent runtime is slow.
+
+### `POST /api/workspaces/{workspace}/conversations/{conversation}/notes`
+
+Adds a note: `{"content": "…", "request_id": "…"}`. A note stays in the conversation's history, in
+order, and is shown to whoever reads the conversation, but the agent never sees it: it isn't a
+message, so it is not part of the model's context, a CLI turn is not handed it, and
+`GET …/messages` and the conversation search don't contain it. It is an entry of kind
+`taskto.note` in `…/entries` and the events stream, with no `model`, and its `data` is
+`{"v": 1, "author": <user ID>, "text": "…"}`; the author is always the caller. The conversation's
+export carries notes for its owner like any other entry. A note can't be edited or removed.
+
+- `content`: 1 to 8000 characters, not only whitespace; otherwise `400 conversation_note_invalid`
+  (with `max`).
+- `request_id`: optional, up to 128 printable ASCII characters. A retry with the same ID in the
+  same conversation doesn't write the note again.
+
+`202 {"submission_id": 12}`; the note is stored at once, also while the agent is working, and
+doesn't interrupt the run. `404` for a conversation that isn't the caller's, `409` for an
+archived one. Adding a note marks the conversation updated, so the list shows the activity.
 
 ### `GET /api/workspaces/{workspace}/conversations/{conversation}/messages`
 
@@ -5618,7 +5845,34 @@ What the model sees next, simplified to role and text:
 `GET` answers the conversation's model. `PUT` with a model switches to it from the
 conversation's next model request on, also in the middle of a run: `200` with the model;
 `400 unknown model` for one the caller may not use or that isn't configured; `409` for an
-archived conversation.
+archived conversation; `409 conversation_busy` when a message that names an agent is still
+changing the model (the `PUT` waits a few seconds for it, then changes nothing).
+
+### `GET /api/workspaces/{workspace}/conversations/{conversation}/continue-models`
+
+The models a continue may name, for the owner of the conversation, now: `{"providers": [...]}`
+in the shape of `GET …/models`, with the CLI models only where the caller has an account that can
+run them (a connected account of their own, or one of the workspace's shared accounts, as the
+member's account mode allows). It is worked out for this conversation with the account choice its next turn will make, the same code: a conversation that keeps its last account (account switching on) is offered what that account runs, and a shared account an admin pinned to one model offers only that model. The list is the one `continue` checks, so a model that is not in it is refused there. `404` for a conversation the caller doesn't own, `409
+conversation_archived` for an archived one.
+
+### `POST /api/workspaces/{workspace}/conversations/{conversation}/continue`
+
+Runs the conversation again on what it holds, with no new message: for a reply that failed (the
+model's provider refused it, for a limit or an overload), on the model the body names, which may
+be the one it already has. The body names a model from `continue-models` and the last entry, for example `{"model": {"provider": "cli-claude", "model_id": "default"}, "after_entry": 42}`:
+the model is the one the run answers on, written together with the run's admission, so no other
+model write can come between them, and `after_entry` is the id of the conversation's last entry
+that is not a private note, as the caller saw it: the failed reply the caller is continuing (notes written after it neither hide it nor move it, and a note's own entry is never accepted). `202 {"submission_id": 12, "model": {"provider": "script", "model_id": "script-1"}}`, where `model` is the one the run was admitted on, which the web app shows; the
+answer arrives through the events stream. The run keeps that model until it ends: a `PUT …/model` meanwhile is refused with `409 conversation_busy`, a CLI turn of the run is refused when its account choice no longer runs that model, and it is not moved to another account by a usage limit. Only the conversation's owner, and only while the
+conversation is idle: `409 conversation_busy` while it works (a continue never queues, and a
+refused one leaves the running work's model alone), `409 conversation_moved` when the conversation
+has entries other than notes after `after_entry`, or an earlier continue already took that entry, even one that added nothing, such as one that was stopped (nothing is started), `409 model_unavailable` for a model that `continue-models` doesn't
+offer now, `400` for a missing or malformed body or a model the caller may not use, `409
+conversation_archived` for an archived one, `404` for one the caller doesn't own or that doesn't
+exist. The archive is checked again, under a lock an archiving request takes too (a request that is cancelled stops waiting for it), immediately before the request goes to the agent runtime, so no archive finishes between the check and the run's start. The web app offers it, with the models of `continue-models`, on a failed last
+reply, and keeps its buttons disabled once the request is accepted, until the stream shows the
+new run.
 
 ### `POST /api/workspaces/{workspace}/conversations/{conversation}/stop`
 

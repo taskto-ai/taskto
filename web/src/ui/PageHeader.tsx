@@ -1,8 +1,10 @@
 import type { ReactNode, Ref } from 'react'
+import { usePlaceTitle } from '../router'
 import './PageHeader.css'
 
 export interface PageHeaderProps {
   title: ReactNode
+  titleText?: string
   help?: ReactNode
   actions?: ReactNode
   path?: ReactNode
@@ -11,7 +13,17 @@ export interface PageHeaderProps {
   titleAction?: ReactNode
 }
 
-export function PageHeader({ title, help, actions, path, level = 1, titleRef, titleAction }: PageHeaderProps) {
+export function PageHeader({
+  title,
+  titleText,
+  help,
+  actions,
+  path,
+  level = 1,
+  titleRef,
+  titleAction,
+}: PageHeaderProps) {
+  usePlaceTitle(level === 1 ? (titleText ?? (typeof title === 'string' ? title : null)) : null)
   const Heading = level === 1 ? 'h1' : 'h2'
   return (
     <header className="ui-page-header">

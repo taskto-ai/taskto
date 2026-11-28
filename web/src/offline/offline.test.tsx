@@ -17,7 +17,7 @@ import { downloadApp } from './download'
 import { LogoutGuard } from './LogoutGuard'
 import { itemsOf } from './local'
 import { OfflinePanel } from './OfflinePanel'
-import { OfflineApp as OfflineAppView } from './OfflineShell'
+import { OfflineApp as OfflineAppView, OfflineShell } from './OfflineShell'
 import { recordSignOut, settleSignOut } from './pendingSignOut'
 import { revalidate } from './revalidate'
 import {
@@ -78,6 +78,7 @@ function offlineApp(patch: Partial<OfflineApp> = {}): OfflineApp {
     app_id: 1,
     space_id: 2,
     name: 'Expenses',
+    icon: '',
     release: 3,
     definition,
     messages: surface,
@@ -763,6 +764,40 @@ test('downloading keeps the release and the records, asks the browser to keep th
   await waitFor(() => expect(persist).toHaveBeenCalled())
 })
 
+test('a download keeps the app’s icon, and the offline list and the app’s header show it; a copy from before has the initials', async () => {
+  const store = await openStore()
+  fakeFetch({ [`GET ${base}/offline`]: { body: offlineApp({ icon: '🧾' }) } })
+  const d = await downloadApp(store, scope)
+  expect(d.icon).toBe('🧾')
+  expect((await store.getDownload(scope))?.icon).toBe('🧾')
+
+  const runtime = idle(store)
+  const shown = render(<OfflineAppView runtime={runtime} download={d} items={[]} />)
+  const heading = await screen.findByRole('heading', { name: 'Expenses' })
+  expect(within(heading.parentElement as HTMLElement).getByText('🧾')).toBeTruthy()
+  shown.unmount()
+
+  const before = download(7)
+  expect(before.icon).toBeUndefined()
+  render(<OfflineAppView runtime={runtime} download={before} items={[]} />)
+  const older = await screen.findByRole('heading', { name: 'Expenses' })
+  expect(within(older.parentElement as HTMLElement).getByText('E')).toBeTruthy()
+})
+
+test('the list of downloads on the offline screen shows each app’s icon, and the initials for a copy made before icons', async () => {
+  const { runtime } = await activate(7, 'Pat')
+  if (!runtime) throw new Error('no runtime')
+  await runtime.store.putDownload(download(7, { icon: '🧾' }))
+  await runtime.store.putDownload(download(7, { app: 2, key: scopeKey({ ...scope, app: 2 }), name: 'Tools' }))
+  render(<OfflineShell user="Pat" onReconnect={() => {}} />)
+  const rows = await screen.findByRole('list', { name: 'Offline use' })
+  const expenses = within(rows).getByText('Expenses').closest('li') as HTMLElement
+  expect(within(expenses).getByText('🧾')).toBeTruthy()
+  const tools = within(rows).getByText('Tools').closest('li') as HTMLElement
+  expect(within(tools).getByText('T')).toBeTruthy()
+  expect(within(tools).queryByText('🧾')).toBeNull()
+})
+
 test('the panel downloads, shows readiness and storage, and says what stays online', async () => {
   await activate(7, 'Pat')
   const runtime = runtimeState().runtime
@@ -935,7 +970,7 @@ test('another account signing in: the last one’s downloads, synced records and
   const [sent] = await alice.store.listItems()
   await alice.store.updateItem(sent.id, (i) => ({ ...i, state: 'synced' }))
   const state = await activate(2, 'Bob')
-  expect(state.foreign).toEqual({ users: [1], count: 1 })
+  expect(state.foreign).toMatchObject({ users: [1], count: 1 })
   expect(state.runtime?.user).toBe(2)
   expect(await state.runtime?.store.listItems()).toEqual([])
   const sealed = await OfflineStore.open(1)
@@ -1458,7 +1493,7 @@ test('an account that signs in while another one’s database is still opening i
     return original(user)
   })
   const attempt = activate(7, 'Pat')
-  await waitFor(() => expect(opening).toHaveBeenCalledWith(7))
+  await waitFor(() => expect(opening).toHaveBeenCalledWith(7, expect.anything()))
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
   window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY, newValue: localStorage.getItem(LAST_KEY) }))
   held.open()
@@ -1479,7 +1514,7 @@ test('an account that signs in while the others’ databases are swept is left a
     return original(user)
   })
   const attempt = activate(7, 'Pat')
-  await waitFor(() => expect(OfflineStore.open).toHaveBeenCalledWith(1))
+  await waitFor(() => expect(OfflineStore.open).toHaveBeenCalledWith(1, expect.anything()))
   window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
   held.open()
   expect(await attempt).toMatchObject({ runtime: null, problem: 'account' })

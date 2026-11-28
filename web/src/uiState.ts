@@ -25,7 +25,7 @@ export function readJson<T>(key: string): T | null {
   }
 }
 
-const DRAFT_PREFIXES = ['taskto:builder', 'taskto:message:']
+const DRAFT_PREFIXES = ['taskto:builder', 'taskto:message:', 'taskto:note:']
 const DRAFTS_OF = 'taskto:drafts-of'
 
 let owner: number | null = null
@@ -79,7 +79,7 @@ export function forgetDraftsOf(user: number): void {
     setOperationUser(null)
   }
   forgetOperationsOf(user)
-  const kinds = ['builder', 'builder-pane', 'builder-start', 'message']
+  const kinds = ['builder', 'builder-pane', 'builder-start', 'message', 'note']
   const prefixes = kinds.map((k) => `taskto:${k}:${user}:`)
   try {
     const keys: string[] = []

@@ -7,6 +7,7 @@ import {
   browserLogin,
   confirmSignOut,
   endLogout,
+  ensureSignOut,
   forgetLogin,
   pendingSignOutOf,
   pendingSignOuts,
@@ -139,4 +140,29 @@ test('a logout with no answer keeps its mark when the browser refuses to note th
   vi.restoreAllMocks()
   backFromSignOut(1, 's1')
   expect(pendingSignOuts().find((p) => p.session === 's1')).toMatchObject({ phase: 'backed' })
+})
+
+test('a sign-out gone back from is pending again when the person tries to sign out again, its earlier logout still kept', () => {
+  recordSignOut(1, 's1', false, new Map())
+  unansweredSignOut(1, 's1')
+  backFromSignOut(1, 's1')
+  expect(signOutPending(1)).toBe(false)
+  ensureSignOut(1, 's1', { keep: false, approved: new Map() })
+  expect(signOutPending(1)).toBe(true)
+  expect(pendingSignOuts().find((p) => p.session === 's1')).toMatchObject({ phase: 'requested', unanswered: true })
+})
+
+test('a sign-out put back from a decision with no time (an earlier version kept none) gets none', () => {
+  ensureSignOut(1, 's1', { keep: false, approved: new Map() }, 'confirmed')
+  expect(pendingSignOuts().find((p) => p.session === 's1')?.at).toBeUndefined()
+})
+
+test("recording one login's sign-out keeps another login's record of the same account", () => {
+  recordSignOut(1, 's2', false, new Map([['r2', { version: 1, operation: 'op-2' }]]))
+  recordSignOut(1, 's1', false, new Map())
+  expect(
+    pendingSignOuts()
+      .map((p) => p.session)
+      .sort(),
+  ).toEqual(['s1', 's2'])
 })

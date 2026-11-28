@@ -19,6 +19,7 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/egress"
+	"taskto.ai/taskto/internal/serverkey"
 )
 
 const proxyTokenLife = 2 * time.Hour
@@ -27,6 +28,8 @@ type proxyClaims struct {
 	Nonce        string `json:"n"`
 	Account      int64  `json:"a"`
 	User         int64  `json:"u"`
+	Identity     string `json:"i"`
+	Workspace    int64  `json:"w"`
 	Conversation int64  `json:"c"`
 	Turn         string `json:"t"`
 	Expires      int64  `json:"e"`
@@ -41,12 +44,44 @@ func (s *Service) mintToken(c proxyClaims) (string, error) {
 	var nonce [12]byte
 	_, _ = rand.Read(nonce[:])
 	c.Nonce = b64.EncodeToString(nonce[:])
-	payload, err := json.Marshal(c)
+	token, err := sealToken(s.shared.Key, proxyTokenPrefix, proxyTokenPurpose, c)
 	if err != nil {
 		return "", err
 	}
 	s.track(proxyTokenPurpose, c.Turn, c.Nonce)
-	return "tt1." + b64.EncodeToString(payload) + "." + b64.EncodeToString(s.shared.Key.MAC(proxyTokenPurpose, payload)), nil
+	return token, nil
+}
+
+const proxyTokenPrefix = "tt1."
+
+func sealToken(key *serverkey.Key, prefix, purpose string, v any) (string, error) {
+	payload, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	sealed, err := key.Seal(payload, []byte(purpose))
+	if err != nil {
+		return "", err
+	}
+	return prefix + b64.EncodeToString(sealed) + "." + b64.EncodeToString(key.MAC(purpose, sealed)), nil
+}
+
+func openToken(key *serverkey.Key, prefix, purpose, token string, v any) bool {
+	rest, ok := strings.CutPrefix(token, prefix)
+	if !ok || key == nil {
+		return false
+	}
+	parts := strings.Split(rest, ".")
+	if len(parts) != 2 {
+		return false
+	}
+	sealed, err1 := b64.DecodeString(parts[0])
+	mac, err2 := b64.DecodeString(parts[1])
+	if err1 != nil || err2 != nil || !hmac.Equal(mac, key.MAC(purpose, sealed)) {
+		return false
+	}
+	payload, err := key.Open(sealed, []byte(purpose))
+	return err == nil && json.Unmarshal(payload, v) == nil
 }
 
 func (s *Service) track(kind, turn, nonce string) {
@@ -70,16 +105,7 @@ var errBadToken = errors.New("this token isn't valid: it belongs to a turn that 
 
 func (s *Service) readToken(token string) (proxyClaims, error) {
 	var c proxyClaims
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 || parts[0] != "tt1" {
-		return c, errBadToken
-	}
-	payload, err1 := b64.DecodeString(parts[1])
-	mac, err2 := b64.DecodeString(parts[2])
-	if err1 != nil || err2 != nil || !hmac.Equal(mac, s.shared.Key.MAC(proxyTokenPurpose, payload)) {
-		return c, errBadToken
-	}
-	if err := json.Unmarshal(payload, &c); err != nil || time.Now().Unix() > c.Expires {
+	if !openToken(s.shared.Key, proxyTokenPrefix, proxyTokenPurpose, token, &c) || time.Now().Unix() > c.Expires {
 		return c, errBadToken
 	}
 	if s.retired(c.Nonce) {
@@ -207,8 +233,11 @@ func (s *Service) handleProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) proxyAccount(ctx context.Context, c proxyClaims) (sharedRow, string, error) {
+	if ok, err := s.sameAccount(ctx, c.User, c.Identity); err != nil || !ok {
+		return sharedRow{}, "this token's account is gone", err
+	}
 	p, err := conversations.PrincipalOf(ctx, s.db, c.Conversation)
-	if errors.Is(err, conversations.ErrInactive) || (err == nil && p.User != c.User) {
+	if errors.Is(err, conversations.ErrInactive) || (err == nil && (p.User != c.User || p.Workspace != c.Workspace)) {
 		return sharedRow{}, "this conversation can't use the workspace's accounts: it is archived, or its owner left the workspace or was disabled", nil
 	}
 	if err != nil {

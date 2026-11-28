@@ -10,6 +10,8 @@ import (
 
 type Opener interface {
 	OpenPaymentLink(ctx context.Context, req Request) (Link, error)
+	EntryLink(ctx context.Context, q Querier, effectID int64) (link Link, pending bool, err error)
+	LinkCurrent(ctx context.Context, q Querier, integrationID int64, objectID string) error
 	PayableMoney(ctx context.Context, q Querier, appID, recordID int64) (map[int64][]MoneyFields, error)
 }
 
@@ -17,6 +19,7 @@ type MoneyFields struct{ Amount, Currency string }
 
 type Querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 type Request struct {
@@ -27,6 +30,7 @@ type Request struct {
 	AmountField, CurrencyField                           string
 	Amount, Currency                                     string
 	Description                                          string
+	LookupOnly                                           bool
 }
 
 type Link struct {

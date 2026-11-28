@@ -10,6 +10,9 @@ taskto.ai combines three things that feed each other:
 
 On top of these, users build **personal apps** by asking the agent.
 
+Conversation entries keep the model's messages and TaskTo input metadata together; person-sent
+inputs identify their author, while server-started turns omit one.
+
 ## Principles
 
 - **The same binary works for one person or a company.** The data model has workspaces and
@@ -49,6 +52,13 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   naming their conversation with a capability the server issued for it; the server acts
   for the conversation's owner, checking their access on every call
   ([agent-tools.md](agent-tools.md)).
+- **Agent usage:** `internal/usage` records each person's daily input and output token totals by
+  workspace, source and engine. CLI turns are recorded by the Go turn handler; sidecar turns are
+  read from the assistant message usage stored in Pi Durable. Each turn and each durable entry is
+  counted once: a CLI turn's ID is claimed in the same transaction as its totals, so a replayed or
+  overlapping request adds nothing, and a conversation keeps the last entry counted
+  (`usage_mark`), advanced in the transaction that records the entries after it. Rows contain no
+  conversation text or cost and are kept for 400 days.
 - **Spaces and access:** a workspace contains spaces: a private one per member, and shared
   ones with editors and viewers. Everything people store lives in a space, and one
   package, `internal/access`, decides who may read and write each, for the API and for
@@ -128,6 +138,12 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   [api.md](api.md#access-tokens)). The routes that read an app and its rows, and `POST …/actions`, take a token too,
   with a budget of actions; building, publishing, roles, the offline download and uploads stay
   behind a session.
+- **Conversation notes:** a person can add a note to a conversation that stays in its history
+  for the people who read it but is never part of the model's context. A note is a passive
+  `taskto.note` entry the sidecar writes (`kind` and `data` only, no `model`), so Pi Durable
+  appends it at once, even in the middle of a run; the messages view, the CLI hand-off and the
+  conversation search, which read the model's context, never contain it
+  ([api.md](api.md#post-apiworkspacesworkspaceconversationsconversationnotes)).
 - **CLI workers:** a conversation can run on the official Claude Code, Codex or Grok Build
   CLI, signed in with the user's own subscription. Go runs the CLIs: in a worker container
   where each user is a Unix user of their own, or, on a one-user install, in the server
@@ -139,6 +155,31 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   through the Go server). A clean, profile-less headless browser is for testing apps
   ([agent-browser.md](agent-browser.md)).
 - **Install:** `docker compose up` (Go binary + agent sidecar + optional Ollama); see [install.md](install.md).
+
+## Previews of uploaded files
+
+The knowledge base shows a Word file (`.docx`) on its page, formatted and read-only, instead of
+only a Download link. It is drawn in the browser, not on the server: the bytes are the same
+`?raw=true` download a person could make (the server changes nothing, and an older version in the
+history is asked for with its `at` commit), and the library that reads them (`docx-preview`, with
+`jszip`) is a separate chunk loaded when the first such file is opened (the service worker does not
+precache it). A file is previewed only if it is within 20 MB, expands to no more than 100 MB over
+at most 2000 parts (the archive is read through once, stopping at the budget, before the renderer
+sees it), and the renderer does not draw HTML embedded in the archive. The preview of a version
+is drawn again when the file's version changes, and a download that outlives the person who
+asked for it is dropped. The alternative, converting
+with an office suite on the server, would put a very large program that parses untrusted files
+into the image, with its own sandbox, CPU per view and a cache with access rules; the browser has
+none of that to keep, and nothing leaves it.
+
+The rendered document never enters the app's DOM. It is written into an `<iframe>` whose `sandbox`
+is `allow-same-origin` alone (no scripts, forms, popups or navigation), whose own policy
+(`default-src 'none'`, inline styles, `data:` and `blob:` images, `data:` fonts) lets it fetch
+nothing, and in which a click on a link opens only an `http` or `https` address, in a new tab with
+no opener. `allow-same-origin` without `allow-scripts` is what lets the app write into the frame
+while nothing inside can run. Files over 20 MB, and files the library can't read, show a notice
+and keep the Download link. The code is `web/src/knowledge/preview/`; other formats join it by
+adding a renderer.
 
 ## Integrations with outside services
 
@@ -168,6 +209,19 @@ definition has no place for a URL, a header or a key. The guide for admins and a
   integration, not a person.
 - **Not here:** card data (hosted checkout only), raw webhook bodies, refunds made from TaskTo,
   and any call a model composes.
+
+## Live updates
+
+`internal/live` is the building block for anything several people see change together (a whiteboard, cursors, presence). It has no routes of its own: a feature mounts them.
+
+- **SSE down, JSON POST up.** A feature's `GET …/spaces/{space}/<resource>/{id}/live` is wrapped in `access.Checker.RequireSpace(access.Read, …)` and calls `Hub.Serve`; its writes are ordinary `POST`s wrapped in `RequireSpace(access.Write, …)`, so the CSRF guard and the access checks apply to them as to every other state change, and call `Hub.Publish`. The GET only reads. A WebSocket is reconsidered only if cursor traffic proves too heavy over POST.
+- **One process.** The hub is in memory: exactly one server process uses a data directory, so there is no fan-out across processes.
+- **Topics by space generation.** A `Topic` is a kind, a space, the space's `Generation` and a resource. A space that is removed and later takes the same ID has another generation, so it never receives the old topic's events, and a stream opened for the old one fails its next check.
+- **Order and gaps.** Each topic numbers its events (`seq`, from 1 while someone is subscribed). A stream starts with a `ready` event carrying the topic's current number, so a client knows where it joined and sees a gap as a missing number.
+- **A slow reader is dropped, not waited for.** Each subscriber has a bounded buffer (at least two events). When it overflows, the hub discards what is queued, keeps the `ready` event if the client has not read it yet, queues a `resync` after it and ends that stream; the client reloads its state and reconnects. Nobody else waits. The stream keeps its slot of the per-person cap until its handler has returned, however it ended (an overflow, a revocation or a cancelled session included), because `Serve` releases it only when it returns.
+- **Access is checked on connect, at every write and while idle.** `Serve` runs the feature's `recheck` after the subscription is registered, every 30 seconds, and inside the one function every write goes through (`eventWriter.deliver`): under the stream's write lock it refuses a stream whose context ended or that was revoked, runs `recheck` for an event that carries data, arms the write deadline after the check (a slow check does not use up the write's budget), checks the context and the revocation once more, and only then writes. An access check that runs after a removal committed therefore denies, whatever ended the access (a removal from the workspace, a role the feature's resource check denies, a replaced space); a feature whose resource needs more than space access passes a stricter `recheck`, and checks the same right in its POSTs. A removal with a hook revokes at once: a removed space member's streams end through `access.Checker.OnMemberRemoved` (called after the removal commits) and `Hub.EndUserIn`, and a revocation detaches every matching stream and closes its revoked signal before any hook runs, so each of them refuses a write already taken even while the hook waits on another's write lock; a hook that returns has ended the stream's context, which also ends a `recheck` in progress, cut a write in flight short with a past deadline, and waited for the write lock, so no write starts after the hook returned; the hub also discards the queue. Signing out, disabling the account or an expired session ends the stream's context through `auth.Service.WatchSession`, and the writer refuses writes once it ends. A stream's slot is released last, after its writer's cleanup. A change of access with no hook is seen by the next write's check or the periodic one; a write that passed its check before the change committed was authorized when it began.
+- **Caps and shutdown.** A person has at most 16 live streams across topics (`too_many_streams`, counted apart from the conversations' own). On shutdown `Hub.EndStreams` ends every stream and refuses new ones (`live_closed`), so the drain finishes.
+- **An event** is a type, no more than 64 characters and never `ready` or `resync`, and JSON data of at most 64 KiB. Anything else is refused by `Publish`, which copies the data it validated, so a caller may reuse its bytes.
 
 ## Scheduled work
 
@@ -217,6 +271,14 @@ no extra process); it has no feature of its own.
   costs nothing (`EXPLAIN QUERY PLAN` is checked in a test). The worker runs bounded batches, so
   cleanup gets a turn however long the queue is, and fails a row whose time can't be read instead
   of stopping on it.
+- **Wall-clock calendars.** `schedule.Calendar` describes a local time or an interval of at least
+  an hour, an optional set of weekdays, and an IANA time zone. `Next` returns the next UTC
+  occurrence: a time in a spring-forward gap runs at the first instant after the gap, and a time
+  in a fall-back overlap runs once at its first instant. A feature stores the calendar with its own
+  settings, schedules a one-off job at `Calendar.Next`, and reschedules the following occurrence
+  in the handler's transaction after confirming the job is still current, as
+  `notifications.digestNext` does. The database job remains a single due time, so retries retain
+  the same occurrence and idempotency key.
 - **First user: due-date reminders.** A card with a due date and a person as its assignee has two
   jobs for that person, `card.due-reminder` and `card.overdue`, keyed by the card. They are made,
   moved and cancelled in the transaction of the card change that needs them, and their handlers

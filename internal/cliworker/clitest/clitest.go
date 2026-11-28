@@ -27,21 +27,23 @@ import (
 )
 
 type Scenario struct {
-	Answer        string    `json:"answer,omitempty"`
-	SleepMS       int       `json:"sleep_ms,omitempty"`
-	TermWriteMS   int       `json:"term_write_ms,omitempty"`
-	StatusSleepMS int       `json:"status_sleep_ms,omitempty"`
-	LogoutSleepMS int       `json:"logout_sleep_ms,omitempty"`
-	Background    bool      `json:"background,omitempty"`
-	HoldStdout    bool      `json:"hold_stdout,omitempty"`
-	Expired       bool      `json:"expired,omitempty"`
-	RateLimits    bool      `json:"rate_limits,omitempty"`
-	Warn          string    `json:"warn,omitempty"`
-	Fail          string    `json:"fail,omitempty"`
-	Garbage       bool      `json:"garbage,omitempty"`
-	Tool          *ToolUse  `json:"tool,omitempty"`
-	Probes        []string  `json:"probes,omitempty"`
-	MCP           []MCPCall `json:"mcp,omitempty"`
+	Answer           string    `json:"answer,omitempty"`
+	SleepMS          int       `json:"sleep_ms,omitempty"`
+	TermWriteMS      int       `json:"term_write_ms,omitempty"`
+	StatusSleepMS    int       `json:"status_sleep_ms,omitempty"`
+	LogoutSleepMS    int       `json:"logout_sleep_ms,omitempty"`
+	Background       bool      `json:"background,omitempty"`
+	Detached         bool      `json:"detached,omitempty"`
+	HoldStdout       bool      `json:"hold_stdout,omitempty"`
+	Expired          bool      `json:"expired,omitempty"`
+	RateLimits       bool      `json:"rate_limits,omitempty"`
+	ExtraUsageEvents int       `json:"extra_usage_events,omitempty"`
+	Warn             string    `json:"warn,omitempty"`
+	Fail             string    `json:"fail,omitempty"`
+	Garbage          bool      `json:"garbage,omitempty"`
+	Tool             *ToolUse  `json:"tool,omitempty"`
+	Probes           []string  `json:"probes,omitempty"`
+	MCP              []MCPCall `json:"mcp,omitempty"`
 }
 
 type MCPCall struct {
@@ -226,6 +228,9 @@ func (f *fake) garbage() {
 func (f *fake) work() error {
 	if f.scenario.Background {
 		bg := exec.Command("sleep", "300")
+		if f.scenario.Detached {
+			bg.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		}
 		if f.scenario.HoldStdout {
 			bg.Stdout = os.Stdout
 		}
@@ -342,6 +347,9 @@ func probe(p string) string {
 			}
 		}
 		return "ok unknown"
+	case "self":
+		cwd, _ := os.Getwd()
+		return "ok " + strings.Join(append(append(os.Environ(), os.Args...), cwd), " ")
 	case "uid":
 		return fmt.Sprintf("ok %d %d", os.Getuid(), os.Getgid())
 	case "connect":
@@ -573,7 +581,9 @@ func (f *fake) codexExec(args []string) int {
 	}
 	f.emit(map[string]any{"type": "item.completed", "item": map[string]any{"id": "item_2", "type": "reasoning", "text": "thinking about it"}})
 	f.emit(map[string]any{"type": "item.completed", "item": map[string]any{"id": "item_3", "type": "agent_message", "text": answer}})
-	f.emit(map[string]any{"type": "turn.completed", "usage": map[string]any{"input_tokens": 10, "output_tokens": 5}})
+	for i := 0; i <= f.scenario.ExtraUsageEvents; i++ {
+		f.emit(map[string]any{"type": "turn.completed", "usage": map[string]any{"input_tokens": 10, "output_tokens": 5}})
+	}
 	return 0
 }
 

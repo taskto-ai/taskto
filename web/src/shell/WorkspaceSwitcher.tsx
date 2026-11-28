@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Me, Workspace } from '../api'
 import type { T } from '../i18n'
-import { navigate, routePath, type Section } from '../router'
+import { navigateWholeApp, routePath, type Section } from '../router'
 import { Avatar } from '../ui/Avatar'
 import { Menu, MenuButton, MenuGroup, MenuItem, MenuList, MenuSeparator } from '../ui/Menu'
 import { Tooltip } from '../ui/Tooltip'
@@ -36,7 +36,7 @@ export function WorkspaceSwitcher({ me, workspace, section, onMe, t }: Workspace
                 key={w.id}
                 checked={w.id === workspace.id}
                 onSelect={() => {
-                  if (w.id !== workspace.id) navigate(routePath({ workspace: w.id, section }))
+                  if (w.id !== workspace.id) navigateWholeApp(routePath({ workspace: w.id, section }))
                 }}
               >
                 <span dir="auto">{w.name}</span>

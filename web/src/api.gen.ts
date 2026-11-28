@@ -8,6 +8,7 @@ export type App = {
   id: number
   space_id: number
   name: string
+  icon: string
   archived_at: string | null
   version: number
   rows: number
@@ -243,6 +244,7 @@ export type AppsDefinition = {
   collection: AppsCollection
   actions: Record<string, AppsAction>
   summaries?: Record<string, AppsSummary>
+  series?: Record<string, AppsSeries>
   contributions?: AppsContributions
   integrations?: Record<string, AppsIntegrationSlot>
   reminders?: AppsReminder[]
@@ -337,6 +339,7 @@ export type AppsOfflineDefinition = {
   screens?: AppsOfflineScreen[]
   actions: Record<string, AppsOfflineAction>
   summaries?: Record<string, AppsSummary>
+  series?: Record<string, AppsSeries>
 }
 
 export type AppsOfflineScreen = {
@@ -366,6 +369,16 @@ export type AppsScreen = {
   root: string
   record?: boolean
   components: unknown[] | null
+}
+
+export type AppsSeries = {
+  kind: string
+  field?: string
+  group_by: string
+  bucket?: string
+  last?: number
+  split_by?: string
+  where?: AppsRule
 }
 
 export type AppsSlotLive = {
@@ -436,6 +449,7 @@ export type AvailableApp = {
   space_kind: string
   app_id: number
   name: string
+  icon: string
   widgets: Widget[]
   pin: Pin | null
   can_set_defaults: boolean
@@ -471,6 +485,15 @@ export type BoardsAuthor = {
 export type BoardsMentionedPerson = {
   id: number
   name: string
+}
+
+export type CLIWorkerStatus = {
+  mode: string
+  reachable: boolean
+  authority_lost: boolean
+  other_installation: boolean
+  boot?: string
+  installation?: string
 }
 
 export type Card = {
@@ -529,6 +552,10 @@ export type Comment = {
   mentions: BoardsMentionedPerson[]
 }
 
+export type ContinueModels = {
+  providers: ProvidersChoice[] | null
+}
+
 export type Conversation = {
   id: number
   workspace_id: number
@@ -537,6 +564,11 @@ export type Conversation = {
   created_at: string
   updated_at: string
   cli_permissions: string
+}
+
+export type ConversationsModelRef = {
+  provider: string
+  model_id: string
 }
 
 export type DeletionReply = {
@@ -549,6 +581,35 @@ export type DeletionStatus = {
   two_factor: boolean
   fresh: boolean
   blockers: AuthDeletionBlocker[]
+}
+
+export type Desk = {
+  id: number
+  name: string
+  layout: unknown
+  version: number
+  updated_at: string
+}
+
+export type DeskChanged = {
+  error: string
+  code: string
+  current: Desk
+}
+
+export type DeskLayoutWrite = {
+  version: number
+  layout: unknown
+}
+
+export type DeskList = {
+  desks: DeskSummary[]
+}
+
+export type DeskSummary = {
+  id: number
+  name: string
+  updated_at: string
 }
 
 export type Doc = {
@@ -583,6 +644,7 @@ export type HomeItem = {
   space_id: number
   app_id: number
   app_name: string
+  app_icon?: string
   widget_id?: string
   widget?: Widget
   label?: string
@@ -696,6 +758,10 @@ export type Member = {
   two_factor?: boolean
 }
 
+export type NoteReply = {
+  submission_id: number
+}
+
 export type NotificationItem = {
   id: number
   workspace_id: number
@@ -721,6 +787,7 @@ export type OfflineApp = {
   app_id: number
   space_id: number
   name: string
+  icon: string
   release: number
   definition: AppsOfflineDefinition
   messages: (Record<string, unknown> | null)[]
@@ -746,6 +813,19 @@ export type Pin = {
   screen?: string
 }
 
+export type ProvidersChoice = {
+  provider: string
+  name: string
+  scope: string
+  account?: number
+  models: ProvidersModelChoice[] | null
+}
+
+export type ProvidersModelChoice = {
+  id: string
+  name: string
+}
+
 export type RecordVersion = {
   revision: number
   operation: string
@@ -754,6 +834,92 @@ export type RecordVersion = {
   by: AppsAuthor | null
   action?: string
   synthetic?: boolean
+}
+
+export type SearchCardResult = {
+  space_id: number
+  space_name: string
+  board_id: number
+  board_name: string
+  card_id: number
+  title: string
+  column: string
+  snippet: SearchSegment[] | null
+}
+
+export type SearchConversationResult = {
+  conversation_id: number
+  title: string
+  archived: boolean
+  updated_at: string
+  snippet: SearchSegment[] | null
+}
+
+export type SearchPalette = {
+  places: SearchPlaceResults
+  docs: SearchResult[] | null
+  cards: SearchCardResult[] | null
+  records: SearchRecordResult[] | null
+  conversations: SearchConversationResult[] | null
+  incomplete: boolean
+}
+
+export type SearchPlaceApp = {
+  space_id: number
+  space_name: string
+  app_id: number
+  name: string
+}
+
+export type SearchPlaceBoard = {
+  space_id: number
+  space_name: string
+  board_id: number
+  name: string
+  kind: string
+}
+
+export type SearchPlaceResults = {
+  spaces: SearchPlaceSpace[] | null
+  apps: SearchPlaceApp[] | null
+  boards: SearchPlaceBoard[] | null
+}
+
+export type SearchPlaceSpace = {
+  id: number
+  name: string
+  kind: string
+}
+
+export type SearchRecordResult = {
+  space_id: number
+  space_name: string
+  app_id: number
+  app_name: string
+  record_id: number
+  snippet: SearchSegment[] | null
+}
+
+export type SearchResult = {
+  space_id: number
+  space_name: string
+  path: string
+  title: string
+  snippet: SearchSegment[] | null
+  score: number
+  match: string
+  version: string
+  commit: string
+}
+
+export type SearchSegment = {
+  text: string
+  match?: boolean
+}
+
+export type SendReply = {
+  submission_id: number
+  model?: ConversationsModelRef
 }
 
 export type Space = {
@@ -774,6 +940,11 @@ export type SpaceIntegration = {
   display_name: string
   kind: string
   status: string
+}
+
+export type SubmissionReply = {
+  submission_id: number
+  model: ConversationsModelRef
 }
 
 export type Token = {

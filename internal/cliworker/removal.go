@@ -12,18 +12,18 @@ var ErrRemoving = errors.New("this account's CLI files are being removed: try ag
 var ErrBusy = errors.New("a process of this account is still running: its files are kept, try again")
 
 type scope struct {
-	user int64
+	id   string
 	all  bool
 	cli  CLI
 	slot Slot
 }
 
-func (s scope) covers(user int64, cli CLI, slot Slot) bool {
-	return s.user == user && (s.all || (s.cli == cli && s.slot == slot))
+func (s scope) covers(id string, cli CLI, slot Slot) bool {
+	return s.id == id && (s.all || (s.cli == cli && s.slot == slot))
 }
 
 func (s scope) overlaps(o scope) bool {
-	return s.user == o.user && (s.all || o.all || (s.cli == o.cli && s.slot == o.slot))
+	return s.id == o.id && (s.all || o.all || (s.cli == o.cli && s.slot == o.slot))
 }
 
 type gate struct {
@@ -60,26 +60,33 @@ func (w *Worker) dropGroups(seen []groupSeen) {
 	}
 }
 
-func (w *Worker) gated(user int64, cli CLI, slot Slot) bool {
+func (w *Worker) gated(id string, cli CLI, slot Slot) bool {
 	for _, g := range w.gates {
-		if g.covers(user, cli, slot) {
+		if g.covers(id, cli, slot) {
 			return true
 		}
 	}
 	return false
 }
 
-func (w *Worker) admit(ctx context.Context, user int64, cli CLI, slot Slot) (context.Context, func(), error) {
+func (w *Worker) admissible(acct account, cli CLI, slot Slot) error {
+	if w.retired(acct.id) {
+		return ErrForgotten
+	}
+	if w.gated(acct.id, cli, slot) {
+		return ErrRemoving
+	}
+	return nil
+}
+
+func (w *Worker) admit(ctx context.Context, acct account, cli CLI, slot Slot) (context.Context, func(), error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.isForgotten(user) {
-		return nil, nil, ErrForgotten
-	}
-	if w.gated(user, cli, slot) {
-		return nil, nil, ErrRemoving
+	if err := w.admissible(acct, cli, slot); err != nil {
+		return nil, nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	h := &helperRun{scope: scope{user: user, cli: cli, slot: slot}, cancel: cancel, done: make(chan struct{})}
+	h := &helperRun{scope: scope{id: acct.id, cli: cli, slot: slot}, cancel: cancel, done: make(chan struct{})}
 	w.helpers[h] = struct{}{}
 	return ctx, func() {
 		w.mu.Lock()
@@ -92,13 +99,14 @@ func (w *Worker) admit(ctx context.Context, user int64, cli CLI, slot Slot) (con
 
 const maxGroups = 256
 
-func (w *Worker) trackGroup(pgid int, user int64, cli CLI, slot Slot) {
+func (w *Worker) trackGroup(pgid int, id string, cli CLI, slot Slot) (ended func()) {
 	if pgid <= 1 || w.groupWait < 0 {
-		return
+		return func() {}
 	}
 	w.mu.Lock()
 	w.groupSeq++
-	w.groups[pgid] = groupRec{scope: scope{user: user, cli: cli, slot: slot}, seq: w.groupSeq}
+	seq := w.groupSeq
+	w.groups[pgid] = groupRec{scope: scope{id: id, cli: cli, slot: slot}, seq: seq}
 	var old []groupSeen
 	if len(w.groups) > maxGroups {
 		for p, rec := range w.groups {
@@ -115,10 +123,18 @@ func (w *Worker) trackGroup(pgid int, user int64, cli CLI, slot Slot) {
 		}
 	}
 	w.dropGroups(over)
+	return func() {
+		if !groupLive(pgid) {
+			w.dropGroups([]groupSeen{{pgid, seq}})
+		}
+	}
 }
 
 func (w *Worker) beginGate(ctx context.Context, sc scope) (end func(), err error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		w.mu.Lock()
 		var other *gate
 		for _, o := range w.gates {
@@ -153,19 +169,19 @@ func (w *Worker) quiesce(ctx context.Context, sc scope) error {
 	w.mu.Lock()
 	var turns []*Turn
 	for _, t := range w.turns {
-		if sc.covers(t.spec.User, t.spec.CLI, t.spec.Slot) && !t.Over() {
+		if sc.covers(t.acct.id, t.spec.CLI, t.spec.Slot) && !t.Over() {
 			turns = append(turns, t)
 		}
 	}
 	var helpers []*helperRun
 	for h := range w.helpers {
-		if sc.covers(h.user, h.cli, h.slot) {
+		if sc.covers(h.id, h.cli, h.slot) {
 			helpers = append(helpers, h)
 		}
 	}
 	var logins []*Login
 	for l := range w.loginRuns {
-		if sc.covers(l.user, l.cli, l.slot) {
+		if sc.covers(l.acct.id, l.cli, l.slot) {
 			logins = append(logins, l)
 		}
 	}
@@ -215,7 +231,7 @@ func (w *Worker) waitGroups(ctx context.Context, sc scope) error {
 		w.mu.Lock()
 		var seen []groupSeen
 		for p, g := range w.groups {
-			if sc.covers(g.user, g.cli, g.slot) {
+			if sc.covers(g.id, g.cli, g.slot) {
 				seen = append(seen, groupSeen{p, g.seq})
 			}
 		}
