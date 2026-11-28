@@ -1,7 +1,6 @@
 import { type ReactNode, useId, useState } from 'react'
 import { api, CLI_PRODUCTS, type CliAccounts, cliAccountFor, cliOfProvider, codeText, errorText } from '../api'
 import { useT } from '../i18n'
-import { useChanged } from '../memo'
 import { Link, routePath } from '../router'
 import { Select } from '../ui/Select'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
@@ -17,7 +16,7 @@ export function ModelPicker({
   providers,
   current,
   cli,
-  onChosen,
+  claim,
   disabled,
 }: {
   workspace: number
@@ -25,16 +24,15 @@ export function ModelPicker({
   providers: ModelProvider[]
   current: ModelRef
   cli: CliAccounts | null | undefined
-  onChosen: (m: ModelRef) => void
+  claim: () => (m: ModelRef) => void
   disabled: boolean
 }) {
   const t = useT()
   const id = useId()
-  const [chosen, setChosen] = useState<ModelRef | null>(null)
+  const [pending, setPending] = useState<ModelRef | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  if (useChanged(modelKey(current))) setChosen(null)
-  const selected = chosen ?? current
+  const selected = pending ?? current
   const known = providers.some(
     (p) => p.provider === selected.provider && p.models.some((m) => m.id === selected.model_id),
   )
@@ -52,16 +50,16 @@ export function ModelPicker({
   const choose = async (key: string) => {
     const [provider, model_id] = JSON.parse(key) as [string, string]
     const model = { provider, model_id }
-    setChosen(model)
+    const settle = claim()
+    setPending(model)
     setBusy(true)
     setError(null)
     try {
-      await api(url, { method: 'PUT', body: model })
-      onChosen(model)
+      settle(await api<ModelRef>(url, { method: 'PUT', body: model }))
     } catch (e) {
-      setChosen(null)
       setError(errorText(e))
     } finally {
+      setPending(null)
       setBusy(false)
     }
   }

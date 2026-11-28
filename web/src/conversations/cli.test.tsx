@@ -573,55 +573,146 @@ test('the answer on its way shows on its own button', async () => {
   expect(allow.disabled).toBe(true)
 })
 
-test('the model the server moved a conversation to after a limit replaces the one shown, also a picked one', async () => {
-  let server = { provider: 'cli-claude', model_id: 'default' }
-  const { calls, es } = await open(
-    {
-      ...cliRoutes,
-      'GET /api/workspaces/1/conversations/7/model': () => ({ body: server }),
-      'PUT /api/workspaces/1/conversations/7/model': (call) => ({ body: call.body }),
-    },
-    running('$ go test\n'),
-  )
-  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
-  await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-claude', 'default'])))
-  fireEvent.change(select, { target: { value: JSON.stringify(['cli-claude', 'opus']) } })
-  await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-claude', 'opus'])))
+const refOf = (provider: string, model_id: string) => JSON.stringify([provider, model_id])
+const modelPath = '/api/workspaces/1/conversations/7/model'
 
-  await waitFor(() => expect(count(calls, 'GET', '/api/workspaces/1/conversations/7/model')).toBe(2))
-  server = { provider: 'u2-home', model_id: 'llama' }
-  const reads = count(calls, 'GET', '/api/workspaces/1/conversations/7/model')
+type ModelRead = { body: unknown } | { status: number; body: unknown } | Promise<{ body: unknown }>
+
+function modelServer(first: { provider: string; model_id: string }) {
+  const state = {
+    server: first,
+    reads: 0,
+    plan: (_n: number): ModelRead | undefined => undefined,
+  }
+  const routes = {
+    ...cliRoutes,
+    'GET /api/workspaces/1/conversations/7/model': () => {
+      state.reads++
+      return state.plan(state.reads) ?? { body: state.server }
+    },
+    'PUT /api/workspaces/1/conversations/7/model': (call: Call) => {
+      state.server = call.body as typeof first
+      return { body: call.body }
+    },
+  }
+  return { state, routes }
+}
+
+async function pickOpus() {
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(refOf('cli-claude', 'default')))
+  fireEvent.change(select, { target: { value: refOf('cli-claude', 'opus') } })
+  await waitFor(() => expect(select.value).toBe(refOf('cli-claude', 'opus')))
+  return select
+}
+
+test('the model the server moved a conversation to after a limit replaces the one shown, also a picked one', async () => {
+  const { state, routes } = modelServer({ provider: 'cli-claude', model_id: 'default' })
+  const { calls, es } = await open(routes, running('$ go test\n'))
+  const select = await pickOpus()
+  state.server = { provider: 'u2-home', model_id: 'llama' }
+  const reads = count(calls, 'GET', modelPath)
   act(() => es.send(done('$ go test\nok')))
-  await waitFor(() => expect(count(calls, 'GET', '/api/workspaces/1/conversations/7/model')).toBe(reads + 1))
-  await waitFor(() => expect(select.value).toBe(JSON.stringify(['u2-home', 'llama'])))
+  await waitFor(() => expect(count(calls, 'GET', modelPath)).toBe(reads + 1))
+  await waitFor(() => expect(select.value).toBe(refOf('u2-home', 'llama')))
 })
 
-test('a failed read after a pick keeps the pick; a read that was on its way before the pick does not undo it', async () => {
-  let server = { provider: 'cli-claude', model_id: 'default' }
-  let reads = 0
+test('a read that started before the pick, and ends after it, does not undo the pick', async () => {
+  const { state, routes } = modelServer({ provider: 'cli-claude', model_id: 'default' })
   let hold: ((v: { body: unknown }) => void) | null = null
-  const { es } = await open(
-    {
-      ...cliRoutes,
-      'GET /api/workspaces/1/conversations/7/model': () => {
-        reads++
-        if (reads === 2) return new Promise((resolve) => (hold = resolve))
-        if (reads === 3) return { status: 500, body: { error: 'down' } }
-        return { body: server }
-      },
-      'PUT /api/workspaces/1/conversations/7/model': (call) => {
-        server = call.body as typeof server
-        return { body: call.body }
-      },
-    },
-    running('$ go test\n'),
-  )
+  state.plan = (n) => (n === 2 ? new Promise((resolve) => (hold = resolve)) : undefined)
+  const { es } = await open(routes, running('$ go test\n'))
   const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
-  await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-claude', 'default'])))
+  await waitFor(() => expect(select.value).toBe(refOf('cli-claude', 'default')))
   act(() => es.send(done('$ go test\nok')))
-  await waitFor(() => expect(reads).toBe(2))
-  fireEvent.change(select, { target: { value: JSON.stringify(['cli-claude', 'opus']) } })
-  await waitFor(() => expect(reads).toBe(3))
+  await waitFor(() => expect(state.reads).toBe(2))
+  fireEvent.change(select, { target: { value: refOf('cli-claude', 'opus') } })
+  await waitFor(() => expect(select.value).toBe(refOf('cli-claude', 'opus')))
   await act(async () => hold?.({ body: { provider: 'cli-claude', model_id: 'default' } }))
-  await waitFor(() => expect(select.value).toBe(JSON.stringify(['cli-claude', 'opus'])))
+  await waitFor(() => expect(select.value).toBe(refOf('cli-claude', 'opus')))
+  expect(select.value).toBe(refOf('cli-claude', 'opus'))
+})
+
+test('a failed or a pending read after a pick keeps the pick', async () => {
+  const { state, routes } = modelServer({ provider: 'cli-claude', model_id: 'default' })
+  let hold: ((v: { body: unknown }) => void) | null = null
+  state.plan = (n) => {
+    if (n === 2) return { status: 500, body: { error: 'down' } }
+    if (n === 3) return new Promise((resolve) => (hold = resolve))
+    return undefined
+  }
+  const { es } = await open(routes, running('$ go test\n'))
+  const select = await pickOpus()
+  act(() => es.send(done('$ go test\nok')))
+  await waitFor(() => expect(state.reads).toBe(2))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(select.value).toBe(refOf('cli-claude', 'opus'))
+  act(() => es.send(running('')))
+  act(() => es.send(done('$ go test\nok again')))
+  await waitFor(() => expect(state.reads).toBe(3))
+  expect(select.value).toBe(refOf('cli-claude', 'opus'))
+  await act(async () => hold?.({ body: state.server }))
+  await waitFor(() => expect(select.value).toBe(refOf('cli-claude', 'opus')))
+})
+
+test('once a newer read has the server model, a pick made earlier is gone: a later failed read keeps the server model', async () => {
+  const { state, routes } = modelServer({ provider: 'cli-claude', model_id: 'default' })
+  state.plan = (n) => (n === 3 ? { status: 500, body: { error: 'down' } } : undefined)
+  const { es } = await open(routes, running('$ go test\n'))
+  const select = await pickOpus()
+  state.server = { provider: 'u2-home', model_id: 'llama' }
+  act(() => es.send(done('$ go test\nok')))
+  await waitFor(() => expect(select.value).toBe(refOf('u2-home', 'llama')))
+  act(() => es.send(running('')))
+  act(() => es.send(done('$ go test\nok again')))
+  await waitFor(() => expect(state.reads).toBe(3))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(select.value).toBe(refOf('u2-home', 'llama'))
+})
+
+test('a turn finished while the stream was down, seen only in a new snapshot, refreshes the model shown', async () => {
+  const { state, routes } = modelServer({ provider: 'cli-claude', model_id: 'default' })
+  const idle = (extra: unknown[]) => ({
+    type: 'value',
+    value: { entries: [...cliEntries, ...extra], docs: { 'pi.live': {} } },
+  })
+  const { es } = await open(routes, idle([]))
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(refOf('cli-claude', 'default')))
+  state.server = { provider: 'u2-home', model_id: 'llama' }
+  act(() =>
+    es.send(
+      idle([
+        {
+          id: 3,
+          kind: 'pi.toolResult',
+          model: [
+            { role: 'toolResult', toolCallId: 'call-1', toolName: 'cli_turn', content: [{ type: 'text', text: 'x' }] },
+          ],
+        },
+        { id: 4, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'Answered' }] }] },
+      ]),
+    ),
+  )
+  await waitFor(() => expect(select.value).toBe(refOf('u2-home', 'llama')))
+})
+
+test('a read that a newer one replaced does not retire the pick when it ends', async () => {
+  const { state, routes } = modelServer({ provider: 'cli-claude', model_id: 'default' })
+  let hold: ((v: { body: unknown }) => void) | null = null
+  state.plan = (n) => {
+    if (n === 2) return new Promise((resolve) => (hold = resolve))
+    if (n === 3) return { status: 500, body: { error: 'down' } }
+    return undefined
+  }
+  const { es } = await open(routes, running('$ go test\n'))
+  const select = await pickOpus()
+  act(() => es.send(done('$ go test\nok')))
+  await waitFor(() => expect(state.reads).toBe(2))
+  act(() => es.send(running('')))
+  act(() => es.send(done('$ go test\nok again')))
+  await waitFor(() => expect(state.reads).toBe(3))
+  await act(async () => hold?.({ body: { provider: 'cli-claude', model_id: 'default' } }))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(select.value).toBe(refOf('cli-claude', 'opus'))
 })

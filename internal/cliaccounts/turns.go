@@ -332,7 +332,9 @@ func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.P
 		next, found, _ := s.worker.FindTurn(p.User, nextID)
 		notice := s.switchNotice(nextID)
 		if !found {
-			if res.hop = s.hopOf(t.Spec().ID); res.hop == nil {
+			if hop, decided := s.awaitHop(ctx, t.Spec().ID); decided {
+				res.hop = hop
+			} else {
 				next, notice = s.switchAfter(ctx, out, p, req, t, &res, id, nextID, tried, n < maxSwitches)
 			}
 		}
@@ -355,43 +357,6 @@ type passed struct {
 	output   int64
 	hasUsage bool
 	hop      *modelHop
-}
-
-type modelHop struct {
-	notice, note string
-	at           time.Time
-}
-
-func (s *Service) rememberHop(turn string, h *modelHop) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := time.Now()
-	for k, old := range s.hops {
-		if now.Sub(old.at) > time.Hour {
-			delete(s.hops, k)
-		}
-	}
-	h.at = now
-	s.hops[turn] = h
-}
-
-func (s *Service) hopOnce(ctx context.Context, p conversations.Principal, turn, stopped, note string) *modelHop {
-	s.hopMu.Lock()
-	defer s.hopMu.Unlock()
-	if h := s.hopOf(turn); h != nil {
-		return h
-	}
-	h := s.hopToModel(ctx, p, stopped, note)
-	if h != nil {
-		s.rememberHop(turn, h)
-	}
-	return h
-}
-
-func (s *Service) hopOf(turn string) *modelHop {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.hops[turn]
 }
 
 func (s *Service) finish(out *eventWriter, res passed, offset int) {
@@ -556,25 +521,6 @@ func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversat
 func (s *Service) stillActive(ctx context.Context, p conversations.Principal) bool {
 	now, err := conversations.PrincipalOf(ctx, s.db, p.Conversation)
 	return err == nil && now == p
-}
-
-func (s *Service) hopToModel(ctx context.Context, p conversations.Principal, stopped, note string) *modelHop {
-	models, err := s.modelsAfter(ctx, p)
-	if err != nil {
-		slog.ErrorContext(ctx, "cli turn: choosing the next model", "conversation", p.Conversation, "err", err)
-		return nil
-	}
-	for _, m := range models {
-		if s.setModel == nil || ctx.Err() != nil {
-			return nil
-		}
-		if err := s.setModel(context.WithoutCancel(ctx), p.AgentConversation, m.provider, m.model); err != nil {
-			slog.WarnContext(ctx, "cli turn: setting the conversation's model after a limit", "conversation", p.Conversation, "err", err)
-			continue
-		}
-		return &modelHop{notice: fmt.Sprintf("%s: continuing on %s", stopped, m.model), note: note}
-	}
-	return nil
 }
 
 func (s *Service) switchNotice(nextID string) string {

@@ -100,11 +100,35 @@ export function ConversationView({
     () => api<{ providers: ModelProvider[] }>(`${ws(workspace)}/models`).then((r) => r.providers),
     [workspace],
   )
-  const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
-  const [picked, setPicked] = useState<{ ref: ModelRef; read: number } | null>(null)
-  const model = picked && (picked.read === loadedModel.settled || loadedModel.error) ? picked.ref : loadedModel.data
-  const turnChanged = useChanged(running)
-  if (turnChanged && !running) loadedModel.reload()
+  const order = useRef(0)
+  const newestRead = useRef(0)
+  const pickedAt = useRef(0)
+  const [picked, setPicked] = useState<ModelRef | null>(null)
+  if (useChanged(base) && picked) setPicked(null)
+  const loadedModel = useLoad(() => {
+    const at = ++order.current
+    newestRead.current = at
+    return api<ModelRef>(`${base}/model`).then((m) => {
+      if (at === newestRead.current && at > pickedAt.current) setPicked(null)
+      return m
+    })
+  }, [base])
+  const modelWrites = useRef(0)
+  const claimModel = () => {
+    const mine = ++modelWrites.current
+    return (m: ModelRef) => {
+      if (mine !== modelWrites.current) return
+      pickedAt.current = ++order.current
+      setPicked(m)
+    }
+  }
+  const model = picked ?? loadedModel.data
+  const turnKey = view ? (running ? 'running' : `idle:${messages.at(-1)?.key ?? ''}`) : undefined
+  const [seenTurn, setSeenTurn] = useState(turnKey)
+  if (seenTurn !== turnKey) {
+    setSeenTurn(turnKey)
+    if (seenTurn !== undefined && !running) loadedModel.reload()
+  }
   const usesCli = Boolean(cliOfProvider(model?.provider) || providers.data?.some((p) => p.scope === 'cli'))
   const cli = useLoad(() => (usesCli ? api<CliAccounts>(CLI_ACCOUNTS) : Promise.resolve(null)), [usesCli])
   const asks = messages.reduce((n, m) => n + m.tools.filter((t) => t.cli && t.output?.includes('⚠')).length, 0)
@@ -231,10 +255,7 @@ export function ConversationView({
             providers={providers.data}
             current={model}
             cli={cli.data}
-            onChosen={(ref) => {
-              setPicked({ ref, read: loadedModel.settled ?? 0 })
-              loadedModel.reload()
-            }}
+            claim={claimModel}
             disabled={archived || unreadable}
           />
         )}

@@ -211,15 +211,27 @@ turns on. The turn ends with the limit's message, as before.
   re-attaches reads the whole chain once.
 - **A model at the end**: when no account can run (also after the last switch the cap allows),
   the first model of the queue (in queue order, so accounts always come before models) that the
-  conversation's workspace allows takes over. The server asks again, at that moment, whether the
-  conversation is still its owner's (not archived, owner still a member and not disabled), and
-  reads the provider and its model list from the database, which is the truth before the agent
-  runtime has reloaded: a model of another workspace's provider, of a provider that was removed,
-  or one the provider no longer lists is skipped, and so is one the agent runtime refuses. The
-  hop is recorded for the turn, so a sidecar that re-attaches after its stream was cut gets the
-  same notice and final event at the same sequence numbers, whatever was changed meanwhile, and
-  the model is not set a second time. A caller that is gone ends the hop: the conversation's
-  model is then left as it is, for the person to choose. The server sets the conversation's model to it, then
+  conversation's workspace allows takes over. Every attempt, one model after another, asks again,
+  right before its own write to the agent runtime: whether the conversation is still its owner's
+  (not archived, owner still a member and not disabled), whether switching is still on, and the
+  provider and its model list in the database, which is the truth before the agent runtime has
+  reloaded. A model of another workspace's provider, of a provider that was removed, or one the
+  provider no longer lists is skipped, and so is one the agent runtime refuses; the owner losing
+  access, or switching going off, ends the hop with no further write.
+- **One decision per turn.** The hop is a claim of the stopped worker turn, not a lock of the
+  service: the first request that reaches the end of the chain makes the decision (a model was set,
+  or none could be) and records it for an hour, and a request that re-attaches to the same turn,
+  also while the first is still writing, waits for that decision (it leaves when its own caller
+  does) and answers with the same notice and final event at the same sequence numbers, whatever
+  was changed meanwhile, and the model is not set a second time. A hop that ended because its
+  caller left is no decision: the next request makes it. Requests for other turns, of the same
+  or another person, never wait for it.
+- **The write belongs to its caller.** The write to the agent runtime ends when the caller of the
+  turn is gone and after 15 seconds, so an old turn does not set a model later, after the person
+  chose another one. When the agent runtime answers that the conversation is busy with a reply
+  continued on a model the person chose (`409`, reason `busy`), the hop ends with no more tries:
+  that choice stays, and the turn ends as it would without a model in the queue. The server sets
+  the conversation's model, then
   ends the CLI turn with a notice ("Claude Code reached its usage limit: continuing on Big
   model") and a final event with `continue: true` and the same hand-off note the next account
   would get. The sidecar (`agent/src/cli.ts`) hands that note to the agent as the turn's result

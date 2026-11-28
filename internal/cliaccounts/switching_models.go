@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-
-	"taskto.ai/taskto/internal/conversations"
 )
 
 const maxModelRef = 256
@@ -53,25 +51,4 @@ func (s *Service) modelQueueable(ctx context.Context, user int64, provider, mode
 		}
 	}
 	return false, nil
-}
-
-func (s *Service) modelsAfter(ctx context.Context, p conversations.Principal) ([]queueEntry, error) {
-	q, err := s.queue(ctx, p.User)
-	if err != nil {
-		return nil, err
-	}
-	var out []queueEntry
-	for _, e := range q {
-		if !e.isModel() {
-			continue
-		}
-		ok, err := s.offers(ctx, e.provider, e.model, p.User, p.Workspace)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			out = append(out, e)
-		}
-	}
-	return out, nil
 }
