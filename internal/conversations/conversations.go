@@ -15,6 +15,7 @@ import (
 type Runtime interface {
 	CreateConversationOn(ctx context.Context, model agentrt.ModelRef) (int64, error)
 	Submit(ctx context.Context, conversation int64, in agentrt.Input) (int64, error)
+	Continue(ctx context.Context, conversation int64, model agentrt.ModelRef, afterEntry int64) (int64, agentrt.ModelRef, error)
 	Note(ctx context.Context, conversation int64, n agentrt.NoteInput) (int64, error)
 	Wait(ctx context.Context, submission int64) (agentrt.Settled, error)
 	Messages(ctx context.Context, conversation int64) ([]agentrt.Message, error)
@@ -49,6 +50,7 @@ type Service struct {
 	agent        Agent
 	capability   func(conversation, agentConversation int64) string
 	questions    CLIQuestions
+	models       Models
 	language     func(r *http.Request, browser string) string
 	watchSession func(r *http.Request, every time.Duration) (context.Context, context.CancelFunc)
 
@@ -58,6 +60,7 @@ type Service struct {
 	mu         sync.Mutex
 	streams    map[int64]int
 	modelHolds map[int64]*modelHold
+	guards     map[int64]*guard
 
 	readyWait     time.Duration
 	modelWait     time.Duration
@@ -74,7 +77,7 @@ type Service struct {
 func New(sqlDB *sql.DB, agent Agent) *Service {
 	closing, end := context.WithCancel(context.Background())
 	return &Service{
-		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{}, modelHolds: map[int64]*modelHold{},
+		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{}, modelHolds: map[int64]*modelHold{}, guards: map[int64]*guard{},
 		readyWait: 5 * time.Second, modelWait: modelWait, holdLimit: holdLimit, putBackLimit: putBackLimit, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
 		maxStreams: 16,
 	}
@@ -93,6 +96,39 @@ func (s *Service) openStream(user int64) (func(), bool) {
 		if s.streams[user]--; s.streams[user] <= 0 {
 			delete(s.streams, user)
 		}
+	}, true
+}
+
+type guard struct {
+	held  chan struct{}
+	users int
+}
+
+func (s *Service) lock(ctx context.Context, id int64) (func(), bool) {
+	s.mu.Lock()
+	g := s.guards[id]
+	if g == nil {
+		g = &guard{held: make(chan struct{}, 1)}
+		s.guards[id] = g
+	}
+	g.users++
+	s.mu.Unlock()
+	release := func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if g.users--; g.users == 0 {
+			delete(s.guards, id)
+		}
+	}
+	select {
+	case g.held <- struct{}{}:
+	case <-ctx.Done():
+		release()
+		return nil, false
+	}
+	return func() {
+		<-g.held
+		release()
 	}, true
 }
 

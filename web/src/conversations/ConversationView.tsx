@@ -22,6 +22,7 @@ import { agentChoices } from './agentMention'
 import { ChatTranscript } from './ChatTranscript'
 import { CliPermissionsSwitch, CliQuestions } from './CliPermissions'
 import { Composer } from './Composer'
+import { ContinueBar } from './ContinueBar'
 import { ConversationHead } from './ConversationHead'
 import './Conversations.css'
 import { type History, useHistory } from './history'
@@ -83,7 +84,7 @@ export function ConversationView({
   }, [status])
   const loadPage = useCallback((before: number) => api<History>(`${base}/entries?before=${before}`), [base])
   const older = useHistory(view, loadPage)
-  const { messages, running, truncated } = transcript(
+  const { messages, lastEntry, running, truncated } = transcript(
     view && older.history ? { ...view, entries: older.history.entries, before: older.history.before } : view,
   )
   const archived = Boolean(meta.data?.archived_at)
@@ -104,10 +105,6 @@ export function ConversationView({
   const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
   const [picked, setPicked] = useState<ModelRef | null>(null)
   const choices = useRef(0)
-  const choose = (m: ModelRef) => {
-    choices.current++
-    setPicked(m)
-  }
   const readModel = () => {
     const began = choices.current
     api<ModelRef>(`${base}/model`).then(setPicked, () => {
@@ -115,6 +112,16 @@ export function ConversationView({
       setPicked(null)
       loadedModel.reload()
     })
+  }
+  const [continuing, setContinuing] = useState(false)
+  const modelWrites = useRef(0)
+  const claimModel = () => {
+    const mine = ++modelWrites.current
+    return (m: ModelRef) => {
+      if (mine !== modelWrites.current) return
+      choices.current++
+      setPicked(m)
+    }
   }
   const model = picked ?? loadedModel.data
   const agents = useMemo(
@@ -146,6 +153,7 @@ export function ConversationView({
   }
 
   const last = messages.at(-1)
+  const reply = messages.findLast((m) => m.role !== 'note')
 
   return (
     <section className="ui-chat" aria-label={t('conversations.conversation')}>
@@ -232,6 +240,19 @@ export function ConversationView({
         onLoadEarlier={older.loadEarlier}
         loadingEarlier={older.loading}
         earlierError={older.error}
+        footer={
+          reply?.failed && !running && !archived && !unreadable && model && lastEntry !== undefined ? (
+            <ContinueBar
+              key={lastEntry}
+              base={base}
+              current={model}
+              afterEntry={lastEntry}
+              claim={claimModel}
+              onContinued={onChanged}
+              onPending={setContinuing}
+            />
+          ) : undefined
+        }
       />
       <Composer
         workspace={workspace}
@@ -251,8 +272,8 @@ export function ConversationView({
             providers={providers.data}
             current={model}
             cli={cli.data}
-            onChosen={choose}
-            disabled={archived || unreadable}
+            claim={claimModel}
+            disabled={archived || unreadable || continuing}
           />
         )}
       </Composer>

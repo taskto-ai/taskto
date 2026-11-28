@@ -185,8 +185,14 @@ func plannerDefinition(t *testing.T) Definition {
 func TestPinAnAppAndPlaceAWidget(t *testing.T) {
 	w := newWorld(t)
 	app := w.contribute(w.alice, w.alicePrivate, w.aliceApp, offers())
+	if _, err := w.e.db.Exec(`UPDATE apps SET icon = '🧾' WHERE id = ?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	pin := w.place(w.alice, w.alicePrivate, app, KindPin, "", http.StatusCreated)
+	if pin.AppIcon != "🧾" {
+		t.Fatalf("the pin lost the app's icon: %+v", pin)
+	}
 	if pin.State != StateReady || pin.Label != "Spend" || pin.Source != SourcePersonal || pin.Release == nil {
 		t.Fatalf("pin = %+v", pin)
 	}
@@ -205,6 +211,9 @@ func TestPinAnAppAndPlaceAWidget(t *testing.T) {
 	home := w.home(w.alice)
 	if len(home.Widgets) != 1 || len(home.Pins) != 1 || home.Widgets[0].ID != widget.ID || home.Pins[0].AppName != app.Name {
 		t.Fatalf("home = %+v", home)
+	}
+	if home.Pins[0].AppIcon != "🧾" || home.Widgets[0].AppIcon != "🧾" {
+		t.Fatalf("home's icons = %q and %q", home.Pins[0].AppIcon, home.Widgets[0].AppIcon)
 	}
 	if other := w.home(w.bob); len(other.Widgets)+len(other.Pins)+len(other.Hidden) != 0 {
 		t.Fatalf("bob's home = %+v", other)
@@ -503,6 +512,9 @@ func TestSharedDefaults(t *testing.T) {
 func TestAvailableAppsAndWhoMaySetDefaults(t *testing.T) {
 	w := newWorld(t)
 	app := w.contribute(w.alice, w.shared, w.sharedApp, offers())
+	if _, err := w.e.db.Exec(`UPDATE apps SET icon = '🧾' WHERE id = ?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
 	list := func(u *user) []AvailableApp {
 		rec := u.do(http.MethodGet, homePath(w.ws, "/available"), nil)
 		expect(t, rec, http.StatusOK)
@@ -517,7 +529,7 @@ func TestAvailableAppsAndWhoMaySetDefaults(t *testing.T) {
 		return nil
 	}
 	got := find(list(w.alice), app.ID)
-	if got == nil || len(got.Widgets) != 2 || got.Pin == nil || !got.CanSetDefaults || got.SpaceKind != "shared" {
+	if got == nil || len(got.Widgets) != 2 || got.Pin == nil || !got.CanSetDefaults || got.SpaceKind != "shared" || got.Icon != "🧾" {
 		t.Fatalf("alice's %+v", got)
 	}
 	if got := find(list(w.bob), app.ID); got == nil || got.CanSetDefaults {

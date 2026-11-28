@@ -176,6 +176,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_offline` | 409 | The app is offline: restore it to launch it or run its actions. |
 | `app_changed` | 409 | The app changed since the client read it; `current` is the app as it is now. |
 | `app_name_length` | 400 | An app's name must have 1 to `max` characters. |
+| `app_icon_invalid` | 400 | An app's icon must be one emoji, or empty to show the initials of its name. |
 | `too_many_apps` | 409 | The space has `max` apps. |
 | `app_full` | 409 | The app holds `max_rows` rows or `max_mib` MiB of data. |
 | `app_preview_full` | 409 | A [preview](#post-appsapppreview) holds `max_rows` sample rows already. |
@@ -324,7 +325,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `conversation_title_invalid` | 400 | A title must have at most `max` printable characters. |
 | `conversation_lost` | 410 | The agent runtime no longer has the conversation's content. |
 | `conversation_no_model` | 409 | The conversation has no model: choose one. |
-| `conversation_busy` | 409 | A message that names an agent is still changing the conversation's model, so `PUT …/model` gave up waiting for it (a few seconds). Nothing changed. |
+| `conversation_busy` | 409 | The conversation is working: a continue is only for an idle one. Also, a message that names an agent is still changing the conversation's model, so `PUT …/model` gave up waiting for it (a few seconds), and nothing changed. |
+| `conversation_moved` | 409 | The conversation has entries after the one the continue was for: it was already continued, or changed meanwhile. |
+| `model_unavailable` | 409 | The caller can't run that model now: a CLI whose account isn't connected, or that the member's account mode leaves no account for. |
 | `agent_off` | 503 | The agent runtime is off: the server runs without `-agent`. |
 | `agent_not_ready` | 503 | The agent runtime is starting or restarting; `Retry-After` says when to try again. |
 | `model_unknown` | 400 | The caller may not use that model, or it isn't configured. |
@@ -1387,7 +1390,7 @@ app's button does both: it posts, then goes to the address.
 | `documents/…` | The current version of every file in the caller's **private space**, under the names it has there, with a file's bytes as they are: Markdown and other versioned files from git, and large files, audio, video and archives (the [unversioned files](#unversioned-files)) from the space's own storage, never as a Git LFS pointer. Older versions aren't included. |
 | `boards/<id>-<name>.json`, `boards/<id>-<name>.md` | Each board of the private space, archived ones too (the personal board): the board and its cards (all columns, archived cards too, in the order of their IDs), each with its thread of comments. The JSON is `{"board": {…}, "cards": [{…card as the API gives it…, "comments": […]}]}`, exactly what `GET …/cards/{card}` answers. The Markdown is the same, for reading: a heading per card, with its column, details, body and comments. The two files are read one after the other, so a card edited between them can differ in them. |
 | `conversations/<id>-<title>.json` | Each conversation the caller owns **in this workspace**, archived ones too: `{"conversation": {…as the conversations API gives it…}, "entries": […], "transcript": "complete"}`. The entries are the agent runtime's, oldest first, in the shape the web app draws, as `GET …/conversations/{conversation}/entries` pages them, as the history was when its export began. If the agent runtime is off, no longer has the conversation or stops answering (each read waits at most 30 seconds), `transcript` is `"unavailable"` (`entries` empty) or `"incomplete"` (the entries read before it stopped), and the manifest says so. |
-| `apps/<id>-<name>.json` | Each app of the private space, offline ones too: `{"app": {id, name, archived_at, created_at, updated_at}, "records": […]}`. The records are the live ones (not deleted), as the agent's `list_app_rows` tool gives them (each field by name, with `id` and `revision`). An attachment field holds each photo's metadata, not its bytes; the app's definition isn't included (copy the app, or see [templates](templates.md)). |
+| `apps/<id>-<name>.json` | Each app of the private space, offline ones too: `{"app": {id, name, icon, archived_at, created_at, updated_at}, "records": […]}`. The records are the live ones (not deleted), as the agent's `list_app_rows` tool gives them (each field by name, with `id` and `revision`). An attachment field holds each photo's metadata, not its bytes; the app's definition isn't included (copy the app, or see [templates](templates.md)). |
 | `manifest.json` | `{"format": 1, "scope": "user", "exported_at", "workspace": {id, name}, "user": {id, name, email}, "counts": {documents, boards, cards, comments, conversations, apps, records}, "skipped": […]}`. `skipped` lists what couldn't be included, as `{"kind", "reason", "ref"}`: `document` with `unavailable` and its path (a file whose bytes the server no longer has), `documents` with `unavailable` (the space's history was rewritten while the export read it) or `off` (the server has no knowledge base), `app` with `unavailable` and its ID (the app was moved out of the private space while the export read it), `conversations` with `off` (the server has none), or `transcript` with `unavailable` or `incomplete` and a conversation's ID; it is capped at 1000 (`"skipped_truncated": true` then). |
 
 **The scope is where a thing is now, and who owns a conversation.** The documents, boards and
@@ -1482,7 +1485,7 @@ admin again, so one who was demoted since gets `403`.
 | `spaces/<id>-<name>/space.json` | The space: `{"id", "name", "archived_at", "created_at", "role"}`, where `role` is the admin's own (`editor` or `viewer`) and `archived_at` is set for an archived space. |
 | `spaces/<id>-<name>/documents/…` | The space's documents, as in the personal export: the current version of every file at one commit, large files from the space's own storage, never as a Git LFS pointer. |
 | `spaces/<id>-<name>/boards/<id>-<name>.json`, `.md` | Each board of the space, archived ones too, with every card and its comments, as in the personal export. Boards come a page at a time, in the order of their IDs. |
-| `spaces/<id>-<name>/apps/<id>-<name>.json` | Each app the admin may open: `{"app": {id, name, archived_at, created_at, updated_at}, "live": {…the live release, with its `definition`…}, "records": […]}`. The records are those the admin may read in the app (all of them, or only their own, by their role in it), as the agent's `list_app_rows` tool gives them; an attachment field holds each photo's metadata, not its bytes. The app, its `live` definition and its records are read in one snapshot of the admin's access, so a publish or a change of roles while the export runs never mixes two states. The draft and earlier releases aren't included. An app the admin holds no role in isn't exported, even if it is listed to them because it has roles and no builder (the way back an admin has to set its roles right): that gives no records, and an export holds what the admin's roles give them. |
+| `spaces/<id>-<name>/apps/<id>-<name>.json` | Each app the admin may open: `{"app": {id, name, icon, archived_at, created_at, updated_at}, "live": {…the live release, with its `definition`…}, "records": […]}`. The records are those the admin may read in the app (all of them, or only their own, by their role in it), as the agent's `list_app_rows` tool gives them; an attachment field holds each photo's metadata, not its bytes. The app, its `live` definition and its records are read in one snapshot of the admin's access, so a publish or a change of roles while the export runs never mixes two states. The draft and earlier releases aren't included. An app the admin holds no role in isn't exported, even if it is listed to them because it has roles and no builder (the way back an admin has to set its roles right): that gives no records, and an export holds what the admin's roles give them. |
 | `manifest.json` | As the personal export's, with `"scope": "workspace"`, `"user"` the exporter, `counts` (`members`, `spaces`, `documents`, `boards`, `cards`, `comments`, `apps`, `records`), `spaces` (`id`, `name`, `dir`, the folder it is in, and `archived_at`) and `skipped`, which adds `"space"` (the shared space an item was in) and the kind `space` with the reason `access_lost` for a space the admin stopped being a member of while the export ran. |
 
 **A space the admin leaves meanwhile is left out from then on.** The spaces are those the admin is a
@@ -1894,6 +1897,12 @@ can't be viewed or restored; `agent` is absent when the user made the change, an
 `<name> (access token)` for a change made with an [access token](#access-tokens). `limit`
 is 1 to 200, default 50; `next`, when there are more, is the `before` of the next page
 (`?before=<commit>`: `404` if the commit isn't in the space's history, as for `?at=`).
+
+The web app's history view draws a Markdown document's changes from two ordinary reads of
+`GET …/docs/{path}?at=<commit>` (a commit and the one before it that this list shows, or a
+commit and the current version), comparing them in the browser, so a diff needs no route of
+its own and shows nothing the caller can't read already; a version that was taken out of history
+has no diff.
 
 ### `GET /api/workspaces/{workspace}/spaces/{space}/history`
 
@@ -3020,7 +3029,7 @@ An app:
 
 ```json
 {
-  "id": 9, "space_id": 4, "name": "Expense tracker",
+  "id": 9, "space_id": 4, "name": "Expense tracker", "icon": "🧾",
   "archived_at": null, "version": 1, "rows": 12,
   "created_at": "…", "created_by": {"id": 2, "name": "Member", "agent": true},
   "updated_at": "…", "updated_by": {"id": 2, "name": "Member", "agent": true},
@@ -3310,8 +3319,8 @@ out unless `?archived=true`, after the others.
 
 ### `POST …/apps`
 
-Writers. `{"name": "Expense tracker", "definition": { … }}` (a name of 1–100
-characters). `201` with the app.
+Writers. `{"name": "Expense tracker", "icon"?: "🧾", "definition": { … }}` (a name of 1–100
+characters; an icon is [one emoji](#app-icons)). `201` with the app.
 
 ### `GET …/apps/{app}`
 
@@ -3319,12 +3328,32 @@ The app, with its definition.
 
 ### `PATCH …/apps/{app}`
 
-Writers. With the `version`: `name` renames it and `definition` replaces the app's **draft**:
-its screen, collection, actions and summaries (these take the design capability), `archived`
+Writers. With the `version`: `name` renames it, `icon` sets its [icon](#app-icons) (`""` goes
+back to the initials) and `definition` replaces the app's **draft**:
+its screen, collection, actions and summaries (these take the design capability, as do the
+name and the icon), `archived`
 takes it offline (`true`) or restores it (`false`; the publish capability). A new definition is
 checked against the catalog, not against the rows, and changes nothing people use: the app
 keeps serving its live release until the draft is published. Fields no longer declared stay in
 the rows, unseen, and come back if declared again. `200` with the app.
+
+#### App icons
+
+An app's `icon` is one emoji, or `""` to show the initials of its name (the colour still comes
+from the name). The server keeps it exactly as sent, never trimmed, at most 32 bytes and 8
+characters, and it is one emoji sequence and nothing else: a pictograph (Unicode's
+`Extended_Pictographic`) with an optional emoji variation selector or skin tone, such pictographs
+joined by U+200D (a family, a person with a profession), a pair of regional indicators (a flag), a
+keycap (`1️⃣`, `#️⃣`, `*️⃣`) or a flag in tag characters (England, Scotland, Wales). A space,
+a control or invisible character anywhere (U+200B, U+202E, a byte order mark, a lone U+200D),
+several emoji, or a letter is `400 app_icon_invalid`, as is anything else. The web app's picker
+holds the same rule, with the same table of pictographs (`web/src/apps/pictographs.ts`, never the
+browser's own Unicode data, which differs between versions), and `internal/apps/testdata/app_icons.json`
+is the table and the list of values that both test. An icon of joined pictographs the system has no
+single glyph for is wider than its avatar, so the avatar clips it. Changing it needs the design capability, bumps the app's
+`version` and records no audit event. The agent's `create_app` and `update_app` take it too, a
+copy of an app keeps it, and Home's items (`app_icon`, left out when empty) and its available
+apps (`icon`) carry it.
 
 ### `POST …/apps/{app}/move`
 
@@ -3582,9 +3611,11 @@ app to keep on the device for [offline use](offline.md). Nothing is stored by th
 snapshot, and the writes made against it come back as ordinary
 [actions](#post-appsappactions) under their `operation` keys.
 
+The app's `icon` (`""` for none) comes with it, so the offline list and the app's header on the device draw it; a copy downloaded before icons existed has none and shows the initials.
+
 ```json
 {
-  "app_id": 9, "space_id": 4, "name": "Expenses", "release": 3,
+  "app_id": 9, "space_id": 4, "name": "Expenses", "icon": "🧾", "release": 3,
   "definition": {
     "definition_version": 2, "requires": ["component.Column", …],
     "collection": {"fields": [ … ]}, "entry": "…", "screens": [{"name": "…", "record": true}],
@@ -4349,7 +4380,7 @@ id is `404`, never `403`).
 
 The caller's Home: `{"widgets": […], "pins": […], "hidden": […], "limits": {"widgets": 24,
 "pins": 20}}`. An item is `{"id"?, "default_id"?, "source": "personal"|"default", "kind":
-"widget"|"pin", "space_id", "app_id", "app_name", "widget_id"?, "widget"?, "label"?, "screen"?,
+"widget"|"pin", "space_id", "app_id", "app_name", "app_icon"?, "widget_id"?, "widget"?, "label"?, "screen"?,
 "state", "reason"?, "release"?, "can_manage"?}`. The defaults of the caller's shared spaces
 come first, then their own in the order they chose; an item the caller placed themselves
 replaces the same default. `hidden` are the defaults they hid.
@@ -4357,7 +4388,7 @@ replaces the same default. `hidden` are the defaults they hid.
 ### `GET /api/workspaces/{workspace}/home/available`
 
 The apps the caller may put on Home or pin: those they may view, online and published, in the
-spaces they read, `{"apps": [{"space_id", "space_name", "space_kind", "app_id", "name",
+spaces they read, `{"apps": [{"space_id", "space_name", "space_kind", "app_id", "name", "icon",
 "widgets", "pin", "can_set_defaults", "defaults"}]}`. `can_set_defaults` and the `defaults` set
 are only for those who may [set defaults](#shared-defaults) for the app.
 
@@ -5771,6 +5802,32 @@ conversation's next model request on, also in the middle of a run: `200` with th
 `400 unknown model` for one the caller may not use or that isn't configured; `409` for an
 archived conversation; `409 conversation_busy` when a message that names an agent is still
 changing the model (the `PUT` waits a few seconds for it, then changes nothing).
+
+### `GET /api/workspaces/{workspace}/conversations/{conversation}/continue-models`
+
+The models a continue may name, for the owner of the conversation, now: `{"providers": [...]}`
+in the shape of `GET …/models`, with the CLI models only where the caller has an account that can
+run them (a connected account of their own, or one of the workspace's shared accounts, as the
+member's account mode allows). It is worked out for this conversation with the account choice its next turn will make, the same code: a conversation that keeps its last account (account switching on) is offered what that account runs, and a shared account an admin pinned to one model offers only that model. The list is the one `continue` checks, so a model that is not in it is refused there. `404` for a conversation the caller doesn't own, `409
+conversation_archived` for an archived one.
+
+### `POST /api/workspaces/{workspace}/conversations/{conversation}/continue`
+
+Runs the conversation again on what it holds, with no new message: for a reply that failed (the
+model's provider refused it, for a limit or an overload), on the model the body names, which may
+be the one it already has. The body names a model from `continue-models` and the last entry, for example `{"model": {"provider": "cli-claude", "model_id": "default"}, "after_entry": 42}`:
+the model is the one the run answers on, written together with the run's admission, so no other
+model write can come between them, and `after_entry` is the id of the conversation's last entry
+that is not a private note, as the caller saw it: the failed reply the caller is continuing (notes written after it neither hide it nor move it, and a note's own entry is never accepted). `202 {"submission_id": 12, "model": {"provider": "script", "model_id": "script-1"}}`, where `model` is the one the run was admitted on, which the web app shows; the
+answer arrives through the events stream. The run keeps that model until it ends: a `PUT …/model` meanwhile is refused with `409 conversation_busy`, a CLI turn of the run is refused when its account choice no longer runs that model, and it is not moved to another account by a usage limit. Only the conversation's owner, and only while the
+conversation is idle: `409 conversation_busy` while it works (a continue never queues, and a
+refused one leaves the running work's model alone), `409 conversation_moved` when the conversation
+has entries other than notes after `after_entry`, or an earlier continue already took that entry, even one that added nothing, such as one that was stopped (nothing is started), `409 model_unavailable` for a model that `continue-models` doesn't
+offer now, `400` for a missing or malformed body or a model the caller may not use, `409
+conversation_archived` for an archived one, `404` for one the caller doesn't own or that doesn't
+exist. The archive is checked again, under a lock an archiving request takes too (a request that is cancelled stops waiting for it), immediately before the request goes to the agent runtime, so no archive finishes between the check and the run's start. The web app offers it, with the models of `continue-models`, on a failed last
+reply, and keeps its buttons disabled once the request is accepted, until the stream shows the
+new run.
 
 ### `POST /api/workspaces/{workspace}/conversations/{conversation}/stop`
 

@@ -22,6 +22,7 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/db"
+	"taskto.ai/taskto/internal/providers"
 )
 
 const password = "a-long-enough-password"
@@ -36,6 +37,9 @@ type fakeRuntime struct {
 	calls        []string
 	watches      []*fakeWatch
 	aborts       map[int64]int
+	resumes      map[int64]int
+	resumed      []continueCall
+	sets         int
 	err          error
 	onAbort      func(ctx context.Context)
 	replies      map[int64][]agentrt.Message
@@ -47,12 +51,14 @@ type fakeRuntime struct {
 	onSubmit     func()
 	stallSend    bool
 	stallPutBack bool
+	onEntries    func()
+	onContinue   func()
 }
 
 var setupToken = auth.NewSetupToken()
 
 func newFakeRuntime() *fakeRuntime {
-	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, notes: map[int64][]agentrt.NoteInput{}, aborts: map[int64]int{}}
+	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, notes: map[int64][]agentrt.NoteInput{}, aborts: map[int64]int{}, resumes: map[int64]int{}}
 }
 
 var defaultModel = agentrt.ModelRef{Provider: "script", ModelID: "script-1"}
@@ -95,6 +101,25 @@ func (f *fakeRuntime) Submit(ctx context.Context, conv int64, in agentrt.Input) 
 	f.inputs[conv] = append(f.inputs[conv], in)
 	f.calls = append(f.calls, "submit")
 	return int64(1000 + len(f.inputs[conv])), nil
+}
+
+type continueCall struct {
+	model agentrt.ModelRef
+	after int64
+}
+
+func (f *fakeRuntime) Continue(_ context.Context, conv int64, model agentrt.ModelRef, after int64) (int64, agentrt.ModelRef, error) {
+	if f.onContinue != nil {
+		f.onContinue()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return 0, agentrt.ModelRef{}, f.err
+	}
+	f.resumed = append(f.resumed, continueCall{model, after})
+	f.resumes[conv]++
+	return int64(3000 + f.resumes[conv]), model, nil
 }
 
 func (f *fakeRuntime) Note(_ context.Context, conv int64, n agentrt.NoteInput) (int64, error) {
@@ -157,6 +182,7 @@ func (f *fakeRuntime) SetModel(ctx context.Context, conv int64, model agentrt.Mo
 	}
 	f.models[conv] = model
 	f.calls = append(f.calls, "set-model "+model.Provider+"/"+model.ModelID)
+	f.sets++
 	return nil
 }
 
@@ -174,6 +200,9 @@ func (f *fakeRuntime) Abort(ctx context.Context, conv int64) error {
 }
 
 func (f *fakeRuntime) Entries(_ context.Context, conv, before int64, limit int) (json.RawMessage, error) {
+	if f.onEntries != nil {
+		f.onEntries()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -320,6 +349,8 @@ type env struct {
 	rt  *fakeRuntime
 	svc *Service
 	h   http.Handler
+
+	runnable []providers.Choice
 }
 
 func newEnv(t *testing.T, off bool) *env {
@@ -339,6 +370,11 @@ func newEnv(t *testing.T, off bool) *env {
 		agent = func(context.Context) (Runtime, error) { return e.rt, nil }
 	}
 	e.svc = New(sqlDB, agent)
+	e.runnable = []providers.Choice{
+		{Provider: "script", Name: "Scripted", Scope: providers.ScopeInstance, Models: []providers.ModelChoice{{ID: "script-1", Name: "Scripted"}}},
+		{Provider: "backup", Name: "Backup", Scope: providers.ScopeInstance, Models: []providers.ModelChoice{{ID: "b-1", Name: "B one"}}},
+	}
+	e.svc.SetContinueModels(func(context.Context, Principal) ([]providers.Choice, error) { return e.runnable, nil })
 	t.Cleanup(e.svc.EndStreams)
 	mux := http.NewServeMux()
 	a := auth.New(sqlDB, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})

@@ -12,9 +12,14 @@ import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
 import { Skeleton } from '../ui/Skeleton'
 import { Content } from './Content'
-import { authorName, type Change, type Commit, encodePath, isStale, useDoc, useLatest } from './docs'
+import { authorName, type Change, type Commit, encodePath, isMarkdown, isStale, useDoc, useLatest } from './docs'
 import { useLoadingStatus } from './loading'
 import { Problem } from './Problem'
+import { type DiffAgainst, VersionDiff } from './VersionDiff'
+
+type Page = { commits: Commit[]; next?: string }
+
+type Open = { commit: Commit; mode: 'view' } | { commit: Commit; mode: 'diff'; against: DiffAgainst }
 
 const CHANGE_LABEL = {
   create: 'knowledge.history.create',
@@ -43,11 +48,13 @@ export function History({
 }) {
   const historyUrl = `${base}/history/${encodePath(current.path)}`
   const [generation, setGeneration] = useState(0)
-  const first = useLoad(() => api<{ commits: Commit[]; next?: string }>(historyUrl), [historyUrl, generation])
+  const first = useLoad(() => api<Page>(historyUrl), [historyUrl, generation])
   const [removing, setRemoving] = useState(false)
   const [removed, setRemoved] = useState<number | null>(null)
-  const [older, setOlder] = useState<{ commits: Commit[]; next?: string }[]>([])
-  const [viewing, setViewing] = useState<Commit | null>(null)
+  const [older, setOlder] = useState<Page[]>([])
+  const [open, setOpen] = useState<Open | null>(null)
+  const [finding, setFinding] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<{ error: unknown; reload: () => void; reloadable?: boolean } | null>(null)
   const [confirmDialog, confirm] = useConfirm()
@@ -65,36 +72,104 @@ export function History({
   const t = useT()
   const f = useFormat()
 
-  const loadingOlder = useRef<AbortController | null>(null)
+  const loadingOlder = useRef<{
+    request: AbortController
+    token: string
+    made: number
+    page: Promise<Page | null>
+  } | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const now = useLatest(generation)
-  useEffect(() => () => loadingOlder.current?.abort(), [])
-  const more = async () => {
-    if (!next || loadingOlder.current) return
+  const choice = useRef(0)
+  useEffect(() => () => loadingOlder.current?.request.abort(), [])
+  const fetchOlder = (token: string): Promise<Page | null> => {
+    const active = loadingOlder.current
+    if (active) return active.token === token && active.made === generation ? active.page : Promise.resolve(null)
     const made = generation
     const request = new AbortController()
-    loadingOlder.current = request
-    setLoadingMore(true)
-    try {
-      const page = await api<{ commits: Commit[]; next?: string }>(`${historyUrl}?before=${encodeURIComponent(next)}`, {
-        signal: request.signal,
-      })
-      if (!request.signal.aborted && now.current === made) setOlder((o) => [...o, page])
-    } catch (err) {
-      if (request.signal.aborted || now.current !== made) return
-      setError({ error: err, reload: reloadHistory, reloadable: isStale(err) })
-    } finally {
-      if (loadingOlder.current === request) {
-        loadingOlder.current = null
-        setLoadingMore(false)
+    const load = async (): Promise<Page | null> => {
+      setLoadingMore(true)
+      try {
+        const page = await api<Page>(`${historyUrl}?before=${encodeURIComponent(token)}`, {
+          signal: request.signal,
+        })
+        if (request.signal.aborted || now.current !== made) return null
+        setOlder((o) => [...o, page])
+        return page
+      } catch (err) {
+        if (request.signal.aborted || now.current !== made) return null
+        setError({ error: err, reload: reloadHistory, reloadable: isStale(err) })
+        return null
+      } finally {
+        if (loadingOlder.current?.request === request) {
+          loadingOlder.current = null
+          setLoadingMore(false)
+        }
       }
     }
+    const page = load()
+    loadingOlder.current = { request, token, made, page }
+    return page
+  }
+  const more = async () => {
+    if (next) await fetchOlder(next)
+  }
+  const readable = (c: Commit) => !!c.version && !unversioned && kept(c)
+  const previousOf = async (c: Commit): Promise<Commit | null | 'removed' | 'failed'> => {
+    let list = commits
+    let token = next
+    for (;;) {
+      const older = list.slice(list.findIndex((x) => x.commit === c.commit) + 1)
+      const found = older.find(readable)
+      if (found) return found
+      if (!token) return older.some((x) => !!x.version) ? 'removed' : null
+      const page = await fetchOlder(token)
+      if (!page) return 'failed'
+      list = [...list, ...page.commits]
+      token = page.next
+    }
+  }
+  const showChanges = async (c: Commit) => {
+    const mine = ++choice.current
+    if (open?.commit === c && open.mode === 'diff' && open.against.kind === 'previous') {
+      setOpen(null)
+      setFinding(null)
+      return
+    }
+    setNotice(null)
+    setFinding(c.commit)
+    const made = generation
+    const previous = c.change === 'create' ? null : await previousOf(c)
+    if (now.current !== made || choice.current !== mine) return
+    setFinding(null)
+    if (previous === 'failed') return
+    if (previous === 'removed') {
+      setOpen(null)
+      setNotice(t('knowledge.history.previousRemoved'))
+      return
+    }
+    setOpen({ commit: c, mode: 'diff', against: { kind: 'previous', commit: previous } })
+  }
+  const toggleCompare = (c: Commit) => {
+    choice.current++
+    setFinding(null)
+    setNotice(null)
+    const same = open?.commit === c && open.mode === 'diff' && open.against.kind === 'current'
+    setOpen(same ? null : { commit: c, mode: 'diff', against: { kind: 'current' } })
+  }
+  const toggleView = (c: Commit) => {
+    choice.current++
+    setFinding(null)
+    setNotice(null)
+    setOpen(open?.commit === c && open.mode === 'view' ? null : { commit: c, mode: 'view' })
   }
   const reloadHistory = () => {
-    loadingOlder.current?.abort()
+    loadingOlder.current?.request.abort()
     loadingOlder.current = null
     setLoadingMore(false)
-    setViewing(null)
+    setOpen(null)
+    setFinding(null)
+    setNotice(null)
     setOlder([])
     setError(null)
     setGeneration((g) => g + 1)
@@ -176,6 +251,7 @@ export function History({
             {commits.map((c) => {
               const isCurrent = !!c.version && c.version === current.version
               const viewable = !!c.version && !unversioned && (kept(c) || isCurrent)
+              const diffable = viewable && isMarkdown(current.path)
               const by = c.agent
                 ? t('knowledge.history.byWithAgent', {
                     name: authorName(c.author, t),
@@ -187,7 +263,7 @@ export function History({
               return (
                 <Row
                   key={c.commit}
-                  current={c === viewing}
+                  current={c === open?.commit}
                   title={c.message || t(c.change ? CHANGE_LABEL[c.change] : 'knowledge.history.changed')}
                   detail={
                     <>
@@ -210,11 +286,34 @@ export function History({
                         <Button
                           size="sm"
                           variant="ghost"
-                          aria-pressed={c === viewing}
-                          onClick={() => setViewing(c === viewing ? null : c)}
+                          aria-pressed={c === open?.commit && open.mode === 'view'}
+                          onClick={() => toggleView(c)}
                         >
                           {t('knowledge.history.view')}
                         </Button>
+                        {diffable && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            loading={finding === c.commit}
+                            aria-pressed={
+                              c === open?.commit && open.mode === 'diff' && open.against.kind === 'previous'
+                            }
+                            onClick={() => showChanges(c)}
+                          >
+                            {t('knowledge.history.changes')}
+                          </Button>
+                        )}
+                        {diffable && !isCurrent && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            aria-pressed={c === open?.commit && open.mode === 'diff' && open.against.kind === 'current'}
+                            onClick={() => toggleCompare(c)}
+                          >
+                            {t('knowledge.history.compareCurrent')}
+                          </Button>
+                        )}
                         {!isCurrent && canWrite && (
                           <Button size="sm" disabled={busy} onClick={() => askRestore(c)}>
                             {t('knowledge.history.restore')}
@@ -261,7 +360,22 @@ export function History({
           onCancel={() => setRemoving(false)}
         />
       )}
-      {viewing && <AtCommit key={viewing.commit} url={url} commit={viewing} onLink={onLink} />}
+      {notice && <Notice tone="neutral">{notice}</Notice>}
+      {open?.mode === 'view' && <AtCommit key={open.commit.commit} url={url} commit={open.commit} onLink={onLink} />}
+      {open?.mode === 'diff' && (
+        <VersionDiff
+          key={`${open.commit.commit}:${open.against.kind}`}
+          url={url}
+          commit={open.commit}
+          against={open.against}
+          restoring={busy}
+          onRestore={
+            canWrite && !(!!open.commit.version && open.commit.version === current.version)
+              ? () => askRestore(open.commit)
+              : undefined
+          }
+        />
+      )}
       {confirmDialog}
     </section>
   )

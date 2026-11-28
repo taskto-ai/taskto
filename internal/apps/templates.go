@@ -321,7 +321,7 @@ func (s *Service) duplicateApp(ctx context.Context, sp access.Space, a Actor, ap
 	if strings.TrimSpace(name) == "" {
 		name = src.Name
 	}
-	return s.createWithRoles(ctx, dest, a, NewApp{Name: name, Definition: def}, nil)
+	return s.createWithRoles(ctx, dest, a, NewApp{Name: name, Icon: src.Icon, Definition: def}, nil)
 }
 
 func (s *Service) clearForeignTargets(ctx context.Context, workspaceID int64, a Actor, def *Definition) error {
