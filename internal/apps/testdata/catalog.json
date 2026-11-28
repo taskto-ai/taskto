@@ -27,6 +27,7 @@
     "component.TextField",
     "data.labels",
     "data.series",
+    "data.sources",
     "effect.create_card",
     "effect.create_document",
     "effect.create_payment_link",

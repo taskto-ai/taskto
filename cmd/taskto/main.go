@@ -31,6 +31,7 @@ import (
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/config"
 	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/datasource"
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/dictation"
 	"taskto.ai/taskto/internal/drain"
@@ -241,7 +242,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		return fmt.Errorf("fingerprinting the integrations' webhook secrets: %w", err)
 	}
 	integrationSvc := integrations.New(integrationStore, integrations.Options{PublicURL: cfg.PublicURL, Egress: integrationEgress(cfg)})
-	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb, Payments: integrationSvc}).WithDeletedRetention(cfg.AppDeletedRetention())
+	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb, Payments: integrationSvc, Sources: datasource.Sources{Storage: quotas.Mine}}).WithDeletedRetention(cfg.AppDeletedRetention())
 	integrationSvc.UseRecords(appSvc)
 	stopEffects := appSvc.StartOutbox(ctx)
 	defer stopEffects()

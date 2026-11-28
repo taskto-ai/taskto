@@ -380,6 +380,9 @@ const (
 	CodeAppIntegrationKindMismatch    Code = "app_integration_kind_mismatch"
 	CodeAppIntegrationDisabled        Code = "app_integration_disabled"
 	CodeAppIntegrationSpaceNotAllowed Code = "app_integration_space_not_allowed"
+	CodeAppDataSourceUnapproved       Code = "app_data_source_unapproved"
+	CodeAppDataSourceSlotUnknown      Code = "app_data_source_slot_unknown"
+	CodeAppDataSourceContractChanged  Code = "app_data_source_contract_changed"
 
 	CodeIntegrationUnavailable         Code = "integration_unavailable"
 	CodeIntegrationAmountRefused       Code = "integration_amount_refused"

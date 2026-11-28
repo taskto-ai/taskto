@@ -1129,6 +1129,9 @@
     "app_integration_kind_mismatch": "Esta integração não pode ser usada para {kind}.",
     "app_integration_disabled": "Esta integração está desativada.",
     "app_integration_space_not_allowed": "Esta integração ainda não é permitida no espaço do app.",
+    "app_data_source_unapproved": "Um admin ainda não aprovou o que este app lê da fonte de dados \"{slot}\" na forma atual. Peça a um admin que aprove.",
+    "app_data_source_slot_unknown": "Este rascunho não declara uma fonte de dados chamada \"{slot}\".",
+    "app_data_source_contract_changed": "O app mudou desde que você leu o que ele lê da fonte de dados. Leia de novo e peça a aprovação disso.",
     "base_url_invalid": "Informe uma URL http ou https de até {max} caracteres, sem query nem fragmento.",
     "base_url_credentials": "A URL não pode conter usuário nem senha: coloque a chave no campo da chave de API.",
     "base_url_insecure": "Use https: uma chave só é enviada por http simples para esta máquina.",
@@ -2215,6 +2218,10 @@
         "app_integration_approved": "Uso de uma integração por um app aprovado",
         "app_integration_rejected": "Uso de uma integração por um app recusado",
         "app_integration_revoked": "Uso de uma integração por um app revogado",
+        "app_data_source_requested": "Uso de uma fonte de dados por um app solicitado",
+        "app_data_source_approved": "Uso de uma fonte de dados por um app aprovado",
+        "app_data_source_rejected": "Uso de uma fonte de dados por um app recusado",
+        "app_data_source_revoked": "Uso de uma fonte de dados por um app revogado",
         "data_export_started": "Exportação de dados iniciada",
         "workspace_export_started": "Exportação do espaço de trabalho iniciada",
         "server_update_requested": "Atualização pedida",
@@ -2235,7 +2242,8 @@
         "provider_account": "Conta de provedor de modelos",
         "shared_cli_account": "Conta de CLI compartilhada",
         "integration": "Integração",
-        "app_integration_approval": "Aprovação de integração de app"
+        "app_integration_approval": "Aprovação de integração de app",
+        "app_data_source_approval": "Aprovação de fonte de dados de app"
       },
       "details": {
         "account": "Conta",

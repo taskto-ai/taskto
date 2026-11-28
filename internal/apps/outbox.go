@@ -17,6 +17,7 @@ import (
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/datasource"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/paylink"
@@ -51,6 +52,7 @@ type Platform struct {
 	Docs          *knowledge.Store
 	ProviderKinds func(provider string) []string
 	Payments      paylink.Opener
+	Sources       datasource.Reader
 }
 
 func (s *Service) WithPlatform(p Platform) *Service {

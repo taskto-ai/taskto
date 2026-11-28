@@ -296,6 +296,9 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 		if err := s.checkApprovals(ctx, tx, appID, checked); err != nil {
 			return err
 		}
+		if err := s.checkDataSourceApprovals(ctx, tx, appID, checked); err != nil {
+			return err
+		}
 		var base *Collection
 		if cur.liveDef != nil {
 			if sameDefinition(*cur.liveDef, checked) {
@@ -389,6 +392,9 @@ func (s *Service) rollbackApp(ctx context.Context, sp access.Space, a Actor, app
 			return err
 		}
 		if err := s.checkApprovals(ctx, tx, appID, *target.Definition); err != nil {
+			return err
+		}
+		if err := s.checkDataSourceApprovals(ctx, tx, appID, *target.Definition); err != nil {
 			return err
 		}
 		if cur.liveDef == nil || !sameCollection(cur.liveDef.Collection, target.Definition.Collection) {

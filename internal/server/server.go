@@ -128,6 +128,7 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	}
 	appsService.Routes(mux)
 	appsService.ApprovalRoutes(mux, accounts)
+	appsService.DataSourceRoutes(mux, accounts)
 	appsService.HomeRoutes(mux, accounts)
 	appsService.TemplateRoutes(mux, accounts)
 	if opts.AppsReady != nil {
