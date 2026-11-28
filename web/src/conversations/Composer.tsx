@@ -38,6 +38,7 @@ export function Composer({
   onSent,
   agents = [],
   onSwitched,
+  choices,
   children,
 }: {
   workspace: number
@@ -48,6 +49,7 @@ export function Composer({
   onSent: () => void
   agents?: AgentChoice[]
   onSwitched?: (model: ModelRef) => void
+  choices?: () => number
   children?: ReactNode
 }) {
   const t = useT()
@@ -114,6 +116,7 @@ export function Composer({
     const draft = text
     const sentAs = mode
     pendingId.current ??= requestId()
+    const began = choices?.()
     setBusy(true)
     setError(null)
     try {
@@ -127,7 +130,7 @@ export function Composer({
           ...(whenBusy ? { when_busy: whenBusy } : {}),
         }
         const reply = await api<SendReply>(`${base}/messages`, { method: 'POST', body })
-        if (reply?.model) onSwitched?.(reply.model)
+        if (reply?.model && choices?.() === began) onSwitched?.(reply.model)
       }
       pendingId.current = null
       setDrafts((all) => (all[sentAs] === draft ? { ...all, [sentAs]: '' } : all))

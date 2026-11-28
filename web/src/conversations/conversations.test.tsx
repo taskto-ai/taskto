@@ -1022,3 +1022,103 @@ test('a model read back for a conversation left meanwhile does not reach the nex
   const next = (await screen.findByLabelText('Model')) as HTMLSelectElement
   await waitFor(() => expect(next.value).toBe(JSON.stringify(['script', 'script-1'])))
 })
+
+const threeModels = {
+  ...agentCatalog,
+  'GET /api/workspaces/1/models': {
+    body: {
+      providers: [
+        {
+          provider: 'script',
+          name: 'Scripted',
+          scope: 'instance',
+          models: [
+            { id: 'script-1', name: 'Scripted' },
+            { id: 'script-2', name: 'Scripted two' },
+          ],
+        },
+        { provider: 'cli-codex', name: 'Codex', scope: 'cli', models: [{ id: 'default', name: 'Default' }] },
+      ],
+    },
+  },
+  'PUT /api/workspaces/1/conversations/7/model': (call: Call) => ({ body: call.body }),
+}
+
+test('a send reply that arrives after the person picked another model leaves the picker on their choice', async () => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let replied = false
+  const { calls } = await openWith({
+    ...threeModels,
+    'GET /api/workspaces/1/conversations/7/model': () => ({
+      body: replied ? { provider: 'cli-codex', model_id: 'default' } : { provider: 'script', model_id: 'script-1' },
+    }),
+    'POST /api/workspaces/1/conversations/7/messages': async () => {
+      await held
+      replied = true
+      return { status: 202, body: { submission_id: 12, model: { provider: 'cli-codex', model_id: 'default' } } }
+    },
+  })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+
+  fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) one' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true))
+  fireEvent.change(select, { target: { value: JSON.stringify(['script', 'script-2']) } })
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-2'])))
+  const reads = () => calls.filter((c) => c.method === 'GET' && c.path.endsWith('/conversations/7/model')).length
+  const before = reads()
+
+  await act(async () => {
+    release()
+    await held
+  })
+  await waitFor(() => expect(box.value).toBe(''))
+  await act(async () => {})
+  expect(reads()).toBe(before)
+  expect(select.value).toBe(JSON.stringify(['script', 'script-2']))
+})
+
+test('a failed model read back does not replace a model chosen while it was in flight', async () => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let read = 0
+  await openWith({
+    ...threeModels,
+    'GET /api/workspaces/1/conversations/7/model': async () => {
+      read++
+      if (read === 2) {
+        await held
+        return { status: 500, body: { error: 'down' } }
+      }
+      return { body: { provider: 'script', model_id: 'script-1' } }
+    },
+    'POST /api/workspaces/1/conversations/7/messages': {
+      status: 202,
+      body: { submission_id: 12, model: { provider: 'cli-codex', model_id: 'default' } },
+    },
+  })
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-1'])))
+
+  fireEvent.change(box, { target: { value: '@[Codex](agent:cli-codex/default) one' } })
+  fireEvent.keyDown(box, { key: 'Enter' })
+  await waitFor(() => expect(read).toBe(2))
+  fireEvent.change(select, { target: { value: JSON.stringify(['script', 'script-2']) } })
+  await waitFor(() => expect(select.value).toBe(JSON.stringify(['script', 'script-2'])))
+
+  await act(async () => {
+    release()
+    await held
+  })
+  await act(async () => {})
+  expect(select.value).toBe(JSON.stringify(['script', 'script-2']))
+  expect(read).toBe(2)
+})

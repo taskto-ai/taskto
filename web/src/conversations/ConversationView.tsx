@@ -103,8 +103,15 @@ export function ConversationView({
   )
   const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
   const [picked, setPicked] = useState<ModelRef | null>(null)
+  const choices = useRef(0)
+  const choose = (m: ModelRef) => {
+    choices.current++
+    setPicked(m)
+  }
   const readModel = () => {
+    const began = choices.current
     api<ModelRef>(`${base}/model`).then(setPicked, () => {
+      if (choices.current !== began) return
       setPicked(null)
       loadedModel.reload()
     })
@@ -235,6 +242,7 @@ export function ConversationView({
         onSent={onChanged}
         agents={agents}
         onSwitched={readModel}
+        choices={() => choices.current}
       >
         {providers.data && model && (
           <ModelPicker
@@ -243,7 +251,7 @@ export function ConversationView({
             providers={providers.data}
             current={model}
             cli={cli.data}
-            onChosen={setPicked}
+            onChosen={choose}
             disabled={archived || unreadable}
           />
         )}
