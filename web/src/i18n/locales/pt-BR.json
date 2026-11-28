@@ -512,6 +512,24 @@
         "upc_e": "UPC-E"
       }
     },
+    "markdownInput": {
+      "label": "Texto",
+      "modes": "Escrever ou pré-visualizar",
+      "write": "Escrever",
+      "preview": "Pré-visualizar",
+      "toolbar": "Formatação",
+      "bold": "Negrito",
+      "italic": "Itálico",
+      "heading": "Título",
+      "list": "Lista com marcadores",
+      "checklist": "Lista de tarefas",
+      "link": "Link",
+      "count": "{used} de {max}",
+      "empty": "Nada para pré-visualizar",
+      "boldSample": "texto em negrito",
+      "italicSample": "texto em itálico",
+      "linkSample": "texto do link"
+    },
     "dictation": {
       "dictate": "Ditar em {field}",
       "title": "Ditar: fale e depois edite o texto. Sua fala é enviada a este servidor para virar texto, então é preciso estar conectado.",

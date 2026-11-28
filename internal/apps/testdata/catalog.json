@@ -12,6 +12,7 @@
     "component.List",
     "component.LocationInput",
     "component.Markdown",
+    "component.MarkdownInput",
     "component.Modal",
     "component.PhotoInput",
     "component.Photos",
@@ -134,6 +135,14 @@
     "Markdown": [
       "accessibility",
       "text",
+      "weight"
+    ],
+    "MarkdownInput": [
+      "accessibility",
+      "checks",
+      "field",
+      "label",
+      "value",
       "weight"
     ],
     "Modal": [

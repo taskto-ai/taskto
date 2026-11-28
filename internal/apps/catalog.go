@@ -146,6 +146,7 @@ var components = map[string]map[string]prop{
 	"LocationInput":  {"field": req(kString), "label": opt(kDynString), "value": req(kDynValue), "readOnly": opt(kBool)},
 	"SignatureInput": {"field": req(kString), "label": opt(kDynString), "value": req(kDynValue), "readOnly": opt(kBool)},
 	"BarcodeInput":   {"field": req(kString), "label": opt(kDynString), "value": req(kDynString)},
+	"MarkdownInput":  checkable(map[string]prop{"field": req(kString), "label": opt(kDynString), "value": req(kDynString)}),
 	screensComponent: {"current": req(kDynString), "screens": req(kScreenRefs)},
 }
 
@@ -161,6 +162,7 @@ var inputFields = map[string]string{
 	"LocationInput":  TypeLocation,
 	"SignatureInput": TypeSignature,
 	"BarcodeInput":   TypeBarcode,
+	"MarkdownInput":  TypeString,
 }
 
 type function struct {

@@ -1,0 +1,50 @@
+@layer screens {
+  .ui-app-markdown-input {
+    display: grid;
+    gap: var(--space-2);
+    min-inline-size: 0;
+  }
+
+  .ui-app-markdown-input-panel {
+    display: grid;
+    gap: var(--space-2);
+    min-inline-size: 0;
+  }
+
+  .ui-app-markdown-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .ui-app-markdown-tool {
+    min-block-size: var(--control-touch);
+    min-inline-size: var(--control-touch);
+  }
+
+  .ui-app-markdown-glyph {
+    font-weight: 600;
+  }
+
+  .ui-app-markdown-glyph-italic {
+    font-style: italic;
+  }
+
+  .ui-app-markdown-textarea {
+    field-sizing: content;
+    min-block-size: 8lh;
+    max-block-size: 16lh;
+    resize: vertical;
+  }
+
+  .ui-app-markdown-empty,
+  .ui-app-markdown-count {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-app-markdown-count[data-full] {
+    color: var(--color-danger);
+  }
+}

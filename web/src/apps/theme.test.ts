@@ -29,6 +29,7 @@ const OWN = [
   'BarcodeInput',
   'LocationInput',
   'Markdown',
+  'MarkdownInput',
   'PhotoInput',
   'Photos',
   'Screens',

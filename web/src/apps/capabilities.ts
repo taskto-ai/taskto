@@ -21,6 +21,7 @@ export const COMPONENTS = [
   'List',
   'LocationInput',
   'Markdown',
+  'MarkdownInput',
   'Modal',
   'PhotoInput',
   'Photos',
