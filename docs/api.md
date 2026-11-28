@@ -5708,6 +5708,11 @@ Sends a message: `{"content": "…", "when_busy": "steer", "request_id": "…", 
 `202 {"submission_id": 12}`; the answer arrives through the events stream. `409` for an
 archived conversation.
 
+Each person-sent message is stored as a `taskto.input` entry. Its `data` includes version `1`
+and the sender's user ID; optional `text` and `attached` fields preserve the original text and
+conversation links separately from the content sent to the model. Exported conversations keep
+these entries and their data unchanged. Older `pi.user` entries remain readable.
+
 Sending and switching the model check access and the archive again just before passing the
 request to the agent runtime, after any wait for it to be ready. An archive, or a removal from
 the workspace, that commits while that call is in flight doesn't stop it. That is accepted:

@@ -14,7 +14,7 @@ import {
   type SubmissionId,
 } from '@earendil-works/pi-durable'
 import { cliTools } from './cli.js'
-import { InputError, type NoteInput, noteEntry, parseNote } from './input.js'
+import { InputError, type NoteInput, noteEntry, parseNote, type TasktoInputEntry, validInputEntry } from './input.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
 import { Lifecycle } from './lifecycle.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
@@ -277,6 +277,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (resource === 'conversations' && parts.length === 3) {
     if (req.method === 'POST' && action === 'submit') {
       const body = await readJson(req)
+      let entry: TasktoInputEntry | undefined
       if (typeof body.content !== 'string') throw new HttpError(400, 'content must be a string')
       const content = body.content
       const whenBusy = body.whenBusy
@@ -292,6 +293,10 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       if (body.language !== undefined && !validLanguage(body.language)) {
         throw new HttpError(400, 'language must be a BCP 47 tag such as "pt-BR", or ""')
       }
+      if (body.entry !== undefined) {
+        if (!validInputEntry(body.entry)) throw new HttpError(400, 'entry must be a bounded taskto.input entry')
+        entry = body.entry
+      }
       const conv = await conversation(id)
       const { capability, language } = body as { capability?: string; language?: string }
       let submissionId: SubmissionId | undefined
@@ -300,6 +305,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         submissionId = await conv.submit(tx, {
           type: 'input',
           content,
+          ...(entry !== undefined ? { entry } : {}),
           ...(whenBusy ? { whenBusy } : {}),
           ...(typeof body.requestId === 'string' ? { requestId: body.requestId } : {}),
         })

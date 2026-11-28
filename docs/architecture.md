@@ -10,6 +10,9 @@ taskto.ai combines three things that feed each other:
 
 On top of these, users build **personal apps** by asking the agent.
 
+Conversation entries keep the model's messages and TaskTo input metadata together; person-sent
+inputs identify their author, while server-started turns omit one.
+
 ## Principles
 
 - **The same binary works for one person or a company.** The data model has workspaces and
