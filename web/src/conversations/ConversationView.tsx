@@ -113,14 +113,9 @@ export function ConversationView({
       return m
     })
   }, [base])
-  const modelWrites = useRef(0)
-  const claimModel = () => {
-    const mine = ++modelWrites.current
-    return (m: ModelRef) => {
-      if (mine !== modelWrites.current) return
-      pickedAt.current = ++order.current
-      setPicked(m)
-    }
+  const claimModel = () => (m: ModelRef) => {
+    pickedAt.current = ++order.current
+    setPicked(m)
   }
   const model = picked ?? loadedModel.data
   const turnKey = view ? (running ? 'running' : `idle:${messages.at(-1)?.key ?? ''}`) : undefined

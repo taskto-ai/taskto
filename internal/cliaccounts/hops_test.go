@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -191,6 +192,36 @@ func TestAWaitingReattachLeavesWhenItsCallerDoes(t *testing.T) {
 	<-first
 	if len(models.refs) != 1 {
 		t.Fatalf("model changes = %v", models.refs)
+	}
+}
+
+func TestAHopThatEndedWithItsCallerIsNoDecisionForTheNextRequest(t *testing.T) {
+	e, conv, models := limitedClaudeEnv(t, true)
+	e.provide(mine(e, "api"), "big")
+	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
+	reached := make(chan struct{})
+	var calls atomic.Int32
+	e.svc.SetModelSetter(func(ctx context.Context, agent int64, provider, model string) error {
+		if calls.Add(1) == 1 {
+			close(reached)
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return models.set(ctx, agent, provider, model)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	left := make(chan struct{})
+	go func() {
+		defer close(left)
+		e.turnWith(ctx, conv, limitedBody)
+	}()
+	<-reached
+	cancel()
+	<-left
+	d := done(e.turn(conv, limitedBody))
+	if !d.Continue || len(models.refs) != 1 {
+		t.Fatalf("the next request got %+v, model changes %v", d, models.refs)
 	}
 }
 
