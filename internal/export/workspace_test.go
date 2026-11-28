@@ -42,7 +42,7 @@ func memberless(t *testing.T, extra int) (*run, *sql.DB, *db.Hooks) {
 			t.Fatal(err)
 		}
 	}
-	s := New(sqlDB, nil, nil, nil, nil, nil, Options{})
+	s := New(sqlDB, nil, nil, nil, nil, nil, nil, Options{})
 	ex := &run{svc: s, user: auth.User{ID: admin}, ws: auth.Membership{WorkspaceID: ws}, at: s.now(), names: newNames()}
 	ex.mf = manifest{Format: Format, Scope: "workspace", Counts: map[string]int{}, Spaces: []manifestSpace{}, Skipped: []skipped{}}
 	return ex, sqlDB, hooks

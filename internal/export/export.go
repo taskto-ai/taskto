@@ -23,6 +23,7 @@ import (
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/desk"
 	"taskto.ai/taskto/internal/knowledge"
 )
 
@@ -46,6 +47,7 @@ type Service struct {
 	boards        *boards.Service
 	apps          *apps.Service
 	conversations *conversations.Service
+	desks         *desk.Service
 	gate          *gate
 	tickets       *tickets
 	wsTickets     *tickets
@@ -54,13 +56,13 @@ type Service struct {
 	now           func() time.Time
 }
 
-func New(sqlDB *sql.DB, spaces *access.Checker, kb *knowledge.Store, b *boards.Service, a *apps.Service, convs *conversations.Service, opts Options) *Service {
+func New(sqlDB *sql.DB, spaces *access.Checker, kb *knowledge.Store, b *boards.Service, a *apps.Service, convs *conversations.Service, desks *desk.Service, opts Options) *Service {
 	g := newGate(opts.PerPerson, opts.Window, opts.AtOnce, opts.Now)
 	idle := opts.IdleTimeout
 	if idle <= 0 {
 		idle = defaultIdleTimeout
 	}
-	return &Service{db: sqlDB, spaces: spaces, knowledge: kb, boards: b, apps: a, conversations: convs, gate: g,
+	return &Service{db: sqlDB, spaces: spaces, knowledge: kb, boards: b, apps: a, conversations: convs, desks: desks, gate: g,
 		tickets: newTickets(opts.TicketTTL), wsTickets: newTickets(opts.TicketTTL), idle: idle, now: g.now}
 }
 
@@ -310,7 +312,7 @@ func (s *Service) prepare(ctx context.Context, u auth.User, m auth.Membership) (
 		Format: Format, Scope: "user", ExportedAt: ex.at.Format(time.RFC3339),
 		Workspace: manifestWS{ID: m.WorkspaceID, Name: m.WorkspaceName},
 		User:      manifestUser{ID: u.ID, Name: u.Name, Email: u.Email},
-		Counts:    map[string]int{"documents": 0, "boards": 0, "cards": 0, "comments": 0, "conversations": 0, "apps": 0, "records": 0},
+		Counts:    map[string]int{"documents": 0, "boards": 0, "cards": 0, "comments": 0, "conversations": 0, "desks": 0, "apps": 0, "records": 0},
 		Skipped:   []skipped{},
 	}
 	return ex, nil
@@ -318,7 +320,7 @@ func (s *Service) prepare(ctx context.Context, u auth.User, m auth.Membership) (
 
 func (ex *run) write(ctx context.Context, out io.Writer) error {
 	ex.zw = zip.NewWriter(out)
-	steps := []func(context.Context) error{ex.privateDocuments, ex.privateBoards, ex.conversations, ex.privateApps}
+	steps := []func(context.Context) error{ex.privateDocuments, ex.privateBoards, ex.conversations, ex.desks, ex.privateApps}
 	if ex.mf.Scope == "workspace" {
 		steps = []func(context.Context) error{ex.members, ex.spaces}
 	}

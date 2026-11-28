@@ -27,6 +27,20 @@ test("an API error shows in the user's language by its code, with its params", a
   expect(errorText(name)).toBe('Um nome precisa ter de 1 a 100 caracteres.')
 })
 
+test("an invalid desk layout says its reason in the user's language, and an unknown reason as it came", async () => {
+  const refused = (reason: string) =>
+    new ApiError(400, 'invalid desk layout', { error: 'invalid desk layout', code: 'desk_invalid', params: { reason } })
+  expect(errorText(refused('too_many_tabs'))).toBe(
+    'This desk layout can’t be saved: it has more than 20 tabs in a group or 60 in all.',
+  )
+  expect(errorText(refused('invalid_path'))).toBe(
+    'This desk layout can’t be saved: a tab’s address isn’t a page of this workspace.',
+  )
+  expect(errorText(refused('from_a_newer_server'))).toBe('This desk layout can’t be saved: from_a_newer_server.')
+  await setPreferences({ user: 'pt-BR' })
+  expect(errorText(refused('too_large'))).toBe('Não foi possível salvar este layout da mesa: é maior que 32 KiB.')
+})
+
 test("a code the web app doesn't know shows the server's words; no words, its status", () => {
   const newer = new ApiError(409, 'something newer', { error: 'something newer', code: 'from_a_newer_server' })
   expect(errorText(newer)).toBe('something newer')

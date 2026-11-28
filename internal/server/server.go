@@ -86,7 +86,8 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 			return ok, err
 		},
 	}).Routes(mux, accounts)
-	desk.New(sqlDB).Routes(mux, accounts)
+	desks := desk.New(sqlDB)
+	desks.Routes(mux, accounts)
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)
 	if opts.Live != nil {
@@ -136,7 +137,7 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	if opts.Notifications != nil {
 		opts.Notifications.Routes(mux, accounts)
 	}
-	export.New(sqlDB, spaces, kb, boardSvc, appsService, opts.Conversations, opts.Export).Routes(mux, accounts)
+	export.New(sqlDB, spaces, kb, boardSvc, appsService, opts.Conversations, desks, opts.Export).Routes(mux, accounts)
 	if opts.Providers != nil {
 		opts.Providers.Routes(mux, accounts)
 	}

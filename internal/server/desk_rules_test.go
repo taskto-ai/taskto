@@ -82,6 +82,7 @@ func TestDeskRequestsAreCappedAndStrict(t *testing.T) {
 		return []byte(fmt.Sprintf(`{"version":%d,"layout":%s%s}`, version, layout, extra))
 	}
 	count := func() int64 { return s.scalar(`SELECT count(*) FROM desks`) }
+	sized := func(n int) string { return "{" + strings.Repeat(" ", n-len(valid)) + valid[1:] }
 
 	for name, c := range map[string]struct {
 		raw    []byte
@@ -89,7 +90,7 @@ func TestDeskRequestsAreCappedAndStrict(t *testing.T) {
 		code   string
 	}{
 		"a body of a megabyte":            {body(0, valid, `,"pad":"`+strings.Repeat("x", 1<<20)+`"`), http.StatusRequestEntityTooLarge, "request_too_large"},
-		"a body one byte over 32 KiB":     {body(0, valid+strings.Repeat(" ", 32*1024+1-len(body(0, valid, ""))), ""), http.StatusRequestEntityTooLarge, "request_too_large"},
+		"a layout one byte over 32 KiB":   {body(0, sized(32*1024+1), ""), http.StatusBadRequest, "desk_invalid"},
 		"a layout padded past the cap":    {body(0, valid+strings.Repeat(" ", 40*1024), ""), http.StatusRequestEntityTooLarge, "request_too_large"},
 		"an unknown field in the request": {body(0, valid, `,"extra":true`), http.StatusBadRequest, "invalid_json"},
 		"data after the request":          {append(body(0, valid, ""), []byte(` {}`)...), http.StatusBadRequest, "invalid_json"},
@@ -123,9 +124,17 @@ func TestDeskRequestsAreCappedAndStrict(t *testing.T) {
 		t.Fatalf("a layout too large as stored left %d rows", n)
 	}
 
-	padded := body(0, valid, "")
+	exact := body(0, sized(32*1024), "")
+	if code, got := s.deskBody(s.alice.cookie, http.MethodPut, path, exact); code != http.StatusOK || got["version"] != float64(1) {
+		t.Fatalf("a layout of exactly 32 KiB = %d %v", code, got)
+	}
+	if code, got := s.deskBody(s.alice.cookie, http.MethodPut, path, body(1, sized(32*1024), "")); code != http.StatusOK || got["version"] != float64(2) {
+		t.Fatalf("a second save of exactly 32 KiB = %d %v", code, got)
+	}
+
+	padded := body(2, valid, "")
 	padded = append(padded, bytes.Repeat([]byte(" "), 30*1024)...)
-	if code, got := s.deskBody(s.alice.cookie, http.MethodPut, path, padded); code != http.StatusOK || got["version"] != float64(1) {
+	if code, got := s.deskBody(s.alice.cookie, http.MethodPut, path, padded); code != http.StatusOK || got["version"] != float64(3) {
 		t.Fatalf("a request under the cap = %d %v", code, got)
 	}
 	_, stored := s.browser(s.alice.cookie, http.MethodGet, deskPath(s.one, "main", ""), nil)
