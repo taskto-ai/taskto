@@ -119,6 +119,13 @@ func (s *sched) exec(query string, args ...any) {
 	}
 }
 
+func (s *sched) one(dest any, query string, args ...any) {
+	s.e.t.Helper()
+	if err := s.e.db.QueryRow(query, args...).Scan(dest); err != nil {
+		s.e.t.Fatal(err)
+	}
+}
+
 func (s *sched) at(t time.Time) { s.clock = t }
 
 func (s *sched) runDue() { s.jobs.RunDue(context.Background()) }
@@ -126,9 +133,7 @@ func (s *sched) runDue() { s.jobs.RunDue(context.Background()) }
 func (s *sched) lastError(a App) string {
 	s.e.t.Helper()
 	var code *string
-	if err := s.e.db.QueryRow(`SELECT last_error FROM app_schedules WHERE app_id = ? AND name = ?`, a.ID, lunch).Scan(&code); err != nil {
-		s.e.t.Fatal(err)
-	}
+	s.one(&code, `SELECT last_error FROM app_schedules WHERE app_id = ? AND name = ?`, a.ID, lunch)
 	if code == nil {
 		return ""
 	}
@@ -138,9 +143,7 @@ func (s *sched) lastError(a App) string {
 func (s *sched) notices(user int64) int {
 	s.e.t.Helper()
 	var n int
-	if err := s.e.db.QueryRow(`SELECT count(*) FROM notifications WHERE user_id = ? AND kind = ?`, user, notifications.KindAppScheduleFailed).Scan(&n); err != nil {
-		s.e.t.Fatal(err)
-	}
+	s.one(&n, `SELECT count(*) FROM notifications WHERE user_id = ? AND kind = ?`, user, notifications.KindAppScheduleFailed)
 	return n
 }
 
@@ -164,6 +167,7 @@ func TestDefinitionChecksSchedules(t *testing.T) {
 		},
 		"a today field that is not a date": func(d *Definition) {
 			sc := d.Schedules[lunch]
+			delete(sc.Values, "description")
 			sc.TodayFields = []string{"description"}
 			d.Schedules[lunch] = sc
 		},
@@ -193,10 +197,23 @@ func TestDefinitionChecksSchedules(t *testing.T) {
 			}
 		})
 	}
-	t.Run("an attachment field", func(t *testing.T) {
-		d := s.definition()
-		d.Collection.Fields = append(d.Collection.Fields, Field{Name: "photo", Type: TypeAttachment})
-		d.Schedules[lunch].Values["photo"] = "x"
+	for name, field := range map[string]Field{
+		"an attachment field": {Name: "photo", Type: TypeAttachment},
+		"a location field":    {Name: "photo", Type: TypeLocation},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := s.definition()
+			d.Collection.Fields = append(d.Collection.Fields, field)
+			d.Schedules[lunch].Values["photo"] = map[string]any{"lat": 38.7, "lon": -9.1, "source": "manual", "captured_at": "2026-01-01T00:00:00Z"}
+			if _, err := d.Check(); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Check = %v, want it refused", err)
+			}
+		})
+	}
+	t.Run("an action that only opens a screen", func(t *testing.T) {
+		d := planner(t)
+		d.Schedules = map[string]Schedule{lunch: {Action: "new_task",
+			Calendar: schedule.Calendar{At: "09:00", Zone: "Europe/Lisbon"}}}
 		if _, err := d.Check(); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("Check = %v, want it refused", err)
 		}
@@ -223,7 +240,7 @@ func TestPublishPlansTheJobAtTheNextOccurrenceAsThePublisher(t *testing.T) {
 		t.Fatalf("the payload holds record values: %s", job.Payload)
 	}
 	var runner int64
-	s.e.db.QueryRow(`SELECT runner_id FROM app_schedules WHERE app_id = ? AND name = ?`, a.ID, lunch).Scan(&runner)
+	s.one(&runner, `SELECT runner_id FROM app_schedules WHERE app_id = ? AND name = ?`, a.ID, lunch)
 	if runner != s.alice.id {
 		t.Fatalf("runner = %d, want %d", runner, s.alice.id)
 	}
@@ -238,7 +255,7 @@ func TestPublishingWithoutTheScheduleCancelsItsJob(t *testing.T) {
 	s.publish(s.alice, s.shared, decode[App](t, rec))
 	s.noJob(a, s.alice.id)
 	var n int
-	s.e.db.QueryRow(`SELECT count(*) FROM app_schedules WHERE app_id = ?`, a.ID).Scan(&n)
+	s.one(&n, `SELECT count(*) FROM app_schedules WHERE app_id = ?`, a.ID)
 	if n != 0 {
 		t.Fatalf("%d schedule rows are left", n)
 	}
@@ -273,6 +290,25 @@ func TestRollbackPlansTheJobAsThePersonRollingBack(t *testing.T) {
 	}
 }
 
+func TestAPublishByAnotherPersonMovesTheScheduleToThem(t *testing.T) {
+	s := newSched(t)
+	a := s.create(s.alice, s.shared, s.definition())
+	d := s.definition()
+	d.Collection.Fields = append(d.Collection.Fields, Field{Name: "note", Type: TypeString})
+	rec := s.owner.do(http.MethodPatch, appPath(s.shared, a.ID, ""), map[string]any{"version": s.current(s.owner, s.shared, a).Version, "definition": d})
+	expect(t, rec, http.StatusOK)
+	s.publish(s.owner, s.shared, decode[App](t, rec))
+	s.noJob(a, s.alice.id)
+	s.mustJob(a, s.owner.id)
+	s.at(monday.Add(time.Minute))
+	s.runDue()
+	var by int64
+	s.one(&by, `SELECT created_by FROM app_rows WHERE app_id = ? ORDER BY id DESC LIMIT 1`, a.ID)
+	if by != s.owner.id || s.lunches(a) != 1 {
+		t.Fatalf("created by %d with %d lunches, want one by the new publisher %d", by, s.lunches(a), s.owner.id)
+	}
+}
+
 func TestArchivingCancelsTheJobAndRestoringPlansItAgainForTheSameRunner(t *testing.T) {
 	s := newSched(t)
 	a := s.create(s.alice, s.shared, s.definition())
@@ -282,7 +318,7 @@ func TestArchivingCancelsTheJobAndRestoringPlansItAgainForTheSameRunner(t *testi
 	patch(true)
 	s.noJob(a, s.alice.id)
 	var n int
-	s.e.db.QueryRow(`SELECT count(*) FROM app_schedules WHERE app_id = ?`, a.ID).Scan(&n)
+	s.one(&n, `SELECT count(*) FROM app_schedules WHERE app_id = ?`, a.ID)
 	if n != 1 {
 		t.Fatalf("archiving dropped the schedule: %d rows", n)
 	}
@@ -303,7 +339,7 @@ func TestMovingTheAppMovesTheJobOnlyWhereTheRunnerCanRead(t *testing.T) {
 	if job := s.mustJob(a, s.alice.id); job.SpaceID != s.alicePrivate.ID {
 		t.Fatalf("job = %+v, want the space it moved to", job)
 	}
-	s.e.db.Exec(`UPDATE apps SET space_id = ? WHERE id = ?`, s.shared.ID, a.ID)
+	s.exec(`UPDATE apps SET space_id = ? WHERE id = ?`, s.shared.ID, a.ID)
 	ops := s.e.createShared(s.owner, s.ws, "Ops")
 	expect(t, s.owner.do(http.MethodPost, appPath(s.shared, a.ID, "/move"), map[string]any{"version": s.current(s.owner, s.shared, a).Version, "space_id": ops.ID}), http.StatusOK)
 	s.noJob(a, s.alice.id)
@@ -327,7 +363,7 @@ func TestADueJobInsertsOneRecordInTheCalendarsZoneAndPlansTheNext(t *testing.T) 
 		t.Fatalf("records = %v", got)
 	}
 	var by int64
-	s.e.db.QueryRow(`SELECT created_by FROM app_rows WHERE app_id = ? ORDER BY id DESC LIMIT 1`, a.ID).Scan(&by)
+	s.one(&by, `SELECT created_by FROM app_rows WHERE app_id = ? ORDER BY id DESC LIMIT 1`, a.ID)
 	if by != s.alice.id {
 		t.Fatalf("the record was made by %d, want the runner %d", by, s.alice.id)
 	}
@@ -492,7 +528,7 @@ func TestAScheduleWithoutARunnerIsNotPlanned(t *testing.T) {
 	patch(true)
 	patch(false)
 	var n int
-	s.e.db.QueryRow(`SELECT count(*) FROM scheduled_jobs WHERE kind = ?`, string(KindScheduledAction)).Scan(&n)
+	s.one(&n, `SELECT count(*) FROM scheduled_jobs WHERE kind = ?`, string(KindScheduledAction))
 	if n != 0 {
 		t.Fatalf("%d jobs planned with no runner", n)
 	}

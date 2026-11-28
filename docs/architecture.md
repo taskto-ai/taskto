@@ -279,6 +279,14 @@ no extra process); it has no feature of its own.
   in the handler's transaction after confirming the job is still current, as
   `notifications.digestNext` does. The database job remains a single due time, so retries retain
   the same occurrence and idempotency key.
+- **Second user: an app's schedules.** A live release that declares `schedules` has one
+  `app.scheduled-action` job per schedule, for the person who published it, keyed by app and
+  name, with only those two in its payload. The jobs are made, moved and cancelled in the
+  transactions of publish, rollback, archive and move, and removed by a trigger when a schedule or its
+  app goes. The handler re-reads the schedule row and the live release, runs the `insert` action
+  through `apps.Service.RunAction` as the runner (so the app's access check runs again at the write),
+  with an operation key made from `Job.Occurrence()`, and plans the next occurrence only in a
+  transaction where `Holds` is true ([api.md](api.md#schedules-of-an-app)).
 - **First user: due-date reminders.** A card with a due date and a person as its assignee has two
   jobs for that person, `card.due-reminder` and `card.overdue`, keyed by the card. They are made,
   moved and cancelled in the transaction of the card change that needs them, and their handlers

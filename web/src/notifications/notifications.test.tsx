@@ -173,6 +173,7 @@ test('nothing is asked or subscribed until the person turns push on, and then on
       card_comment: 'A card of yours has a new comment',
       card_mention: 'You were mentioned in a comment',
       app_effect_failed: 'An app action needs your attention',
+      app_schedule_failed: 'A scheduled app action needs your attention',
       integration_event: 'A payment needs an admin',
       changed: 'Something changed',
     },
@@ -670,6 +671,7 @@ const emailChoices = (over: Record<string, unknown> = {}) => ({
     card_due: 'off',
     card_overdue: 'off',
     app_effect_failed: 'off',
+    app_schedule_failed: 'off',
   },
   digest: { hour: 8, timezone: 'UTC', chosen: false },
   ...over,
@@ -729,6 +731,7 @@ test('every kind that can be mailed has a choice of its own, off until chosen', 
     card_due: 'A card of yours is due',
     card_overdue: 'A card of yours is overdue',
     app_effect_failed: 'An app action needs your attention',
+    app_schedule_failed: 'A scheduled app action needs your attention',
   }
   for (const [kind, label] of Object.entries(labels)) {
     const select = (await screen.findByLabelText(label)) as HTMLSelectElement

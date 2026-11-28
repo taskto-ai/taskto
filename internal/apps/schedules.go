@@ -203,9 +203,6 @@ type scheduleSlot struct {
 }
 
 func (s *Service) planSchedule(ctx context.Context, tx *sql.Tx, p scheduleSlot, sch Schedule) error {
-	if p.runner == 0 {
-		return nil
-	}
 	key := scheduleKey(p.app, p.name)
 	if p.archived {
 		_, err := s.sched.Cancel(ctx, tx, p.runner, KindScheduledAction, key)

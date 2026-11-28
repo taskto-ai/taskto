@@ -3081,7 +3081,7 @@ The server checks every definition when it is saved, strictly, and refuses it (`
 saying what is wrong) unless:
 
 - **definition_version** is the version of the definition's own format, taskto.ai's,
-  independent of the A2UI protocol's version: `3` today (left out, it is the server's
+  independent of the A2UI protocol's version: `4` today (left out, it is the server's
   current). A higher one is refused (`app_definition_version`), and a client that finds a
   release in a version it doesn't read asks to be updated instead of drawing it. **Version 1**
   (one screen; `string`, `number`, `boolean` and `date` fields; `insert`, `update` and
@@ -3090,7 +3090,8 @@ saying what is wrong) unless:
   [time and choice fields](#fields-and-rules), [rules](#fields-and-rules), series, and
   contributions. **Version 3** adds
   [integrations](#integrations-of-an-app): a definition that says `1` or `2` can't declare them or use
-  the `create_payment_link` effect (`400`).
+  the `create_payment_link` effect (`400`). **Version 4** adds
+  [schedules](#schedules-of-an-app): a definition that says `1`, `2` or `3` can't declare them (`400`).
 - **series** declares up to 10 count, sum or average aggregates grouped by a choice, boolean, text or
   date field. A date group needs a `day`, `week` or `month` bucket; it keeps the latest 12 buckets by
   default, or 1–90 when `last` is set. A series can filter rows with `where` and split into one line
@@ -3427,6 +3428,49 @@ Callers who may design the app. `{"version", "space_id", "board_id"}`: gives eve
 draft that has no board chosen the board, which the caller must be able to write (`400
 app_effect_target`; `400` if no effect waits for one). `200` with the app, as a change of the
 draft is (`409 app_changed` with the current app if it moved).
+
+### Schedules of an app
+
+An app may run one of its `insert` actions on a calendar, with the values it declares, while
+nobody has the app open. A release declares up to 5 schedules in the top-level `schedules` block
+of its definition (version 4, strictly checked when saved; the release then `requires`
+`app.schedules`):
+
+```json
+"schedules": {"daily_checkin": {"action": "add_checkin",
+  "calendar": {"days": ["mon", "tue", "wed", "thu", "fri"], "at": "09:00", "time_zone": "Europe/Lisbon"},
+  "values": {"status": "open"}, "today_fields": ["date"]}}
+```
+
+- The `action` is an `insert` action. `values` name fields of the collection with a value of the
+  field's type, `today_fields` name `date` fields that get the day of the run in the calendar's
+  zone (`YYYY-MM-DD`); an attachment, a signature or a location can't be set, because only a
+  person can capture one. The record the schedule would insert must pass the collection's checks
+  (required fields and rules) when the definition is saved. The `calendar` is the scheduler's
+  ([architecture.md](architecture.md#scheduled-work)), a time or an interval of at least an hour,
+  with a time zone that is always named.
+- **It runs as one person, with their rights at the time of every run.** The runner is the person
+  who published the release that declares the schedule, or who rolled back to it. A run is the
+  runner's own `insert` action: the record is theirs in the history, and nobody else, the agent
+  and the server included, becomes the actor. Each run checks again that the runner can still
+  read the space, is not disabled (a disabled person's runs wait until they are enabled), can
+  submit to the app, that the app is live, not archived and still in the space the job was
+  planned for. A person who lost any of these stops the schedule: the run inserts nothing, the
+  job ends, the schedule's `last_error` is `access` and, if they are still in the workspace, they
+  get an `app_schedule_failed` notification. Publishing again, or a rollback, plans it again for
+  whoever does it. A run that can't insert because the collection is full or the record no longer
+  fits notes `full` or `invalid` the same way, and the next occurrence still runs.
+- **Once per occurrence.** A run's operation key comes from the job's occurrence, so a retry, a
+  restart or a lease taken again inserts one record; the next occurrence is planned in the
+  transaction that checks the job's lease still holds. A server that was off runs the missed
+  occurrence once and then the next one on the calendar.
+- **The jobs follow the app.** Publishing and rolling back plan the jobs of the release now live
+  and cancel those it no longer declares; archiving cancels them and restoring plans them again for
+  the same runner; moving the app plans them in its new space, or cancels them when the runner
+  can't read it. Removing the app removes its jobs. A person added back to a space doesn't revive
+  a schedule that ended: publishing again does. The job's payload holds the app's ID and the
+  schedule's name only; the values stay in the release.
+- Schedules use only their runner's rights, so they record no audit event of their own.
 
 ### Integrations of an app
 
