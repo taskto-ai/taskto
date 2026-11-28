@@ -211,7 +211,7 @@ test('only http and https addresses are web addresses', () => {
 })
 
 function heldFetch(urls: string[]) {
-  const answers = new Map<string, (res: Response) => void>()
+  const answers = new Map<string, ((res: Response) => void)[]>()
   const requested: string[] = []
   const headers: Record<string, string>[] = []
   vi.stubGlobal(
@@ -221,15 +221,17 @@ function heldFetch(urls: string[]) {
       requested.push(url)
       headers.push(Object.fromEntries(new Headers(init?.headers).entries()))
       if (!urls.includes(url)) return new Response('{}', { status: 404 })
-      return new Promise<Response>((resolve) => answers.set(url, resolve))
+      return new Promise<Response>((resolve) => answers.set(url, [...(answers.get(url) ?? []), resolve]))
     }),
   )
   const bytes = (...values: number[]) => new Response(new Uint8Array(values))
+  const latest = (url: string) => answers.get(url)?.at(-1)
   return {
     requested,
     headers,
-    answer: (url: string, ...values: number[]) => answers.get(url)?.(bytes(...values)),
-    answerWith: (url: string, res: Response) => answers.get(url)?.(res),
+    answer: (url: string, ...values: number[]) => latest(url)?.(bytes(...values)),
+    answerWith: (url: string, res: Response) => latest(url)?.(res),
+    answerRequest: (url: string, index: number, ...values: number[]) => answers.get(url)?.[index]?.(bytes(...values)),
   }
 }
 
@@ -283,17 +285,15 @@ test('a frame that is closed while its renderer runs reports nothing afterwards'
   let fail: (e: Error) => void = () => {}
   const done = vi.fn()
   const failed = vi.fn()
-  const slow = () => new Promise<void>((resolve) => (finish = resolve))
-  const broken = () => new Promise<void>((_, reject) => (fail = reject))
+  const slow = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)))
+  const broken = vi.fn(() => new Promise<void>((_, reject) => (fail = reject)))
   const first = render(<PreviewFrame title="a" render={slow} onRendered={done} onFailed={failed} />)
-  await waitFor(() => expect(finish).not.toBe(undefined))
-  await waitFor(() => expect((screen.getByTitle('a') as HTMLIFrameElement).contentDocument?.body).toBeTruthy())
+  await waitFor(() => expect(slow).toHaveBeenCalledOnce())
   first.unmount()
   finish()
-  await Promise.resolve()
-  const second = render(<PreviewFrame title="b" render={broken} onRendered={done} onFailed={failed} />)
-  await waitFor(() => expect(document.querySelector('iframe[title="b"]')).toBeTruthy())
   await new Promise((r) => setTimeout(r, 0))
+  const second = render(<PreviewFrame title="b" render={broken} onRendered={done} onFailed={failed} />)
+  await waitFor(() => expect(broken).toHaveBeenCalledOnce())
   second.unmount()
   fail(new Error('late'))
   await new Promise((r) => setTimeout(r, 0))
@@ -468,9 +468,13 @@ test('a version that is restored while the first is still downloading shows only
   await waitFor(() => expect(net.requested).toEqual([RAW]))
   rerender(<Content url={url} doc={{ ...first, version: 'b'.repeat(40) }} onLink={() => null} />)
   await waitFor(() => expect(net.requested).toEqual([RAW, RAW]))
-  await act(async () => net.answer(RAW, 2, 2))
+  await act(async () => net.answerRequest(RAW, 1, 2, 2))
   await waitFor(() => expect(rendered).toHaveBeenCalledOnce())
   expect([...new Uint8Array(rendered.mock.calls[0][0])]).toEqual([2, 2])
+  await act(async () => net.answerRequest(RAW, 0, 1, 1))
+  expect(rendered).toHaveBeenCalledOnce()
+  expect([...new Uint8Array(rendered.mock.calls[0][0])]).toEqual([2, 2])
+  expect(frame().contentDocument?.querySelector('h1')?.textContent).toBe('Master agreement')
 })
 
 const SIGN_INS: [string, () => void][] = [
