@@ -338,6 +338,9 @@ func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.P
 			} else {
 				next, notice = s.switchAfter(ctx, out, p, req, t, &res, id, nextID, tried, n < maxSwitches)
 			}
+			if res.hop != nil && s.isStopped(id) {
+				res.hop = nil
+			}
 		}
 		if next == nil {
 			s.finish(out, res, offset)

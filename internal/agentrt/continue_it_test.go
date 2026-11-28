@@ -361,6 +361,28 @@ func TestAContinuedRunKeepsItsModelWhileItIsRunning(t *testing.T) {
 	}
 }
 
+func TestAModelWriteAdmittedBeforeAContinueDoesNotLandAfterTheContinuedRunEnds(t *testing.T) {
+	s := startSidecar(t, append(twoScriptModels(t), "TASKTO_AGENT_TEST_MODEL_PAUSE_MS=1500")...)
+	ctx := ctxFor(t)
+	conv := failedConversation(t, s)
+	held := make(chan error, 1)
+	go func() { held <- s.client.SetModel(ctx, conv, scriptModel) }()
+	waitForOutput(t, s, "test: the model write is waiting before its commit")
+	sub, _, err := s.client.Continue(ctx, conv, backupModel, lastEntryID(t, s.client, conv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	}
+	if err := <-held; conflictReason(err) != "busy" {
+		t.Fatalf("a model write that was admitted before the continue, landing after its run ended: err = %v, want a 409 with reason busy", err)
+	}
+	if got, err := s.client.Model(ctx, conv); err != nil || got != backupModel {
+		t.Fatalf("the conversation's model = %+v, %v; want the continue's backup", got, err)
+	}
+}
+
 func TestAnEntryThatAContinueConsumedIsNotContinuedAgainWhenTheRunAddedNoEntry(t *testing.T) {
 	s := startSidecar(t, twoScriptModels(t)...)
 	ctx := ctxFor(t)

@@ -8,6 +8,7 @@ import { LOGIN_POLL_MS } from '../settings/CliAccountsTab'
 import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
 import { QUESTIONS_POLL_MS } from './CliPermissions'
 import { ConversationsPage } from './ConversationsPage'
+import { ConversationView } from './ConversationView'
 import { reconnectAccount } from './ReconnectBanner'
 import { pendingHelp, transcript } from './transcript'
 
@@ -715,4 +716,43 @@ test('a read that a newer one replaced does not retire the pick when it ends', a
   await act(async () => hold?.({ body: { provider: 'cli-claude', model_id: 'default' } }))
   await new Promise((resolve) => setTimeout(resolve, 50))
   expect(select.value).toBe(refOf('cli-claude', 'opus'))
+})
+
+test('a model write that ends after the view moved to another conversation does not set that conversation’s model', async () => {
+  let release: (v: { body: unknown }) => void = () => {}
+  const held = new Promise<{ body: unknown }>((resolve) => {
+    release = resolve
+  })
+  fakeFetch({
+    ...cliRoutes,
+    'GET /api/workspaces/1/conversations/7': { body: conversation },
+    'GET /api/workspaces/1/conversations/8': { body: { ...conversation, id: 8 } },
+    'GET /api/workspaces/1/conversations/7/model': { body: { provider: 'cli-claude', model_id: 'default' } },
+    'GET /api/workspaces/1/conversations/8/model': { body: { provider: 'u2-home', model_id: 'llama' } },
+    'PUT /api/workspaces/1/conversations/7/model': () => held,
+  })
+  const { sources, factory } = fakeStreams()
+  const view = (id: number) => (
+    <ConversationView workspace={1} id={id} backHref="/w/1/conversations" onChanged={() => {}} streams={factory} />
+  )
+  const { rerender } = render(view(7))
+  await waitFor(() => expect(sources).toHaveLength(1))
+  act(() => {
+    sources[0].open()
+    sources[0].send({ type: 'value', value: { entries: [], docs: { 'pi.live': {} } } })
+  })
+  const select = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe(refOf('cli-claude', 'default')))
+  fireEvent.change(select, { target: { value: refOf('cli-claude', 'opus') } })
+  rerender(view(8))
+  await waitFor(() => expect(sources).toHaveLength(2))
+  act(() => {
+    sources[1].open()
+    sources[1].send({ type: 'value', value: { entries: [], docs: { 'pi.live': {} } } })
+  })
+  const shown = async () => ((await screen.findByLabelText('Model')) as HTMLSelectElement).value
+  await waitFor(async () => expect(await shown()).toBe(refOf('u2-home', 'llama')))
+  await act(async () => release({ body: { provider: 'cli-claude', model_id: 'opus' } }))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(await shown()).toBe(refOf('u2-home', 'llama'))
 })

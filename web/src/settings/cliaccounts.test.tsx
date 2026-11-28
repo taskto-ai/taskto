@@ -570,9 +570,9 @@ test('automatic switching: a model of the workspace can end the queue, and a CLI
   })
   render(<CliAccountsTab workspace={1} />)
   const panel = await screen.findByRole('region', { name: 'Automatic switching' })
-  expect(await within(panel).findByText('2. Model: Big model')).toBeTruthy()
+  expect(await within(panel).findByText('2. Model: Big model (Team)')).toBeTruthy()
   expect(within(panel).queryByRole('option', { name: /Model: default/ })).toBeNull()
-  fireEvent.click(within(panel).getByRole('button', { name: 'Move Model: Big model up' }))
+  fireEvent.click(within(panel).getByRole('button', { name: 'Move Model: Big model (Team) up' }))
   await waitFor(() => expect(count(calls, 'PUT', '/api/me/cli-switching')).toBe(1))
   expect(calls.filter((c) => c.method === 'PUT')[0].body).toEqual({
     queue: [{ provider: 'ws1-team', model_id: 'big' }, { account: 'claude' }],
@@ -605,7 +605,7 @@ test('automatic switching: a model can be added from the workspace models', asyn
   render(<CliAccountsTab workspace={1} />)
   const panel = await screen.findByRole('region', { name: 'Automatic switching' })
   const add = await within(panel).findByLabelText('Add to the queue')
-  await within(panel).findByRole('option', { name: 'Model: Small model' })
+  await within(panel).findByRole('option', { name: 'Model: Small model (Mine)' })
   expect(within(panel).queryByRole('option', { name: /Model: default/ })).toBeNull()
   fireEvent.change(add, { target: { value: 'model:["u2-mine","small"]' } })
   await waitFor(() => expect(count(calls, 'PUT', '/api/me/cli-switching')).toBe(1))
@@ -646,7 +646,7 @@ test('automatic switching: a failed models request says so, keeps the accounts e
   expect(await within(panel).findByText(/Couldn't load the models you can add/)).toBeTruthy()
   expect(within(panel).getByRole('option', { name: 'Claude Code' })).toBeTruthy()
   fireEvent.click(within(panel).getByRole('button', { name: 'Try again' }))
-  expect(await within(panel).findByRole('option', { name: 'Model: Big model' })).toBeTruthy()
+  expect(await within(panel).findByRole('option', { name: 'Model: Big model (Team)' })).toBeTruthy()
   expect(within(panel).queryByText(/Couldn't load the models/)).toBeNull()
   expect(count(calls, 'GET', '/api/workspaces/1/models')).toBe(2)
 })
@@ -675,6 +675,35 @@ test('automatic switching: two models whose provider and model ids join to the s
   })
   render(<CliAccountsTab workspace={1} />)
   const panel = await screen.findByRole('region', { name: 'Automatic switching' })
-  await within(panel).findByRole('option', { name: 'Model: Other one' })
-  expect(within(panel).queryByRole('option', { name: 'Model: Queued one' })).toBeNull()
+  await within(panel).findByRole('option', { name: 'Model: Other one (Second)' })
+  expect(within(panel).queryByRole('option', { name: 'Model: Queued one (First)' })).toBeNull()
+})
+
+test('automatic switching: two providers that offer a model of the same name are told apart by the provider', async () => {
+  fakeFetch({
+    'GET /api/me/cli-accounts': list(account('claude', 'Claude Code', { state: 'connected' })),
+    'GET /api/workspaces/1/cli-accounts': {
+      body: { enabled: true, mode: 'own_else_shared', default_mode: 'own_else_shared', accounts: [] },
+    },
+    'GET /api/workspaces/1/models': {
+      body: {
+        providers: [
+          { provider: 'ws1-team', name: 'Team', scope: 'workspace', models: [{ id: 'big', name: 'Big model' }] },
+          { provider: 'u2-mine', name: 'Mine', scope: 'user', models: [{ id: 'big', name: 'Big model' }] },
+        ],
+      },
+    },
+    'GET /api/me/cli-switching': {
+      body: {
+        enabled: true,
+        queue: [{ kind: 'model', id: 'u2-mine', model_id: 'big', cli: '', title: 'big', limited: false }],
+        available: [],
+      },
+    },
+  })
+  render(<CliAccountsTab workspace={1} />)
+  const panel = await screen.findByRole('region', { name: 'Automatic switching' })
+  expect(await within(panel).findByText('1. Model: Big model (Mine)')).toBeTruthy()
+  expect(within(panel).getByRole('option', { name: 'Model: Big model (Team)' })).toBeTruthy()
+  expect(within(panel).queryByRole('option', { name: 'Model: Big model (Mine)' })).toBeNull()
 })

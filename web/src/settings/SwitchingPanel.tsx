@@ -45,10 +45,11 @@ function modelEntries(providers: ModelProvider[]): QueueModel[] {
     )
 }
 
-function queueTitle(t: T, a: QueueAccount, models: QueueModel[] = []): string {
+function queueTitle(t: T, a: QueueAccount, models: QueueModel[] = [], providers: ModelProvider[] = []): string {
   if (a.kind === 'model') {
     const known = models.find((m) => key(m) === key(a))
-    return t('settings.switching.model', { name: known?.title ?? a.model_id })
+    const provider = providers.find((p) => p.provider === a.id)?.name || a.id
+    return t('settings.switching.model', { name: known?.title ?? a.model_id, provider })
   }
   const name = CLI_PRODUCTS[a.cli] ?? a.cli
   if (a.kind === 'shared') {
@@ -149,7 +150,7 @@ export function SwitchingPanel({ workspace }: { workspace?: number }) {
         <Panel>
           <ol className="settings-queue" aria-label={t('settings.switching.queue')}>
             {queue.map((a, i) => {
-              const title = queueTitle(t, a, models)
+              const title = queueTitle(t, a, models, providers.data ?? [])
               return (
                 <li key={key(a)} className="settings-queue-item" aria-label={title}>
                   <span className="settings-person-text">
@@ -209,7 +210,7 @@ export function SwitchingPanel({ workspace }: { workspace?: number }) {
             <option value="">{t('settings.switching.choose')}</option>
             {rest.map((a) => (
               <option key={key(a)} value={key(a)}>
-                {queueTitle(t, a, models)}
+                {queueTitle(t, a, models, providers.data ?? [])}
               </option>
             ))}
           </Select>

@@ -9,9 +9,15 @@ import (
 	"taskto.ai/taskto/internal/cliaccounts"
 )
 
-func modelBusy(err error) error {
+func modelOutcome(err error) error {
+	if err == nil {
+		return nil
+	}
 	var refused *agentrt.StatusError
-	if errors.As(err, &refused) && refused.Code == http.StatusConflict && refused.Reason == "busy" {
+	switch {
+	case !errors.As(err, &refused) || refused.Code >= http.StatusInternalServerError:
+		return fmt.Errorf("%w: %w", cliaccounts.ErrModelUncertain, err)
+	case refused.Code == http.StatusConflict && refused.Reason == "busy":
 		return fmt.Errorf("%w: %w", cliaccounts.ErrModelBusy, err)
 	}
 	return err

@@ -12,7 +12,34 @@ import (
 
 var ErrModelBusy = errors.New("the conversation keeps its model until its continued reply ends")
 
-const modelWriteTimeout = 15 * time.Second
+var ErrModelUncertain = errors.New("the agent runtime may have set the model")
+
+const (
+	modelWriteTimeout = 15 * time.Second
+	modelReadTimeout  = 5 * time.Second
+)
+
+type ModelReader func(ctx context.Context, agentConversation int64) (provider, modelID string, err error)
+
+func (s *Service) SetModelReader(f ModelReader) { s.readModel = f }
+
+func uncertain(err error) bool {
+	return errors.Is(err, ErrModelUncertain) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
+func (s *Service) reconcile(ctx context.Context, p conversations.Principal, e queueEntry) hopStep {
+	if s.readModel == nil {
+		return hopAbandoned
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), modelReadTimeout)
+	defer cancel()
+	provider, model, err := s.readModel(rctx, p.AgentConversation)
+	if err != nil || provider != e.provider || model != e.model {
+		slog.WarnContext(ctx, "cli turn: the model write is not confirmed, no other model is tried", "conversation", p.Conversation, "err", err)
+		return hopAbandoned
+	}
+	return hopWritten
+}
 
 type modelHop struct {
 	notice, note string
@@ -149,6 +176,9 @@ func (s *Service) writeModel(ctx context.Context, p conversations.Principal, e q
 	case errors.Is(err, ErrModelBusy):
 		slog.InfoContext(ctx, "cli turn: the conversation keeps its model", "conversation", p.Conversation)
 		return hopAbandoned
+	case uncertain(err):
+		slog.WarnContext(ctx, "cli turn: the model write has no answer, reading the model back", "conversation", p.Conversation, "err", err)
+		return s.reconcile(ctx, p, e)
 	default:
 		slog.WarnContext(ctx, "cli turn: setting the conversation's model after a limit", "conversation", p.Conversation, "err", err)
 		return hopSkipped

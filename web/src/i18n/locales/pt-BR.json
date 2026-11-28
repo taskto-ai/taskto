@@ -2041,7 +2041,7 @@
       "ownLabelled": "{name} ({label})",
       "ownNumbered": "{name} (conta {number})",
       "shared": "{name} ({label}, {workspace})",
-      "model": "Modelo: {name}",
+      "model": "Modelo: {name} ({provider})",
       "modelsFailed": "Não foi possível carregar os modelos que você pode adicionar: {error}",
       "limitedBadge": "No limite"
     },

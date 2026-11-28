@@ -226,12 +226,27 @@ turns on. The turn ends with the limit's message, as before.
   was changed meanwhile, and the model is not set a second time. A hop that ended because its
   caller left is no decision: the next request makes it. Requests for other turns, of the same
   or another person, never wait for it.
-- **The write belongs to its caller.** The write to the agent runtime ends when the caller of the
-  turn is gone and after 15 seconds, so an old turn does not set a model later, after the person
-  chose another one. When the agent runtime answers that the conversation is busy with a reply
-  continued on a model the person chose (`409`, reason `busy`), the hop ends with no more tries:
-  that choice stays, and the turn ends as it would without a model in the queue. The server sets
-  the conversation's model, then
+- **The write is bounded by its caller.** The server's request to the agent runtime ends when the
+  caller of the turn is gone and after 15 seconds. That bounds how long the server waits; it does
+  not take the write back, because the agent runtime commits a write it has already admitted
+  whether or not the server still waits for the answer. So a write whose answer is lost (the
+  deadline, a dropped connection, a `5xx`) is uncertain, and the server never treats it as
+  refused: it reads the conversation's model back (`GET /model`, 5 seconds, not tied to the
+  caller). If the model read is the entry's, the write landed and is the hop. If it is another
+  model, or the read fails, the hop ends with no more tries, so a second model is never written
+  beside a first that may still land, and the turn ends as it would without a model in the queue.
+  Only an answer that says no (an unknown model, a retired conversation) skips the entry for the
+  next one.
+- **A continued reply keeps the model the person chose.** When the agent runtime answers that the
+  conversation is busy with a reply continued on a model the person chose (`409`, reason `busy`),
+  the hop ends with no more tries. The runtime also refuses (the same `409`) a model write it
+  admitted before a continuation committed, whenever that write reaches its commit, also once the
+  continued reply has ended, so a held write cannot undo the person's choice later. A continued
+  turn (`pinned`) never takes a hop, nor an account switch.
+- **A stop wins.** A stop that lands while the model is looked up or written leaves the model as
+  it is (the write is not taken back) and the turn ends as the failure the person stopped, with no
+  continuation, also for a request that re-attaches to the same turn.
+- **What the person sees.** The server sets the conversation's model, then
   ends the CLI turn with a notice ("Claude Code reached its usage limit: continuing on Big
   model") and a final event with `continue: true` and the same hand-off note the next account
   would get. The sidecar (`agent/src/cli.ts`) hands that note to the agent as the turn's result

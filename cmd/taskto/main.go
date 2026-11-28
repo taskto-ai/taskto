@@ -293,7 +293,15 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 			if err != nil {
 				return err
 			}
-			return modelBusy(c.SetModel(ctx, conversation, agentrt.ModelRef{Provider: provider, ModelID: modelID}))
+			return modelOutcome(c.SetModel(ctx, conversation, agentrt.ModelRef{Provider: provider, ModelID: modelID}))
+		})
+		cliAccounts.SetModelReader(func(ctx context.Context, conversation int64) (string, string, error) {
+			c, err := agent.ready(ctx)
+			if err != nil {
+				return "", "", err
+			}
+			m, err := c.Model(ctx, conversation)
+			return m.Provider, m.ModelID, err
 		})
 		convAgent = func(ctx context.Context) (conversations.Runtime, error) {
 			c, err := agent.ready(ctx)

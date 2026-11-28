@@ -2026,7 +2026,7 @@
       "ownLabelled": "{name} ({label})",
       "ownNumbered": "{name} (account {number})",
       "shared": "{name} ({label}, {workspace})",
-      "model": "Model: {name}",
+      "model": "Model: {name} ({provider})",
       "modelsFailed": "Couldn't load the models you can add: {error}",
       "limitedBadge": "At its limit"
     },

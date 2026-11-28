@@ -107,7 +107,10 @@ export function ConversationView({
   const [picked, setPicked] = useState<ModelRef | null>(null)
   const [continuing, setContinuing] = useState(false)
   const modelWrites = useRef(0)
-  if (useChanged(base) && picked) setPicked(null)
+  if (useChanged(base)) {
+    modelWrites.current++
+    if (picked) setPicked(null)
+  }
   const loadedModel = useLoad(() => {
     const at = ++order.current
     newestRead.current = at

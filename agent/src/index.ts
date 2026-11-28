@@ -413,10 +413,12 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === 'PUT' && action === 'model') {
       const model = modelRef(await readJson(req))
       const conv = await conversation(id)
+      const admitted = (await harness.snapshot(ContinuePin, conv.id, context))?.submission ?? 0
       await testHooks.beforeModelWrite?.()
       await conv.commit(async (tx) => {
         if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
-        if (pinHolds(await tx.doc(ContinuePin, conv.id), await tx.doc(LiveDoc, conv.id))) {
+        const pin = await tx.doc(ContinuePin, conv.id)
+        if (pin.submission !== admitted || pinHolds(pin, await tx.doc(LiveDoc, conv.id))) {
           throw new HttpError(409, 'a continued reply keeps its model until it ends', 'busy')
         }
         await configure(tx, conv.id, { model })

@@ -182,6 +182,7 @@ type Service struct {
 	ended      map[string]time.Time
 	tools      atomic.Pointer[Tools]
 	setModel   ModelSetter
+	readModel  ModelReader
 	switches   map[string]string
 	hops       map[string]*hopClaim
 	modelWait  time.Duration

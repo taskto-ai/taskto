@@ -286,3 +286,108 @@ func TestNoHopWhileTheRuntimeKeepsTheModelOfAContinuedReply(t *testing.T) {
 		t.Fatalf("done = %+v, tried %v, model changes %v", d, tried, models.refs)
 	}
 }
+
+func TestAnUncertainModelWriteIsReadBackBeforeAnyOtherModelIsTried(t *testing.T) {
+	type outcome struct {
+		cont  bool
+		tried []string
+		reads int
+	}
+	run := func(t *testing.T, setErr error, committed bool, readErr error) outcome {
+		e, conv, _ := limitedClaudeEnv(t, true)
+		first, second := mine(e, "first"), mine(e, "second")
+		e.provide(first, "a")
+		e.provide(second, "b")
+		e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(first, "a"), modelEntry(second, "b")}})
+		var mu sync.Mutex
+		var out outcome
+		stored := [2]string{"unchanged", "unchanged"}
+		e.svc.SetModelSetter(func(_ context.Context, _ int64, provider, model string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			out.tried = append(out.tried, provider)
+			if committed {
+				stored = [2]string{provider, model}
+			}
+			return setErr
+		})
+		e.svc.SetModelReader(func(_ context.Context, _ int64) (string, string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			out.reads++
+			return stored[0], stored[1], readErr
+		})
+		out.cont = done(e.turn(conv, limitedBody)).Continue
+		return out
+	}
+	t.Run("a write that landed before its answer was lost is the hop", func(t *testing.T) {
+		for name, err := range map[string]error{"a deadline": context.DeadlineExceeded, "a lost connection": fmt.Errorf("closed: %w", ErrModelUncertain)} {
+			got := run(t, err, true, nil)
+			if !got.cont || len(got.tried) != 1 || got.reads != 1 {
+				t.Fatalf("%s after the commit: %+v, want the first model kept as the hop with no second write", name, got)
+			}
+		}
+	})
+	t.Run("a write that is not confirmed ends the hop with no other write", func(t *testing.T) {
+		for name, got := range map[string]outcome{
+			"not landed":     run(t, context.DeadlineExceeded, false, nil),
+			"read failed":    run(t, context.DeadlineExceeded, true, errors.New("unreachable")),
+			"lost then read": run(t, fmt.Errorf("closed: %w", ErrModelUncertain), false, nil),
+		} {
+			if got.cont || len(got.tried) != 1 || got.reads != 1 {
+				t.Fatalf("%s: %+v, want no continuation and no second write", name, got)
+			}
+		}
+	})
+	t.Run("an answer that says no is still a skip", func(t *testing.T) {
+		got := run(t, errors.New("unknown model"), false, nil)
+		if got.cont || len(got.tried) != 2 || got.reads != 0 {
+			t.Fatalf("a refused write: %+v, want the second model tried and no read", got)
+		}
+	})
+}
+
+func TestAStopThatLandsDuringTheModelWriteSendsNoContinuation(t *testing.T) {
+	e, conv, models := limitedClaudeEnv(t, true)
+	e.provide(mine(e, "api"), "big")
+	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
+	id := fmt.Sprintf("c%d-t1", conv)
+	e.svc.SetModelSetter(func(ctx context.Context, agent int64, provider, model string) error {
+		e.svc.markStopped(id)
+		return models.set(ctx, agent, provider, model)
+	})
+	events := e.turn(conv, limitedBody)
+	if d := lastDone(events); d.Continue || d.Note != "" {
+		t.Fatalf("done = %+v, want the failure the person stopped, with no continuation", d)
+	}
+	for _, ev := range events {
+		if ev.Type == cliworker.EventNotice {
+			t.Fatalf("a stopped turn announced a hop: %+v", ev)
+		}
+	}
+}
+
+func TestAPinnedTurnIsNotMovedToAQueuedModelByALimit(t *testing.T) {
+	e, conv, models := limitedClaudeEnv(t, true)
+	e.provide(mine(e, "api"), "big")
+	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
+	pinned := limitedBody
+	pinned.Pinned = true
+	events := e.turn(conv, pinned)
+	if d := lastDone(events); d.Continue || d.Note != "" || d.Status != cliworker.StatusFailed {
+		t.Fatalf("done = %+v, want the limit's failure with no continuation", d)
+	}
+	for _, ev := range events {
+		if ev.Type == cliworker.EventNotice {
+			t.Fatalf("a pinned turn announced a hop: %+v", ev)
+		}
+	}
+	if len(models.refs) != 0 {
+		t.Fatalf("a pinned turn wrote the model %v", models.refs)
+	}
+	unpinned := limitedBody
+	unpinned.Turn = "t2"
+	if !lastDone(e.turn(conv, unpinned)).Continue {
+		t.Fatal("the same limit without the pin no longer hops: the test shows nothing")
+	}
+}
