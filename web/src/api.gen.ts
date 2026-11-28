@@ -247,6 +247,7 @@ export type AppsDefinition = {
   series?: Record<string, AppsSeries>
   contributions?: AppsContributions
   integrations?: Record<string, AppsIntegrationSlot>
+  schedules?: Record<string, AppsSchedule>
 }
 
 export type AppsEffect = {
@@ -352,6 +353,13 @@ export type AppsRule = {
   value?: unknown
   all?: AppsRule[]
   any?: AppsRule[]
+}
+
+export type AppsSchedule = {
+  action: string
+  calendar: ScheduleCalendar
+  values?: Record<string, unknown>
+  today_fields?: string[]
 }
 
 export type AppsScreen = {
@@ -824,6 +832,13 @@ export type RecordVersion = {
   by: AppsAuthor | null
   action?: string
   synthetic?: boolean
+}
+
+export type ScheduleCalendar = {
+  days?: string[]
+  at?: string
+  every_minutes?: number
+  time_zone: string
 }
 
 export type SearchCardResult = {

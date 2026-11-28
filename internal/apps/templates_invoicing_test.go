@@ -32,7 +32,7 @@ func invoicingTemplate(t *testing.T) Template {
 func TestTheInvoicingTemplateDeclaresAPaymentsSlotAndNothingElse(t *testing.T) {
 	tpl := invoicingTemplate(t)
 	def := tpl.Definition
-	if def.DefinitionVersion != 3 || !slices.Contains(def.Requires, "effect.create_payment_link") {
+	if def.DefinitionVersion != DefinitionVersion || !slices.Contains(def.Requires, "effect.create_payment_link") {
 		t.Fatalf("version %d, requires %v", def.DefinitionVersion, def.Requires)
 	}
 	if len(def.Integrations) != 1 || def.Integrations["payments"].Kind != KindPayments {

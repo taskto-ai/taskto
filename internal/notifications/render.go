@@ -116,7 +116,7 @@ func (r *reader) describe(ctx context.Context, n stored) (params map[string]stri
 			return nil, Target{}, false, err
 		}
 		return map[string]string{"integration": name}, Target{Section: "settings"}, true, nil
-	case KindAppEffectFailed:
+	case KindAppEffectFailed, KindAppScheduleFailed:
 		sp, acc, name, err := r.access.AppNamed(ctx, r.userID, n.ref.Space, n.ref.App)
 		if errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound) {
 			return nil, Target{}, false, nil

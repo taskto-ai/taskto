@@ -1,4 +1,4 @@
-export const DEFINITION_VERSION = 3
+export const DEFINITION_VERSION = 4
 
 export const EFFECT_KINDS = [
   'create_card',
@@ -65,6 +65,7 @@ export const catalogCapabilities: ReadonlySet<string> = new Set([
   'icon.svg_path',
   'slot.home_widgets.v1',
   'slot.nav_pin.v1',
+  'app.schedules',
 ])
 
 export function unsupportedBy(needs: { definition_version: number; requires: readonly string[] }): string[] {

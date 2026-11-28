@@ -72,6 +72,15 @@
       ],
       "action": "Open the notification"
     },
+    "notification_app_schedule_failed": {
+      "subject": "A scheduled app action needs your attention",
+      "title": "A scheduled app action needs your attention",
+      "paragraphs": [
+        "A scheduled action in one of your apps did not run.",
+        "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
+      ],
+      "action": "Open the notification"
+    },
     "verify_email": {
       "subject": "Confirm your email address for taskto.ai notifications",
       "title": "Confirm your email address",
