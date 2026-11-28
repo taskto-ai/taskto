@@ -401,6 +401,27 @@ func (s *Service) Cancel(ctx context.Context, q DBTX, userID int64, kind Kind, k
 	return n > 0, err
 }
 
+func (s *Service) Relocate(ctx context.Context, q DBTX, userID int64, kind Kind, key string, spaceID int64) error {
+	_, err := q.ExecContext(ctx, `
+		UPDATE scheduled_jobs SET space_id = ?, updated_at = ?
+		WHERE user_id = ? AND kind = ? AND dedupe_key = ? AND state IN ('pending', 'running')
+			AND EXISTS (SELECT 1 FROM spaces WHERE id = ? AND workspace_id = scheduled_jobs.workspace_id)`,
+		spaceID, stamp(s.clock()), userID, string(kind), key, spaceID)
+	return err
+}
+
+func (s *Service) CancelMatching(ctx context.Context, q DBTX, userID int64, kind Kind, match string, keep ...string) error {
+	query, args := `DELETE FROM scheduled_jobs WHERE kind = ? AND dedupe_key GLOB ?`, []any{string(kind), match}
+	if userID != 0 {
+		query, args = query+` AND user_id = ?`, append(args, userID)
+	}
+	for _, k := range keep {
+		query, args = query+` AND dedupe_key NOT GLOB ?`, append(args, k)
+	}
+	_, err := q.ExecContext(ctx, query, args...)
+	return err
+}
+
 func (s *Service) Find(ctx context.Context, q DBTX, userID int64, kind Kind, key string) (Job, error) {
 	j, err := scanJob(q.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM scheduled_jobs WHERE user_id = ? AND kind = ? AND dedupe_key = ?`,
 		userID, string(kind), key))

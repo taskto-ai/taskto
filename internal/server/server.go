@@ -131,7 +131,9 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 		spaces.OnArchiveChange(appsService.SyncSpaceReminders)
 		spaces.OnMemberAdded(appsService.SyncSpaceMemberReminders)
 		accounts.OnMemberAdded(appsService.SyncWorkspaceMemberReminders)
-		accounts.OnTimeZoneChanged(appsService.SyncTimeZoneReminders)
+		accounts.OnTimeZoneChanged(appsService.SyncUserReminders)
+		accounts.OnMemberEnabled(appsService.SyncUserReminders)
+		spaces.OnAppGrantsChanged(appsService.SyncAppGrantReminders)
 	}
 	if opts.Notifications != nil {
 		opts.Notifications.WithReminderSource(appsService)

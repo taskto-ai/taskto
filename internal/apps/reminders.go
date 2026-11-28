@@ -142,7 +142,7 @@ func (r Reminder) runAt(c Collection, data map[string]any, loc *time.Location) (
 	hour, _ := strconv.Atoi(clock[:2])
 	minute, _ := strconv.Atoi(clock[3:])
 	y, m, d := parsed.Date()
-	return schedule.LocalHour(y, m, d, hour, loc).Add(time.Duration(minute) * time.Minute).UTC(), true
+	return schedule.LocalTime(y, m, d, hour, minute, loc).UTC(), true
 }
 
 func storedText(f Field, data map[string]any) (string, bool) {
@@ -205,7 +205,7 @@ func (s *Service) reminderScopeOf(ctx context.Context, tx *sql.Tx, appID int64) 
 	if err != nil {
 		return nil, false, err
 	}
-	if a.liveDef == nil || len(a.liveDef.Reminders) == 0 {
+	if a.liveDef == nil {
 		return nil, false, nil
 	}
 	sc.def = *a.liveDef
@@ -243,7 +243,7 @@ func (s *Service) syncRecordReminders(ctx context.Context, tx *sql.Tx, appID, ro
 		return nil
 	}
 	sc, found, err := s.reminderScopeOf(ctx, tx, appID)
-	if err != nil || !found {
+	if err != nil || !found || len(sc.def.Reminders) == 0 {
 		return err
 	}
 	return s.syncRowReminders(ctx, tx, sc, rowID)
@@ -255,6 +255,13 @@ func (s *Service) syncAppReminders(ctx context.Context, tx *sql.Tx, appID, forUs
 	}
 	sc, found, err := s.reminderScopeOf(ctx, tx, appID)
 	if err != nil || !found {
+		return err
+	}
+	keep := make([]string, len(sc.def.Reminders))
+	for i, r := range sc.def.Reminders {
+		keep[i] = fmt.Sprintf("app:%d:row:*:%s", appID, r.Name)
+	}
+	if err := s.sched.CancelMatching(ctx, tx, forUser, KindRecordReminder, fmt.Sprintf("app:%d:row:*", appID), keep...); err != nil || len(keep) == 0 {
 		return err
 	}
 	query := `SELECT id FROM app_rows WHERE app_id = ? AND deleted_at IS NULL AND created_by IS NOT NULL`
@@ -308,7 +315,11 @@ func (s *Service) SyncWorkspaceMemberReminders(ctx context.Context, tx *sql.Tx, 
 		WHERE sp.workspace_id = ? AND r.created_by = ? AND r.deleted_at IS NULL ORDER BY r.app_id`, userID, workspaceID, userID)
 }
 
-func (s *Service) SyncTimeZoneReminders(ctx context.Context, tx *sql.Tx, userID int64) error {
+func (s *Service) SyncAppGrantReminders(ctx context.Context, tx *sql.Tx, _, appID int64) error {
+	return s.syncAppReminders(ctx, tx, appID, 0)
+}
+
+func (s *Service) SyncUserReminders(ctx context.Context, tx *sql.Tx, userID int64) error {
 	if s.sched == nil {
 		return nil
 	}
@@ -393,19 +404,21 @@ func (s *Service) syncRowReminders(ctx context.Context, tx *sql.Tx, sc *reminder
 			Kind: KindRecordReminder, UserID: owner, WorkspaceID: sc.workspaceID, SpaceID: sc.spaceID,
 			DedupeKey: key, Payload: payload, RunAt: at,
 		}
-		keptPending := false
 		if due {
 			switch existing, err := s.sched.Find(ctx, tx, owner, KindRecordReminder, key); {
 			case err == nil && existing.RunAt.Equal(at) && string(existing.Payload) == string(payload):
-				if existing.SpaceID == sc.spaceID || existing.State != schedule.StatePending {
-					continue
+				if existing.SpaceID != sc.spaceID {
+					err = s.sched.Relocate(ctx, tx, owner, KindRecordReminder, key, sc.spaceID)
 				}
-				keptPending = true
+				if err != nil {
+					return err
+				}
+				continue
 			case err != nil && !errors.Is(err, schedule.ErrNotFound):
 				return err
 			}
 		}
-		if !due || !keptPending && !at.After(now) || at.After(schedule.MaxRunAt) || at.Before(schedule.MinRunAt) {
+		if !due || !at.After(now) || at.After(schedule.MaxRunAt) || at.Before(schedule.MinRunAt) {
 			if _, err := s.sched.Cancel(ctx, tx, owner, KindRecordReminder, key); err != nil {
 				return err
 			}
@@ -431,7 +444,11 @@ func (s *Service) remindRecord(ctx context.Context, job schedule.Job) error {
 		if holds, err := s.sched.Holds(ctx, tx, job); err != nil || !holds {
 			return err
 		}
-		sp, err := s.access.CheckTx(ctx, tx, job.UserID, job.SpaceID)
+		current, err := s.sched.Find(ctx, tx, job.UserID, job.Kind, job.DedupeKey)
+		if err != nil {
+			return err
+		}
+		sp, err := s.access.CheckTx(ctx, tx, job.UserID, current.SpaceID)
 		switch {
 		case errors.Is(err, access.ErrDisabled):
 			return schedule.ErrOwnerDisabled

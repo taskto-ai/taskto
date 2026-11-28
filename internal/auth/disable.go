@@ -123,6 +123,11 @@ func (s *Service) setDisabled(ctx context.Context, workspaceID, by, userID int64
 			if n, err := res.RowsAffected(); err != nil || n == 0 {
 				return err
 			}
+			for _, h := range s.enabledHooks {
+				if err := h(ctx, tx, userID); err != nil {
+					return err
+				}
+			}
 			return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: by, Action: audit.MemberEnabled,
 				TargetType: audit.TargetUser, Target: userID})
 		}

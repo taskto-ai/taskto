@@ -62,6 +62,8 @@ type TimeZoneHook func(ctx context.Context, tx *sql.Tx, userID int64) error
 
 func (s *Service) OnTimeZoneChanged(h TimeZoneHook) { s.zoneHooks = append(s.zoneHooks, h) }
 
+func (s *Service) OnMemberEnabled(h TimeZoneHook) { s.enabledHooks = append(s.enabledHooks, h) }
+
 func (s *Service) setTimeZone(ctx context.Context, userID int64, zone string, onlyIfUnset bool) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
 		if err := EnsureActorEnabled(ctx, tx); err != nil {

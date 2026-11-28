@@ -25,7 +25,11 @@ func newRemindFXWith(t *testing.T, before func(*remindFX, *schedule.Job), remind
 		if before != nil {
 			before(f, &job)
 		}
-		return w.e.s.remindRecord(ctx, job)
+		err := w.e.s.remindRecord(ctx, job)
+		if f.after != nil {
+			return f.after(err)
+		}
+		return err
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +38,9 @@ func newRemindFXWith(t *testing.T, before func(*remindFX, *schedule.Job), remind
 	w.e.s.access.OnArchiveChange(w.e.s.SyncSpaceReminders)
 	w.e.s.access.OnMemberAdded(w.e.s.SyncSpaceMemberReminders)
 	w.e.accounts.OnMemberAdded(w.e.s.SyncWorkspaceMemberReminders)
-	w.e.accounts.OnTimeZoneChanged(w.e.s.SyncTimeZoneReminders)
+	w.e.accounts.OnTimeZoneChanged(w.e.s.SyncUserReminders)
+	w.e.accounts.OnMemberEnabled(w.e.s.SyncUserReminders)
+	w.e.s.access.OnAppGrantsChanged(w.e.s.SyncAppGrantReminders)
 	w.e.addMember(w.owner, w.shared, w.mallory, access.RoleEditor)
 	rec := w.alice.do(http.MethodPost, appsPath(w.shared, ""), map[string]any{"name": "Dues", "definition": remindDefinition(reminders...)})
 	expect(t, rec, http.StatusCreated)
@@ -92,17 +98,20 @@ func TestTheHandlerChecksEverythingAgainWhenTheJobFires(t *testing.T) {
 
 func TestAHandlerThatFindsTheOwnerWithoutAccessEndsTheJobAndOneThatFindsThemDisabledHoldsIt(t *testing.T) {
 	ended := map[string]func(f *remindFX, job *schedule.Job){
-		"the job names a space the owner can't open": func(_ *remindFX, job *schedule.Job) {
-			job.SpaceID = 987654
+		"the job names a space the owner can't open": func(f *remindFX, job *schedule.Job) {
+			closed := f.e.createShared(f.owner, f.ws, "Closed")
+			f.sql(`UPDATE scheduled_jobs SET space_id = ? WHERE id = ?`, closed.ID, job.ID)
 		},
 		"the job names another workspace than its space's": func(f *remindFX, job *schedule.Job) {
 			job.WorkspaceID = f.ws + 100
 		},
 		"the owner holds no role in the app": func(f *remindFX, _ *schedule.Job) {
-			f.mustSetRoles(f.owner, f.shared, f.app, grant(f.mallory.id, access.AppUser))
+			f.sql(`DELETE FROM app_roles WHERE app_id = ?`, f.app.ID)
+			f.sql(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'user')`, f.app.ID, f.mallory.id)
 		},
 		"the owner may open the app but read none of its records": func(f *remindFX, _ *schedule.Job) {
-			f.mustSetRoles(f.owner, f.shared, f.app, grant(f.alice.id, access.AppBuilder), grant(f.mallory.id, access.AppUser))
+			f.sql(`DELETE FROM app_roles WHERE app_id = ?`, f.app.ID)
+			f.sql(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'builder'), (?, ?, 'user')`, f.app.ID, f.alice.id, f.app.ID, f.mallory.id)
 		},
 	}
 	for name, change := range ended {

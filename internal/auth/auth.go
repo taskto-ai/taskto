@@ -87,8 +87,9 @@ type Service struct {
 
 	deletions DeletionScheduler
 
-	memberHooks []MemberHook
-	zoneHooks   []TimeZoneHook
+	memberHooks  []MemberHook
+	zoneHooks    []TimeZoneHook
+	enabledHooks []TimeZoneHook
 }
 
 func (s *Service) at(point string) {

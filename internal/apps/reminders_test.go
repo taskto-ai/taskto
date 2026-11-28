@@ -42,6 +42,7 @@ type remindFX struct {
 	clock *remindClock
 	sch   *schedule.Service
 	app   App
+	after func(error) error
 }
 
 func dueReminder() Reminder {
@@ -80,7 +81,9 @@ func newRemindFX(t *testing.T, reminders ...Reminder) *remindFX {
 	w.e.s.access.OnArchiveChange(w.e.s.SyncSpaceReminders)
 	w.e.s.access.OnMemberAdded(w.e.s.SyncSpaceMemberReminders)
 	w.e.accounts.OnMemberAdded(w.e.s.SyncWorkspaceMemberReminders)
-	w.e.accounts.OnTimeZoneChanged(w.e.s.SyncTimeZoneReminders)
+	w.e.accounts.OnTimeZoneChanged(w.e.s.SyncUserReminders)
+	w.e.accounts.OnMemberEnabled(w.e.s.SyncUserReminders)
+	w.e.s.access.OnAppGrantsChanged(w.e.s.SyncAppGrantReminders)
 	w.e.addMember(w.owner, w.shared, w.mallory, access.RoleEditor)
 	f := &remindFX{world: w, clock: clock, sch: sch}
 	rec := w.alice.do(http.MethodPost, appsPath(w.shared, ""), map[string]any{"name": "Dues", "definition": remindDefinition(reminders...)})

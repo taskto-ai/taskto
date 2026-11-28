@@ -518,6 +518,11 @@ func (c *Checker) SetAppGrants(ctx context.Context, actorID, spaceID, appID int6
 				return err
 			}
 		}
+		for _, h := range c.grantHooks {
+			if err := h(ctx, tx, spaceID, appID); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 }
