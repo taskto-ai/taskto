@@ -68,7 +68,7 @@ func yamlText(s string) string {
 }
 
 func writeSkillMarkdown(w io.Writer, s skills.Skill) error {
-	_, err := fmt.Fprintf(w, "---\nname: %s\ntitle: %s\ndescription: %s\nenabled: %t\n---\n\n%s\n",
-		yamlText(s.Name), yamlText(s.Title), yamlText(s.Description), s.Enabled, strings.TrimRight(s.Body, "\n"))
+	_, err := fmt.Fprintf(w, "---\nname: %s\ntitle: %s\ndescription: %s\nenabled: %t\n---\n\n%s",
+		yamlText(s.Name), yamlText(s.Title), yamlText(s.Description), s.Enabled, s.Body)
 	return err
 }

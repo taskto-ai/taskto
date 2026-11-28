@@ -15,8 +15,14 @@ func TestSkillListsAreNeverNil(t *testing.T) {
 		"space":     w.owner(ScopeSpace, 0, w.team),
 		"workspace": w.owner(ScopeWorkspace, 0, 0),
 	} {
-		for _, all := range []bool{true, false} {
-			list, err := w.store.List(ctx, o, all)
+		for _, actor := range []int64{w.bob, w.ann} {
+			if o.Scope == ScopeUser && actor != o.UserID {
+				continue
+			}
+			if o.Scope == ScopeSpace && actor != w.bob {
+				continue
+			}
+			list, err := w.store.List(ctx, o, actor)
 			if err != nil || len(list) != 0 {
 				t.Fatalf("%s: %v, %v", name, list, err)
 			}

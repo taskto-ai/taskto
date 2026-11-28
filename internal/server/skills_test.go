@@ -240,9 +240,9 @@ func TestSkillRequestsAreChecked(t *testing.T) {
 		}
 	}
 	huge := skillBody("huge")
-	huge["body"] = strings.Repeat("b", 200*1024)
+	huge["body"] = strings.Repeat("b", 300*1024)
 	if code, reply := s.browser(s.bob.cookie, http.MethodPost, path, huge); code != http.StatusBadRequest || reply["code"] != "invalid_json" {
-		t.Errorf("a request body of 200 KiB: %d %v", code, reply)
+		t.Errorf("a request body of 300 KiB: %d %v", code, reply)
 	}
 	made := s.makeSkill(s.bob.cookie, path, "quote")
 	s.refused(s.bob.cookie, http.MethodPost, path, skillBody("quote"), http.StatusConflict, "skill_name_taken")
@@ -288,7 +288,7 @@ func TestWorkspaceAndSpaceSkillChangesReachTheAuditLogAndNothingElseDoes(t *test
 	}
 	e := events[0].(map[string]any)
 	details := e["details"].(map[string]any)
-	if e["target_type"] != "skill" || id(e["target_id"]) != inTeam || e["target_name"] != "Title of team-way" || details["scope"] != "space" ||
+	if e["target_type"] != "skill" || id(e["target_id"]) != inTeam || e["target_name"] != nil || details["scope"] != "space" ||
 		details["name"] != "team-way" || id(details["space_id"]) != s.team {
 		t.Fatalf("the event = %v", e)
 	}
@@ -334,7 +334,7 @@ func TestAPersonsExportHoldsTheirOwnSkillsOnly(t *testing.T) {
 		t.Fatalf("skill files = %v", skillFiles)
 	}
 	closing := string(files["skills/closing.md"])
-	if !strings.HasPrefix(closing, "---\nname: \"closing\"\ntitle: \"Title of closing\"\ndescription: \"when to use closing\"\nenabled: true\n---\n\n# closing\n\nDo it well.\n") {
+	if closing != "---\nname: \"closing\"\ntitle: \"Title of closing\"\ndescription: \"when to use closing\"\nenabled: true\n---\n\n# closing\n\nDo it well." {
 		t.Fatalf("closing.md = %q", closing)
 	}
 	if draft := string(files["skills/draft.md"]); !strings.Contains(draft, `title: "A \"draft\": yes"`) || !strings.Contains(draft, "enabled: false") {

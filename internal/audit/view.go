@@ -238,7 +238,6 @@ const (
 	providerName    = `SELECT display_name FROM provider_accounts WHERE id = ? AND workspace_id = ? AND created_at = ?`
 	sharedName      = `SELECT label FROM cli_shared_accounts WHERE id = ? AND workspace_id = ? AND created_at = ?`
 	integrationName = `SELECT display_name FROM integrations WHERE id = ? AND workspace_id = ? AND created_at = ?`
-	skillTitle      = `SELECT title FROM skills WHERE id = ? AND workspace_id = ? AND created_at = ?`
 )
 
 func (r *resolver) target(row Row) (*Person, *string, error) {
@@ -265,12 +264,12 @@ func (r *resolver) target(row Row) (*Person, *string, error) {
 		}
 		p, err := r.member(id, created)
 		return p, nil, err
-	case TargetSpace, TargetProvider, TargetSharedAccount, TargetIntegration, TargetSkill:
+	case TargetSpace, TargetProvider, TargetSharedAccount, TargetIntegration:
 		if created == "" {
 			return nil, nil, nil
 		}
 		query := map[string]string{
-			TargetSpace: spaceName, TargetProvider: providerName, TargetSharedAccount: sharedName, TargetIntegration: integrationName, TargetSkill: skillTitle,
+			TargetSpace: spaceName, TargetProvider: providerName, TargetSharedAccount: sharedName, TargetIntegration: integrationName,
 		}[row.TargetType]
 		n, err := r.thing(query, id, created)
 		return nil, n, err

@@ -754,7 +754,7 @@ func (ex *run) personalSkills(ctx context.Context) error {
 		ex.skip(place{}, "skills", "off", "")
 		return nil
 	}
-	list, err := ex.svc.skills.List(ctx, skills.Owner{Scope: skills.ScopeUser, WorkspaceID: ex.ws.WorkspaceID, UserID: ex.user.ID}, true)
+	list, err := ex.svc.skills.List(ctx, skills.Owner{Scope: skills.ScopeUser, WorkspaceID: ex.ws.WorkspaceID, UserID: ex.user.ID}, ex.user.ID)
 	if err != nil {
 		return fmt.Errorf("listing skills: %w", err)
 	}

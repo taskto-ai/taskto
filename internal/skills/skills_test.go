@@ -20,6 +20,7 @@ import (
 type world struct {
 	t      *testing.T
 	db     *sql.DB
+	hooks  *db.Hooks
 	store  *Store
 	ws     int64
 	other  int64
@@ -34,7 +35,8 @@ type world struct {
 func newWorld(t *testing.T) *world {
 	t.Helper()
 	ctx := context.Background()
-	d, err := db.Open(ctx, filepath.Join(t.TempDir(), db.FileName))
+	hooks := &db.Hooks{}
+	d, err := db.OpenHooked(ctx, filepath.Join(t.TempDir(), db.FileName), hooks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +44,7 @@ func newWorld(t *testing.T) *world {
 	if _, err := db.Migrate(ctx, d); err != nil {
 		t.Fatal(err)
 	}
-	w := &world{t: t, db: d, store: New(d, access.New(d, nil))}
+	w := &world{t: t, db: d, hooks: hooks, store: New(d, access.New(d, nil))}
 	w.ann = w.user("ann@example.com")
 	w.bob = w.user("bob@example.com")
 	w.carol = w.user("carol@example.com")
@@ -118,9 +120,19 @@ func (w *world) create(o Owner, actor int64, name string) Skill {
 	return s
 }
 
+func (w *world) actorFor(o Owner) int64 {
+	switch o.Scope {
+	case ScopeUser:
+		return o.UserID
+	case ScopeSpace:
+		return w.scalar(`SELECT user_id FROM space_members WHERE space_id = ? AND role = 'editor' LIMIT 1`, o.SpaceID)
+	}
+	return w.ann
+}
+
 func (w *world) get(o Owner, id int64) (Skill, error) {
 	w.t.Helper()
-	list, err := w.store.List(context.Background(), o, true)
+	list, err := w.store.List(context.Background(), o, w.actorFor(o))
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -182,7 +194,7 @@ func TestEachScopeHasItsOwnCreateListUpdateAndDelete(t *testing.T) {
 		if (o.Scope == ScopeSpace) != (created.SpaceID != nil) {
 			t.Fatalf("%s: space id %v", name, created.SpaceID)
 		}
-		list, err := w.store.List(ctx, o, true)
+		list, err := w.store.List(ctx, o, actor)
 		if err != nil || len(list) != 1 || list[0].ID != created.ID {
 			t.Fatalf("%s: list = %+v, %v", name, list, err)
 		}
@@ -191,8 +203,10 @@ func TestEachScopeHasItsOwnCreateListUpdateAndDelete(t *testing.T) {
 		if err != nil || updated.Title != title || updated.Enabled || updated.Name != "quote-writer" {
 			t.Fatalf("%s: update = %+v, %v", name, updated, err)
 		}
-		if shown, _ := w.store.List(ctx, o, false); len(shown) != 0 {
-			t.Fatalf("%s: a disabled skill is listed to those who only use it: %+v", name, shown)
+		if user := map[Scope]int64{ScopeSpace: w.carol, ScopeWorkspace: w.bob}[o.Scope]; user != 0 {
+			if shown, err := w.store.List(ctx, o, user); err != nil || len(shown) != 0 {
+				t.Fatalf("%s: a disabled skill is listed to those who only use it: %+v, %v", name, shown, err)
+			}
 		}
 		renamed := "quote-maker"
 		if got, err := w.store.Update(ctx, o, actor, created.ID, Patch{Name: &renamed}); err != nil || got.Name != renamed {
@@ -416,7 +430,7 @@ func TestASpaceThatTookAnotherSpacesIDDoesNotInheritItsSkills(t *testing.T) {
 		t.Fatalf("a skill of the space that had the ID: %v, %v", names(got), err)
 	}
 	now := w.owner(ScopeSpace, 0, again)
-	if list, err := w.store.List(ctx, now, true); err != nil || len(list) != 0 {
+	if list, err := w.store.List(ctx, now, w.ann); err != nil || len(list) != 0 {
 		t.Fatalf("listing the new space's: %v, %v", names(list), err)
 	}
 	if _, err := w.store.Create(ctx, old, w.ann, input("late")); !errors.Is(err, access.ErrNotFound) {
@@ -436,7 +450,10 @@ func TestRemovingASpaceOrAWorkspaceRemovesItsSkills(t *testing.T) {
 		t.Fatalf("%d skills left, want the other space's", n)
 	}
 	eve := w.user("eve@example.com")
+	w.member(w.ws, eve, "member")
 	w.exec(`INSERT INTO skills (workspace_id, scope, user_id, name, title, description, body) VALUES (?, 'user', ?, 'eves-own', 'T', 'D', 'B')`, w.ws, eve)
+	w.exec(`DELETE FROM memberships WHERE user_id = ?`, eve)
+	w.exec(`DELETE FROM spaces WHERE owner_id = ?`, eve)
 	w.exec(`DELETE FROM users WHERE id = ?`, eve)
 	if n := w.scalar(`SELECT count(*) FROM skills WHERE scope = 'user'`); n != 0 {
 		t.Fatalf("%d personal skills of a removed account", n)
@@ -459,12 +476,15 @@ func TestOnlyAWriterOfASharedSpaceChangesItsSkills(t *testing.T) {
 	if err := w.store.Delete(ctx, o, w.carol, made.ID); !errors.Is(err, access.ErrNotFound) {
 		t.Fatalf("a reader deleting: %v", err)
 	}
-	if _, err := w.store.Create(ctx, o, w.dave, input("by-outsider")); !errors.Is(err, access.ErrNotFound) {
+	if _, err := w.store.Create(ctx, o, w.dave, input("by-outsider")); code(err) != apierr.CodeWorkspaceNotFound {
 		t.Fatalf("an outsider creating: %v", err)
 	}
 	elsewhere := Owner{Scope: ScopeSpace, WorkspaceID: w.other, SpaceID: w.team, SpaceGeneration: o.SpaceGeneration}
-	if _, err := w.store.Create(ctx, elsewhere, w.bob, input("by-name-of-another-workspace")); !errors.Is(err, access.ErrNotFound) {
+	if _, err := w.store.Create(ctx, elsewhere, w.bob, input("by-name-of-another-workspace")); code(err) != apierr.CodeWorkspaceNotFound {
 		t.Fatalf("a write that names another workspace for the space: %v", err)
+	}
+	if _, err := w.store.Create(ctx, elsewhere, w.dave, input("by-a-member-of-another-workspace")); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("a member of another workspace naming this one's space: %v", err)
 	}
 	w.exec(`UPDATE spaces SET archived_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, w.team)
 	if _, err := w.store.Update(ctx, o, w.bob, made.ID, Patch{Title: &title}); !errors.Is(err, access.ErrNotFound) {

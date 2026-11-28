@@ -13,9 +13,14 @@ import (
 	"taskto.ai/taskto/internal/auth"
 )
 
-const maxRequestBody = 160 * 1024
+const (
+	maxEscapedUnit = 6
+	maxEscapedRune = 12
+	maxEnvelope    = 4096
+	maxRequestBody = maxEscapedUnit*MaxBody + maxEscapedRune*(MaxTitle+MaxDescription) + maxEscapedUnit*40 + maxEnvelope
+)
 
-type ownerFunc func(w http.ResponseWriter, r *http.Request) (owner Owner, manages bool, ok bool)
+type ownerFunc func(w http.ResponseWriter, r *http.Request) (owner Owner, ok bool)
 
 type createRequest struct {
 	Name        string `json:"name"`
@@ -49,11 +54,11 @@ func (s *Store) Routes(mux *http.ServeMux, accounts *auth.Service, spaces *acces
 
 func (s *Store) group(mux *http.ServeMux, base string, reads, writes func(http.Handler) http.Handler, owner ownerFunc) {
 	mux.Handle("GET "+base, reads(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		o, manages, ok := owner(w, r)
+		o, ok := owner(w, r)
 		if !ok {
 			return
 		}
-		list, err := s.List(r.Context(), o, manages)
+		list, err := s.List(r.Context(), o, caller(r))
 		if err != nil {
 			fail(w, r, err)
 			return
@@ -61,7 +66,7 @@ func (s *Store) group(mux *http.ServeMux, base string, reads, writes func(http.H
 		writeJSON(w, http.StatusOK, SkillList{Skills: list})
 	})))
 	mux.Handle("POST "+base, writes(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		o, _, ok := owner(w, r)
+		o, ok := owner(w, r)
 		if !ok {
 			return
 		}
@@ -79,7 +84,7 @@ func (s *Store) group(mux *http.ServeMux, base string, reads, writes func(http.H
 		writeJSON(w, http.StatusCreated, created)
 	})))
 	mux.Handle("PATCH "+base+"/{skill}", writes(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		o, _, ok := owner(w, r)
+		o, ok := owner(w, r)
 		if !ok {
 			return
 		}
@@ -96,7 +101,7 @@ func (s *Store) group(mux *http.ServeMux, base string, reads, writes func(http.H
 		writeJSON(w, http.StatusOK, updated)
 	})))
 	mux.Handle("DELETE "+base+"/{skill}", writes(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		o, _, ok := owner(w, r)
+		o, ok := owner(w, r)
 		if !ok {
 			return
 		}
@@ -114,23 +119,23 @@ func caller(r *http.Request) int64 {
 	return u.ID
 }
 
-func personalOwner(w http.ResponseWriter, r *http.Request) (Owner, bool, bool) {
+func personalOwner(w http.ResponseWriter, r *http.Request) (Owner, bool) {
 	m, _ := auth.MembershipFrom(r.Context())
-	return Owner{Scope: ScopeUser, WorkspaceID: m.WorkspaceID, UserID: caller(r)}, true, true
+	return Owner{Scope: ScopeUser, WorkspaceID: m.WorkspaceID, UserID: caller(r)}, true
 }
 
-func workspaceOwner(w http.ResponseWriter, r *http.Request) (Owner, bool, bool) {
+func workspaceOwner(w http.ResponseWriter, r *http.Request) (Owner, bool) {
 	m, _ := auth.MembershipFrom(r.Context())
-	return Owner{Scope: ScopeWorkspace, WorkspaceID: m.WorkspaceID}, m.Role == auth.RoleAdmin, true
+	return Owner{Scope: ScopeWorkspace, WorkspaceID: m.WorkspaceID}, true
 }
 
-func spaceOwner(w http.ResponseWriter, r *http.Request) (Owner, bool, bool) {
+func spaceOwner(w http.ResponseWriter, r *http.Request) (Owner, bool) {
 	sp, ok := access.SpaceFrom(r.Context())
 	if !ok || sp.Kind != access.Shared {
 		apierr.Write(w, http.StatusNotFound, apierr.CodeSpaceNotFound, access.ErrNotFound.Error())
-		return Owner{}, false, false
+		return Owner{}, false
 	}
-	return Owner{Scope: ScopeSpace, WorkspaceID: sp.WorkspaceID, SpaceID: sp.ID, SpaceGeneration: sp.Generation}, sp.Access.Allows(access.Write), true
+	return Owner{Scope: ScopeSpace, WorkspaceID: sp.WorkspaceID, SpaceID: sp.ID, SpaceGeneration: sp.Generation}, true
 }
 
 func skillID(r *http.Request) int64 {

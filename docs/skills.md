@@ -42,6 +42,11 @@ later has its ID, so a removed space's skills are never read as a new space's.
 
 A private space has no skills of its own: its owner's own skills are the personal ones.
 
+Every read and write of skills checks again, in its own transaction, that the person is still an
+enabled member of the workspace and may read or manage the owner (an admin for the workspace's, a
+writer for a space's): access that was revoked after a request was admitted is not used. A person's
+own skill is stored only for a member of its workspace, which the schema also keeps.
+
 ## What the agent gets
 
 `skills.Store.ForUser(workspace, user)` is the one answer to "which skills may this person use

@@ -3,16 +3,19 @@ package skills
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/auth"
 )
 
 type Scope string
@@ -79,8 +82,10 @@ func (p Patch) empty() bool {
 }
 
 var (
-	ErrNotFound = apierr.New(http.StatusNotFound, apierr.CodeSkillNotFound, "skill not found")
-	errNoFields = apierr.New(http.StatusBadRequest, apierr.CodeBadRequest, "nothing to change")
+	ErrNotFound    = apierr.New(http.StatusNotFound, apierr.CodeSkillNotFound, "skill not found")
+	errNoFields    = apierr.New(http.StatusBadRequest, apierr.CodeBadRequest, "nothing to change")
+	errNoWorkspace = apierr.New(http.StatusNotFound, apierr.CodeWorkspaceNotFound, "workspace not found")
+	errAdminOnly   = apierr.New(http.StatusForbidden, apierr.CodeAdminOnly, "only a workspace admin can do this")
 )
 
 type Store struct {
@@ -133,12 +138,51 @@ func (o Owner) args() []any {
 	return []any{o.WorkspaceID, string(o.Scope), user, space, generation}
 }
 
-func (s *Store) List(ctx context.Context, o Owner, includeDisabled bool) ([]Skill, error) {
-	query := `SELECT ` + columns + ` FROM skills WHERE ` + ownerWhere + ` AND enabled = 1 ORDER BY name, id`
-	if includeDisabled {
-		query = `SELECT ` + columns + ` FROM skills WHERE ` + ownerWhere + ` ORDER BY name, id`
+func (s *Store) List(ctx context.Context, o Owner, actor int64) (list []Skill, err error) {
+	err = s.spaces.Snapshot(ctx, func(_ *access.Checker, tx *sql.Tx) error {
+		manages, err := s.authorize(ctx, tx, o, actor)
+		if err != nil {
+			return err
+		}
+		query := `SELECT ` + columns + ` FROM skills WHERE ` + ownerWhere + ` AND enabled = 1 ORDER BY name, id`
+		if manages {
+			query = `SELECT ` + columns + ` FROM skills WHERE ` + ownerWhere + ` ORDER BY name, id`
+		}
+		list, err = collect(tx.QueryContext(ctx, query, o.args()...))
+		return err
+	})
+	return list, err
+}
+
+func (s *Store) authorize(ctx context.Context, tx *sql.Tx, o Owner, actor int64) (manages bool, err error) {
+	role, member, err := auth.MemberRole(ctx, tx, o.WorkspaceID, actor)
+	switch {
+	case err != nil:
+		return false, err
+	case !member:
+		return false, errNoWorkspace
 	}
-	return collect(s.db.QueryContext(ctx, query, o.args()...))
+	switch o.Scope {
+	case ScopeUser:
+		if o.UserID != actor {
+			return false, ErrNotFound
+		}
+		return true, nil
+	case ScopeWorkspace:
+		return role == auth.RoleAdmin, nil
+	case ScopeSpace:
+		sp, err := s.spaces.CheckTx(ctx, tx, actor, o.SpaceID)
+		switch {
+		case errors.Is(err, access.ErrNotFound):
+			return false, access.ErrNotFound
+		case err != nil:
+			return false, err
+		case sp.WorkspaceID != o.WorkspaceID || sp.Generation != o.SpaceGeneration || sp.Kind != access.Shared:
+			return false, access.ErrNotFound
+		}
+		return sp.Access.Allows(access.Write), nil
+	}
+	return false, ErrNotFound
 }
 
 func validName(name string) *apierr.Error {
@@ -151,10 +195,14 @@ func validName(name string) *apierr.Error {
 
 func textLength(value string, max int, code apierr.Code, what string) *apierr.Error {
 	n := utf8.RuneCountInString(value)
-	if n < 1 || n > max || !utf8.ValidString(value) || strings.ContainsRune(value, 0) || strings.ContainsAny(value, "\r\n") {
+	if n < 1 || n > max || !utf8.ValidString(value) || strings.ContainsFunc(value, breaksLine) {
 		return apierr.New(http.StatusBadRequest, code, fmt.Sprintf("a skill's %s is 1 to %d characters on one line", what, max), apierr.Params{"max": max})
 	}
 	return nil
+}
+
+func breaksLine(r rune) bool {
+	return unicode.IsControl(r) && r != '\t' || unicode.In(r, unicode.Zl, unicode.Zp)
 }
 
 func validBody(body string) *apierr.Error {
@@ -238,16 +286,14 @@ func (s *Store) write(ctx context.Context, o Owner, actor int64, fn func(tx *sql
 			}
 		}
 	}()
-	if o.Scope == ScopeSpace {
-		sp, cerr := s.spaces.CheckTx(ctx, tx, actor, o.SpaceID)
-		switch {
-		case errors.Is(cerr, access.ErrNotFound):
-			return access.ErrNotFound
-		case cerr != nil:
-			return cerr
-		case sp.WorkspaceID != o.WorkspaceID || sp.Generation != o.SpaceGeneration || sp.Kind != access.Shared || !sp.Access.Allows(access.Write):
-			return access.ErrNotFound
-		}
+	manages, err := s.authorize(ctx, tx, o, actor)
+	switch {
+	case err != nil:
+		return err
+	case !manages && o.Scope == ScopeWorkspace:
+		return errAdminOnly
+	case !manages:
+		return access.ErrNotFound
 	}
 	if err = fn(tx); err != nil {
 		return err
@@ -376,36 +422,30 @@ func (s *Store) Delete(ctx context.Context, o Owner, actor, id int64) error {
 	})
 }
 
-func (s *Store) isMember(ctx context.Context, workspaceID, userID int64) (bool, error) {
-	var one int
-	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM memberships m JOIN users u ON u.id = m.user_id AND u.disabled_at IS NULL
-		WHERE m.workspace_id = ? AND m.user_id = ?`, workspaceID, userID).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return err == nil, err
-}
-
-func (s *Store) ForUser(ctx context.Context, workspaceID, userID int64) ([]Skill, error) {
-	member, err := s.isMember(ctx, workspaceID, userID)
-	if err != nil || !member {
-		return []Skill{}, err
-	}
-	readable, err := s.spaces.Readable(ctx, userID, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	args := []any{workspaceID, userID}
-	var pairs []string
-	for _, sp := range readable {
-		pairs = append(pairs, `(space_id = ? AND space_generation = ?)`)
-		args = append(args, sp.ID, sp.Generation)
-	}
-	spaceClause := ``
-	if len(pairs) > 0 {
-		spaceClause = ` OR (scope = 'space' AND (` + strings.Join(pairs, ` OR `) + `))`
-	}
-	return collect(s.db.QueryContext(ctx, `SELECT `+columns+` FROM skills
-		WHERE workspace_id = ? AND enabled = 1 AND (scope = 'workspace' OR (scope = 'user' AND user_id = ?)`+spaceClause+`)
-		ORDER BY CASE scope WHEN 'workspace' THEN 0 WHEN 'space' THEN 1 ELSE 2 END, space_id, name, id`, args...))
+func (s *Store) ForUser(ctx context.Context, workspaceID, userID int64) (list []Skill, err error) {
+	list = []Skill{}
+	err = s.spaces.Snapshot(ctx, func(snap *access.Checker, tx *sql.Tx) error {
+		if _, member, err := auth.MemberRole(ctx, tx, workspaceID, userID); err != nil || !member {
+			return err
+		}
+		readable, err := snap.Readable(ctx, userID, workspaceID)
+		if err != nil {
+			return err
+		}
+		spaces := make([][2]int64, 0, len(readable))
+		for _, sp := range readable {
+			spaces = append(spaces, [2]int64{sp.ID, sp.Generation})
+		}
+		pairs, err := json.Marshal(spaces)
+		if err != nil {
+			return err
+		}
+		list, err = collect(tx.QueryContext(ctx, `SELECT `+columns+` FROM skills
+			WHERE workspace_id = ? AND enabled = 1 AND (scope = 'workspace' OR (scope = 'user' AND user_id = ?)
+				OR (scope = 'space' AND (space_id, space_generation) IN (SELECT j.value ->> 0, j.value ->> 1 FROM json_each(?) j)))
+			ORDER BY CASE scope WHEN 'workspace' THEN 0 WHEN 'space' THEN 1 ELSE 2 END, space_id, name, id`,
+			workspaceID, userID, string(pairs)))
+		return err
+	})
+	return list, err
 }

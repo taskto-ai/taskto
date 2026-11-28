@@ -101,7 +101,9 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `skill_created`, `skill_updated`, `skill_removed` | a skill of a shared space or of the workspace is made, changed or removed ([skills](skills.md)): they change what the agent is told for other people. A person's own skills, which change nobody else's access, record nothing | the skill's | skill | `scope` (`space` or `workspace`), `space_id` (a space's), `name`; `fields` on an update (`name`, `title`, `description`, `body`, `enabled`: which changed, never the text) |
 
 The names a person gives things (a token's, a space's, a shared account's label, an integration's name, a model's) are
-not recorded: they are free text, and people paste secrets into such boxes. The target's id
+not recorded: they are free text, and people paste secrets into such boxes. The one exception is a skill's `name`, an
+identifier checked against a pattern (lowercase letters, digits and hyphens, 2 to 40 characters), which a person can't use
+to paste a secret into; a skill's title is never recorded or shown in the log, since it can be that of a space the reader may not open. The target's id
 says which object it was, and `fields` says what about it changed.
 
 Notes:
@@ -199,7 +201,8 @@ The code makes the details narrow, so a future change can't leak by accident:
   It fails, and its change is rolled back, so the mistake shows in the tests.
 - No detail is free text. The values of the pattern-checked kinds are ones a person doesn't
   type freely (an address and a host pass their patterns; a pasted token doesn't), or come from the
-  code or the operator. A name a person types is never a detail.
+  code or the operator. A name a person types is never a detail, except a skill's `name`, which the schema checks
+  against the pattern of a skill's identifier.
 - A detail named like a secret (`password`, `token`, `key`, `secret`, `hash`, `link`, `cookie`,
   `session`…) must be a boolean, and a test checks every schema for it.
 - Tests run each family's flow with known secret values and check that none of them is in any
@@ -227,7 +230,7 @@ events within the hour. Backups contain the log like the rest of the database.
   actor isn't the request's user (accepting an invite as a new account).
 - For an event with no transaction, use `audit.Log`, which logs a failure and returns nothing.
 - Add the code to `internal/audit/actions.go`, its details to `internal/audit/schema.go` (fixed
-  and typed; never a name or other text a person typed), and a test that does the action, checks the
+  and typed; never a name or other text a person typed, but a skill's pattern-checked `name`), and a test that does the action, checks the
   row (actor, workspace, target, details), checks that a refused request records nothing, and,
   if the action handles a secret, runs `audittest.NoSecrets`. Add it to the table above.
 - An action that deletes its target passes `TargetCreated` from the delete's `RETURNING

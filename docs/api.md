@@ -1394,7 +1394,7 @@ app's button does both: it posts, then goes to the address.
 | `boards/<id>-<name>.json`, `boards/<id>-<name>.md` | Each board of the private space, archived ones too (the personal board): the board and its cards (all columns, archived cards too, in the order of their IDs), each with its thread of comments. The JSON is `{"board": {…}, "cards": [{…card as the API gives it…, "comments": […]}]}`, exactly what `GET …/cards/{card}` answers. The Markdown is the same, for reading: a heading per card, with its column, details, body and comments. The two files are read one after the other, so a card edited between them can differ in them. |
 | `conversations/<id>-<title>.json` | Each conversation the caller owns **in this workspace**, archived ones too: `{"conversation": {…as the conversations API gives it…}, "entries": […], "transcript": "complete"}`. The entries are the agent runtime's, oldest first, in the shape the web app draws, as `GET …/conversations/{conversation}/entries` pages them, as the history was when its export began. If the agent runtime is off, no longer has the conversation or stops answering (each read waits at most 30 seconds), `transcript` is `"unavailable"` (`entries` empty) or `"incomplete"` (the entries read before it stopped), and the manifest says so. |
 | `apps/<id>-<name>.json` | Each app of the private space, offline ones too: `{"app": {id, name, archived_at, created_at, updated_at}, "records": […]}`. The records are the live ones (not deleted), as the agent's `list_app_rows` tool gives them (each field by name, with `id` and `revision`). An attachment field holds each photo's metadata, not its bytes; the app's definition isn't included (copy the app, or see [templates](templates.md)). |
-| `skills/<name>.md` | Each of the caller's own [skills](skills.md) in this workspace, disabled ones too: Markdown with a front matter of `name`, `title`, `description` and `enabled` (the text values quoted), then the instructions as they are. Skills of a space or of the workspace are not the caller's and are not in it. |
+| `skills/<name>.md` | Each of the caller's own [skills](skills.md) in this workspace, disabled ones too: Markdown with a front matter of `name`, `title`, `description` and `enabled` (the text values quoted), then the instructions byte for byte as stored (a blank line after the front matter, nothing added or removed at the end). Skills of a space or of the workspace are not the caller's and are not in it. |
 | `manifest.json` | `{"format": 1, "scope": "user", "exported_at", "workspace": {id, name}, "user": {id, name, email}, "counts": {documents, boards, cards, comments, conversations, apps, records, skills}, "skipped": […]}`. `skipped` lists what couldn't be included, as `{"kind", "reason", "ref"}`: `document` with `unavailable` and its path (a file whose bytes the server no longer has), `documents` with `unavailable` (the space's history was rewritten while the export read it) or `off` (the server has no knowledge base), `app` with `unavailable` and its ID (the app was moved out of the private space while the export read it), `conversations` or `skills` with `off` (the server has none), or `transcript` with `unavailable` or `incomplete` and a conversation's ID; it is capped at 1000 (`"skipped_truncated": true` then). |
 
 **The scope is where a thing is now, and who owns a conversation.** The documents, boards and
@@ -1608,7 +1608,8 @@ A skill, as every route below answers it:
 `scope` is `user`, `space` or `workspace`; `space_id` is there for a space's skills only. `name`
 is a lowercase letter followed by 1 to 39 lowercase letters, digits or hyphens, and unique per
 owner (a person, a space, the workspace); `title` is 1 to 100 characters and `description` 1 to 300,
-each on one line; `body` is Markdown of 1 byte to 32 KiB. `origin` is `""` for a skill written
+each on one line (no line break of any kind, such as a line or paragraph separator); `body` is Markdown of 1 byte to 32 KiB. A request
+body is read up to the size a valid skill takes when every character is written as a JSON escape (about 200 KiB); a bigger one is `400 invalid_json`. `origin` is `""` for a skill written
 here. An owner holds at most 200 skills. A list is `{"skills": [...]}`, by `name`.
 
 The same four routes exist for each owner:
@@ -1620,7 +1621,10 @@ The same four routes exist for each owner:
 | the workspace | `/api/workspaces/{workspace}/skills` | any member lists them; creating, changing and deleting are an admin's (`403 admin_only`) |
 
 - `GET …/skills` lists the owner's skills. Those who only use a space's or the workspace's skills
-  get the enabled ones; those who manage them get all.
+  get the enabled ones; those who manage them get all. Who the caller is, whether they are still a
+  member (`404 workspace_not_found` otherwise) and whether they may read or manage the owner are
+  read again when the request is served, in the same transaction as the list or the change, so a
+  removal, a disabling or a demotion that commits after the request was admitted is honoured.
 - `POST …/skills` with `{"name", "title", "description", "body", "enabled"}` (`enabled` is
   optional and defaults to `true`; other fields are `400 invalid_json`) answers `201` with the
   skill; `409 skill_name_taken` or `409 too_many_skills`.
@@ -1678,7 +1682,7 @@ are added. The names are read when the log is, not when the event was recorded, 
 what belongs to the workspace: `actor` and `target_user` are the user while they are a member
 of it (otherwise `null`, and `actor_id` and `target_id` still say who), and `target_name` is the
 name of the workspace, a shared space, a provider account, a shared CLI account or an integration the event is
-about, or the title of a skill, if it still exists (matched by its id **and** creation time, since ids are reused;
+about, or if it still exists (matched by its id **and** creation time, since ids are reused;
 `null` otherwise). An access token's or an invite's name is never resolved. `details` are the
 facts the action declares, never free text.
 
