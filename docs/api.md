@@ -325,7 +325,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `conversation_title_invalid` | 400 | A title must have at most `max` printable characters. |
 | `conversation_lost` | 410 | The agent runtime no longer has the conversation's content. |
 | `conversation_no_model` | 409 | The conversation has no model: choose one. |
-| `conversation_busy` | 409 | The conversation is working: a continue is only for an idle one. Also, a message that names an agent is still changing the conversation's model, so `PUT …/model` gave up waiting for it (a few seconds), and nothing changed. |
+| `conversation_busy` | 409 | The conversation is working: a continue is only for an idle one. Also, a message that names an agent is still changing the conversation's model, so `PUT …/model` or `POST …/continue` gave up waiting for it (a few seconds), and nothing changed. |
 | `conversation_moved` | 409 | The conversation has entries after the one the continue was for: it was already continued, or changed meanwhile. |
 | `model_unavailable` | 409 | The caller can't run that model now: a CLI whose account isn't connected, or that the member's account mode leaves no account for. |
 | `agent_off` | 503 | The agent runtime is off: the server runs without `-agent`. |
@@ -5757,7 +5757,15 @@ While such a message is being sent it holds the conversation's model. `PUT …/m
 that hold for a few seconds only, then answers `409 conversation_busy` and changes nothing; the
 owner may try again. The send itself runs under a deadline (twenty seconds) covering the read
 and switch of the model and the submission, so a runtime that stops answering ends the send
-with `503`, the model put back, and the hold released.
+with `503`, the model put back, and the hold released. A continue takes the same hold: while a
+message that names an agent is between its switch and its submission, `POST …/continue` waits for
+the hold a few seconds, then answers `409 conversation_busy` and starts nothing, and a message
+that names an agent waits for a continue that is being admitted. The two never interleave, so a
+message is never submitted under the model of a continue that came between its switch and its send.
+A continue whose call to the agent runtime got no answer in time answers `503`, but the runtime may
+still commit it, so the server keeps the hold, asking the runtime again for the same continue, until
+the runtime answers (it is then either admitted or refused as moved) or about a minute passes; a
+message that names an agent waits for that hold like for any other.
 
 Each person-sent message is stored as a `taskto.input` entry. Its `data` includes version `1`
 and the sender's user ID; optional `text` and `attached` fields preserve the original text and

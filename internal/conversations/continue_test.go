@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -398,5 +399,186 @@ func TestACancelledRequestStopsWaitingForTheAdmissionLock(t *testing.T) {
 	e.svc.mu.Unlock()
 	if left != 0 {
 		t.Fatalf("%d conversation locks are left after every waiter went", left)
+	}
+}
+
+func (e *env) holdsOnModel(id int64, users int) bool {
+	e.svc.mu.Lock()
+	defer e.svc.mu.Unlock()
+	h := e.svc.modelHolds[id]
+	return h != nil && h.users == users
+}
+
+func TestAContinueCannotPassAMentionBetweenItsSwitchAndItsSend(t *testing.T) {
+	e := newEnv(t, false)
+	e.svc.modelWait = 50 * time.Millisecond
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	mentioned := agentrt.ModelRef{Provider: "cli-codex", ModelID: "default"}
+
+	submitting, release := make(chan struct{}), make(chan struct{})
+	e.rt.mu.Lock()
+	e.rt.onSubmit = func() {
+		close(submitting)
+		<-release
+	}
+	e.rt.mu.Unlock()
+
+	sent := make(chan int, 1)
+	go func() {
+		sent <- owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), mention(mentioned.Provider, mentioned.ModelID, "hello")).Code
+	}()
+	<-submitting
+
+	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7))
+	if rec.Code != http.StatusConflict || apiErrorCode(t, rec.Body.Bytes()) != string(apierr.CodeConversationBusy) {
+		close(release)
+		t.Fatalf("a continue during a mention's switch and send answered %d %s, want 409 conversation_busy", rec.Code, rec.Body.String())
+	}
+	if got := e.continues(); len(got) != 0 {
+		close(release)
+		t.Fatalf("the runtime was asked to continue between a mention's switch and send: %+v", got)
+	}
+	close(release)
+	if code := <-sent; code != http.StatusAccepted {
+		t.Fatalf("the mention answered %d, want 202", code)
+	}
+	e.rt.mu.Lock()
+	got := e.rt.models[agent]
+	e.rt.mu.Unlock()
+	if got != mentioned {
+		t.Fatalf("the model is %+v after the mention, want the one it named, %+v", got, mentioned)
+	}
+	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7))
+}
+
+func TestAMentionWaitsForAContinueBeingAdmitted(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+
+	admitting, release := make(chan struct{}), make(chan struct{})
+	e.rt.onContinue = func() {
+		close(admitting)
+		<-release
+	}
+	continued := make(chan int, 1)
+	go func() {
+		continued <- owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7)).Code
+	}()
+	<-admitting
+
+	sent := make(chan int, 1)
+	go func() {
+		sent <- owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), mention("cli-codex", "default", "hello")).Code
+	}()
+	for waiting := false; !waiting; {
+		select {
+		case code := <-sent:
+			close(release)
+			t.Fatalf("a mention answered %d while a continue was being admitted", code)
+		default:
+			waiting = e.holdsOnModel(c.ID, 2)
+			runtime.Gosched()
+		}
+	}
+	e.rt.mu.Lock()
+	switched := e.rt.sets
+	e.rt.mu.Unlock()
+	if switched != 0 {
+		close(release)
+		t.Fatalf("a mention switched the model %d times while a continue was being admitted", switched)
+	}
+	close(release)
+	if code := <-continued; code != http.StatusAccepted {
+		t.Fatalf("the continue answered %d, want 202", code)
+	}
+	if code := <-sent; code != http.StatusAccepted {
+		t.Fatalf("the mention answered %d, want 202", code)
+	}
+}
+
+func TestAStalledContinueEndsAtItsDeadlineAndFreesTheHold(t *testing.T) {
+	e := newEnv(t, false)
+	e.svc.holdLimit = 50 * time.Millisecond
+	e.svc.settleLimit = 50 * time.Millisecond
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	e.rt.stallContinue = true
+
+	done := make(chan int, 1)
+	go func() {
+		done <- owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7)).Code
+	}()
+	select {
+	case code := <-done:
+		if code != http.StatusServiceUnavailable {
+			t.Fatalf("the stalled continue answered %d, want 503", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stalled continue never ended")
+	}
+	for end := time.Now().Add(2 * time.Second); e.holdsOnModel(c.ID, 1) && time.Now().Before(end); {
+		runtime.Gosched()
+	}
+	e.svc.mu.Lock()
+	holds := len(e.svc.modelHolds)
+	e.svc.mu.Unlock()
+	if holds != 0 {
+		t.Fatalf("%d model holds are left after the stalled continue ended", holds)
+	}
+	owner.expect(http.StatusOK, http.MethodPut, path(ws, fmt.Sprintf("/%d/model", c.ID)), map[string]any{"provider": "backup", "model_id": "b-1"})
+}
+
+func TestAContinueThatTimedOutKeepsTheHoldUntilTheRuntimeAnswersAgain(t *testing.T) {
+	e := newEnv(t, false)
+	e.svc.holdLimit = 50 * time.Millisecond
+	e.svc.modelWait = 5 * time.Second
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	mentioned := agentrt.ModelRef{Provider: "cli-codex", ModelID: "default"}
+	e.rt.mu.Lock()
+	e.rt.lateContinue = true
+	e.rt.confirm = make(chan struct{})
+	e.rt.mu.Unlock()
+
+	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("the stalled continue answered %d, want 503", rec.Code)
+	}
+
+	submitting, release := make(chan struct{}), make(chan struct{})
+	e.rt.mu.Lock()
+	e.rt.onSubmit = func() {
+		close(submitting)
+		<-release
+	}
+	e.rt.mu.Unlock()
+	sent := make(chan int, 1)
+	go func() {
+		sent <- owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), mention(mentioned.Provider, mentioned.ModelID, "hello")).Code
+	}()
+	for waiting := false; !waiting; {
+		select {
+		case <-submitting:
+			waiting = true
+		default:
+			waiting = e.holdsOnModel(c.ID, 2)
+			runtime.Gosched()
+		}
+	}
+	e.rt.landLate()
+	close(e.rt.confirm)
+	close(release)
+	if code := <-sent; code != http.StatusAccepted {
+		t.Fatalf("the mention answered %d, want 202", code)
+	}
+	e.rt.mu.Lock()
+	got := e.rt.models[agent]
+	e.rt.mu.Unlock()
+	if got != mentioned {
+		t.Fatalf("the model is %+v after the mention, want %+v: a continue that timed out landed after the mention's switch", got, mentioned)
 	}
 }

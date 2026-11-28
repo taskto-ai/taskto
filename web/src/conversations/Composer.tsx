@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import { api, errorText, type ModelRef, type SendReply } from '../api'
+import { api, errorText, type SendReply } from '../api'
 import { browserLocale, useT } from '../i18n'
 import { Button } from '../ui/Button'
 import { IconButton } from '../ui/IconButton'
@@ -18,7 +18,7 @@ import { Textarea } from '../ui/Textarea'
 import { Tooltip } from '../ui/Tooltip'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { draftKey, readDraft, writeDraft } from '../uiState'
-import { type AgentChoice, agentToken, matchingAgents, mentionQuery } from './agentMention'
+import { type AgentChoice, agentToken, leadingAgent, matchingAgents, mentionQuery } from './agentMention'
 import { useDictation } from './Dictation'
 
 function requestId(): string {
@@ -37,8 +37,7 @@ export function Composer({
   running,
   onSent,
   agents = [],
-  onSwitched,
-  choices,
+  onSwitching,
   children,
 }: {
   workspace: number
@@ -48,8 +47,7 @@ export function Composer({
   running: boolean
   onSent: () => void
   agents?: AgentChoice[]
-  onSwitched?: (model: ModelRef) => void
-  choices?: () => number
+  onSwitching?: () => () => void
   children?: ReactNode
 }) {
   const t = useT()
@@ -116,7 +114,7 @@ export function Composer({
     const draft = text
     const sentAs = mode
     pendingId.current ??= requestId()
-    const began = choices?.()
+    const readBack = leadingAgent(content) ? onSwitching?.() : undefined
     setBusy(true)
     setError(null)
     try {
@@ -130,7 +128,7 @@ export function Composer({
           ...(whenBusy ? { when_busy: whenBusy } : {}),
         }
         const reply = await api<SendReply>(`${base}/messages`, { method: 'POST', body })
-        if (reply?.model && choices?.() === began) onSwitched?.(reply.model)
+        if (reply?.model) (readBack ?? onSwitching?.())?.()
       }
       pendingId.current = null
       setDrafts((all) => (all[sentAs] === draft ? { ...all, [sentAs]: '' } : all))

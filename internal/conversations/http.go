@@ -490,16 +490,41 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	if !s.runnable(w, r, p, model) {
 		return
 	}
-	unlock, ok := s.lock(r.Context(), c.ID)
+	waitCtx, stopWaiting := context.WithTimeout(r.Context(), s.modelWait)
+	done, err := s.holdModel(waitCtx, c.ID)
+	stopWaiting()
+	if err != nil {
+		if r.Context().Err() == nil {
+			writeError(w, http.StatusConflict, apierr.CodeConversationBusy, "the conversation's model is being changed: try again in a moment")
+		}
+		return
+	}
+	holding := true
+	defer func() {
+		if holding {
+			done()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(r.Context(), s.holdLimit)
+	defer cancel()
+	unlock, ok := s.lock(ctx, c.ID)
 	if !ok {
+		if r.Context().Err() == nil {
+			unavailable(w)
+		}
 		return
 	}
 	defer unlock()
 	if !s.stillWritable(w, r) {
 		return
 	}
-	sub, admitted, err := rt.Continue(r.Context(), c.agentID, model, req.AfterEntry)
+	sub, admitted, err := rt.Continue(ctx, c.agentID, model, req.AfterEntry)
 	if err != nil {
+		var answered *agentrt.StatusError
+		if !errors.As(err, &answered) {
+			holding = false
+			go s.settleContinue(rt, c.agentID, model, req.AfterEntry, done)
+		}
 		conversationError(w, r, c, err)
 		return
 	}
@@ -509,6 +534,28 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	s.markWhenSettled(rt, p, admitted.Provider, sub)
 	slog.InfoContext(r.Context(), "conversation continued", "conversation", c.ID, "provider", admitted.Provider, "by", p.User)
 	writeJSON(w, http.StatusAccepted, SubmissionReply{SubmissionID: sub, Model: modelRef{Provider: admitted.Provider, ModelID: admitted.ModelID}})
+}
+
+func (s *Service) settleContinue(rt Runtime, agentID int64, model agentrt.ModelRef, afterEntry int64, done func()) {
+	defer done()
+	limit := time.NewTimer(s.settleLimit)
+	defer limit.Stop()
+	for {
+		ctx, cancel := context.WithTimeout(s.closing, s.holdLimit)
+		_, _, err := rt.Continue(ctx, agentID, model, afterEntry)
+		cancel()
+		var answered *agentrt.StatusError
+		if err == nil || errors.As(err, &answered) {
+			return
+		}
+		select {
+		case <-limit.C:
+			return
+		case <-s.closing.Done():
+			return
+		case <-time.After(settlePause):
+		}
+	}
 }
 
 func (s *Service) handleMessages(w http.ResponseWriter, r *http.Request) {

@@ -104,25 +104,28 @@ export function ConversationView({
   )
   const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
   const [picked, setPicked] = useState<ModelRef | null>(null)
-  const choices = useRef(0)
-  const readModel = () => {
-    const began = choices.current
-    api<ModelRef>(`${base}/model`).then(setPicked, () => {
-      if (choices.current !== began) return
-      setPicked(null)
-      loadedModel.reload()
-    })
-  }
-  const [continuing, setContinuing] = useState(false)
   const modelWrites = useRef(0)
+  const modelShown = useRef(0)
   const claimModel = () => {
     const mine = ++modelWrites.current
-    return (m: ModelRef) => {
-      if (mine !== modelWrites.current) return
-      choices.current++
+    const choose = (m: ModelRef | null) => {
+      if (mine <= modelShown.current) return false
+      modelShown.current = mine
       setPicked(m)
+      return true
+    }
+    return Object.assign(choose, { outdated: () => mine <= modelShown.current })
+  }
+  const startRead = () => {
+    const choose = claimModel()
+    return () => {
+      if (choose.outdated()) return
+      api<ModelRef>(`${base}/model`).then(choose, () => {
+        if (choose(null)) loadedModel.reload()
+      })
     }
   }
+  const [continuing, setContinuing] = useState(false)
   const model = picked ?? loadedModel.data
   const agents = useMemo(
     () =>
@@ -262,8 +265,7 @@ export function ConversationView({
         running={running}
         onSent={onChanged}
         agents={agents}
-        onSwitched={readModel}
-        choices={() => choices.current}
+        onSwitching={startRead}
       >
         {providers.data && model && (
           <ModelPicker
