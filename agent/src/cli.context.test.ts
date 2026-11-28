@@ -55,6 +55,25 @@ describe('splitTurn', () => {
     expect(prompt.indexOf('b: second')).toBeGreaterThan(prompt.indexOf('a: first'))
   })
 
+  it('never lists a call with no stored result among the finished ones', () => {
+    const { prompt } = splitTurn([
+      user('go'),
+      {
+        role: 'assistant',
+        content: [
+          { type: 'toolCall', name: 'a', arguments: {} },
+          { type: 'toolCall', name: 'b', arguments: {} },
+        ],
+      },
+      { role: 'toolResult', toolName: 'a', content: [], details: { reason: 'missing_result' } },
+      result('b', 'second'),
+      cliCall,
+      missing,
+    ])
+    expect(prompt).toContain('b: second')
+    expect(prompt).not.toMatch(/- a:/)
+  })
+
   it('leaves the prompt empty when nothing but an answer follows the request', () => {
     expect(splitTurn([user('hi'), answer('hello')]).prompt).toBe('')
   })

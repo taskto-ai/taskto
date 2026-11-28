@@ -169,13 +169,13 @@ function finishedWork(results: readonly Message[]): string {
 
 export function splitTurn(messages: readonly Message[]): { prompt: string; history: { role: string; text: string }[] } {
   let end = messages.length
-  const current = (m: Message | undefined) =>
-    (m?.role === 'assistant' && !textOf(m.content).trim()) ||
-    (m?.role === 'toolResult' && (m.details as { reason?: unknown } | undefined)?.reason === 'missing_result')
+  const missingResult = (m: Message | undefined) =>
+    m?.role === 'toolResult' && (m.details as { reason?: unknown } | undefined)?.reason === 'missing_result'
+  const current = (m: Message | undefined) => (m?.role === 'assistant' && !textOf(m.content).trim()) || missingResult(m)
   while (end > 0 && current(messages[end - 1])) end--
   let work = end
   while (work > 0 && (messages[work - 1]?.role === 'assistant' || messages[work - 1]?.role === 'toolResult')) work--
-  const finished = messages.slice(work, end).filter((m) => m.role === 'toolResult')
+  const finished = messages.slice(work, end).filter((m) => m.role === 'toolResult' && !missingResult(m))
   const requestEnd = finished.length > 0 ? work : end
   let start = requestEnd
   while (start > 0 && messages[start - 1]?.role === 'user') start--
