@@ -13,12 +13,7 @@ import (
 	"taskto.ai/taskto/internal/auth"
 )
 
-const (
-	maxEscapedUnit = 6
-	maxEscapedRune = 12
-	maxEnvelope    = 4096
-	maxRequestBody = maxEscapedUnit*MaxBody + maxEscapedRune*(MaxTitle+MaxDescription) + maxEscapedUnit*40 + maxEnvelope
-)
+const maxRequestBody = 6*MaxBody + 12*(MaxTitle+MaxDescription) + 6*40 + 4096
 
 type ownerFunc func(w http.ResponseWriter, r *http.Request) (owner Owner, ok bool)
 

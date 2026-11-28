@@ -1,13 +1,4 @@
--- Skills: named, described instructions that people teach the agent once and reuse (docs/skills.md).
---
--- A skill is text only. It belongs to one person ('user'), to a shared space ('space': everyone who
--- can read the space uses it, people who can write it manage it) or to the whole workspace
--- ('workspace': every member uses it, admins manage it). Who may read or change one is decided in
--- internal/skills with the access checker and the workspace roles; this table keeps the rules that
--- must hold whatever code writes it.
---
--- A space's skills remember the space's generation (internal/access): the ID of a removed space can
--- come again, and a skill of the old space must never be read as the new one's.
+-- Skills: named, described instructions for the agent, text only (docs/skills.md).
 
 CREATE TABLE skills (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,7 +22,6 @@ CREATE TABLE skills (
     CHECK (length(name) BETWEEN 2 AND 40)
 ) STRICT;
 
--- SQLite counts NULLs as distinct in a unique index, so each scope has its own.
 CREATE UNIQUE INDEX skills_user_name ON skills (workspace_id, user_id, name) WHERE scope = 'user';
 CREATE UNIQUE INDEX skills_space_name ON skills (space_id, name) WHERE scope = 'space';
 CREATE UNIQUE INDEX skills_workspace_name ON skills (workspace_id, name) WHERE scope = 'workspace';
@@ -64,8 +54,6 @@ BEGIN
     SELECT RAISE(ABORT, 'a skill never changes its owner');
 END;
 
--- Leaving a workspace takes a person's own skills of it along, so that coming back doesn't bring
--- them back.
 CREATE TRIGGER skills_membership_ended AFTER DELETE ON memberships
 BEGIN
     DELETE FROM skills WHERE scope = 'user' AND user_id = OLD.user_id AND workspace_id = OLD.workspace_id;
