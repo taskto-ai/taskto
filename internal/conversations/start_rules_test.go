@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/agentrt"
 )
 
@@ -44,17 +45,22 @@ func TestStartRefusesWhatIsNotAValidTurn(t *testing.T) {
 	owner, workspace := e.setup()
 	valid := Start{Workspace: workspace, User: owner.id, Prompt: "Do work", Origin: Origin{Kind: "app", Key: "app-effect:30"}}
 	cases := map[string]func(*Start){
-		"unknown kind":     func(s *Start) { s.Origin.Kind = "user" },
-		"empty kind":       func(s *Start) { s.Origin.Kind = "" },
-		"empty key":        func(s *Start) { s.Origin.Key = "" },
-		"key of 101 bytes": func(s *Start) { s.Origin.Key = strings.Repeat("k", 101) },
-		"key with a tab":   func(s *Start) { s.Origin.Key = "a\tb" },
-		"key with a DEL":   func(s *Start) { s.Origin.Key = "a\x7fb" },
-		"key not ASCII":    func(s *Start) { s.Origin.Key = "chave-ç" },
-		"blank prompt":     func(s *Start) { s.Prompt = " \n\t" },
-		"prompt not UTF-8": func(s *Start) { s.Prompt = "a\xffb" },
-		"provider only":    func(s *Start) { s.Model = agentrt.ModelRef{Provider: "script"} },
-		"model id only":    func(s *Start) { s.Model = agentrt.ModelRef{ModelID: "script-1"} },
+		"unknown kind":         func(s *Start) { s.Origin.Kind = "user" },
+		"empty kind":           func(s *Start) { s.Origin.Kind = "" },
+		"empty key":            func(s *Start) { s.Origin.Key = "" },
+		"key of 101 bytes":     func(s *Start) { s.Origin.Key = strings.Repeat("k", 101) },
+		"key with a tab":       func(s *Start) { s.Origin.Key = "a\tb" },
+		"key with a DEL":       func(s *Start) { s.Origin.Key = "a\x7fb" },
+		"key not ASCII":        func(s *Start) { s.Origin.Key = "chave-ç" },
+		"blank prompt":         func(s *Start) { s.Prompt = " \n\t" },
+		"title of 201":         func(s *Start) { s.Title = strings.Repeat("x", 201) },
+		"title with a newline": func(s *Start) { s.Title = "a\nb" },
+		"title with a tab":     func(s *Start) { s.Title = "a\tb" },
+		"title with a NUL":     func(s *Start) { s.Title = "a\x00b" },
+		"title not UTF-8":      func(s *Start) { s.Title = "a\xffb" },
+		"prompt not UTF-8":     func(s *Start) { s.Prompt = "a\xffb" },
+		"provider only":        func(s *Start) { s.Model = agentrt.ModelRef{Provider: "script"} },
+		"model id only":        func(s *Start) { s.Model = agentrt.ModelRef{ModelID: "script-1"} },
 		"another workspace": func(s *Start) {
 			s.Model = agentrt.ModelRef{Provider: fmt.Sprintf("ws%d-gateway", s.Workspace+1), ModelID: "x"}
 		},
@@ -81,6 +87,193 @@ func TestStartRefusesWhatIsNotAValidTurn(t *testing.T) {
 	edge.Origin.Key = " ~!"
 	if _, err := e.svc.Start(context.Background(), edge); err != nil {
 		t.Fatalf("a key of printable ASCII was refused: %v", err)
+	}
+}
+
+func TestStartTitleFollowsTheConversationRouteRule(t *testing.T) {
+	e := newEnv(t, false)
+	owner, workspace := e.setup()
+	st := Start{Workspace: workspace, User: owner.id, Prompt: "Do work", Origin: Origin{Kind: "app", Key: "app-effect:31"}}
+	st.Title = "  " + strings.Repeat("é", 200) + "  "
+	started, err := e.svc.Start(context.Background(), st)
+	if err != nil {
+		t.Fatalf("a title of 200 characters was refused: %v", err)
+	}
+	if want := strings.Repeat("é", 200); started.Conversation.Title != want {
+		t.Fatalf("title = %q, want it trimmed", started.Conversation.Title)
+	}
+	var stored string
+	if err := e.db.QueryRow(`SELECT title FROM conversations WHERE id = ?`, started.Conversation.ID).Scan(&stored); err != nil || stored != started.Conversation.Title {
+		t.Fatalf("stored title = %q, %v", stored, err)
+	}
+	over := st
+	over.Origin.Key = "app-effect:32"
+	over.Title = strings.Repeat("é", 201)
+	if _, err := e.svc.Start(context.Background(), over); err == nil {
+		t.Fatal("a title of 201 characters was admitted")
+	}
+	if len(e.rt.created) != 1 {
+		t.Fatalf("a refused title reached the runtime: created=%v", e.rt.created)
+	}
+}
+
+func TestStartChecksTheOwnerAndTheRowAgainJustBeforeTheSubmit(t *testing.T) {
+	cases := map[string]struct {
+		change func(e *env, owner *client, workspace int64, started *Conversation)
+		want   func(error) bool
+	}{
+		"the owner is disabled": {
+			change: func(e *env, owner *client, workspace int64, _ *Conversation) {
+				if _, err := e.db.Exec(`UPDATE users SET disabled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, owner.id); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: func(err error) bool { return errors.Is(err, access.ErrDisabled) },
+		},
+		"the owner is removed from the workspace": {
+			change: func(e *env, owner *client, workspace int64, _ *Conversation) {
+				if _, err := e.db.Exec(`DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`, workspace, owner.id); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: func(err error) bool { return errors.Is(err, ErrNotMember) },
+		},
+		"the conversation is archived": {
+			change: func(e *env, owner *client, workspace int64, _ *Conversation) {
+				if _, err := e.db.Exec(`UPDATE conversations SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE origin = 'app-effect:50'`); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: func(err error) bool { return errors.Is(err, ErrArchived) },
+		},
+		"the conversation row is purged": {
+			change: func(e *env, owner *client, workspace int64, _ *Conversation) {
+				if _, err := DeleteOwned(context.Background(), e.db, owner.id); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: func(err error) bool { return errors.Is(err, errNotFound) },
+		},
+		"another conversation has the row's id": {
+			change: func(e *env, owner *client, workspace int64, _ *Conversation) {
+				var id int64
+				if err := e.db.QueryRow(`SELECT id FROM conversations WHERE origin = 'app-effect:50'`).Scan(&id); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := e.db.Exec(`DELETE FROM conversations WHERE id = ?`, id); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := e.db.Exec(`INSERT INTO conversations (id, workspace_id, owner_id, agent_id, title, origin, origin_kind) VALUES (?, ?, ?, 999, '', 'app-effect:other', 'app')`, id, workspace, owner.id); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: func(err error) bool { return errors.Is(err, errNotFound) },
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, false)
+			owner, workspace := e.setup()
+			armed := true
+			e.svc.userLanguage = func(context.Context, int64) string {
+				if armed {
+					armed = false
+					tc.change(e, owner, workspace, nil)
+				}
+				return ""
+			}
+			st := Start{Workspace: workspace, User: owner.id, Prompt: "Do work", Origin: Origin{Kind: "app", Key: "app-effect:50", AppID: 5}}
+			_, err := e.svc.Start(context.Background(), st)
+			if !tc.want(err) {
+				t.Fatalf("Start = %v", err)
+			}
+			if submitted := len(e.rt.inputs[101]) + len(e.rt.inputs[100]); submitted != 0 {
+				t.Fatalf("a turn was submitted for an ineligible owner or a changed row: %v", e.rt.inputs)
+			}
+		})
+	}
+}
+
+type purgingSubmit struct {
+	*fakeRuntime
+	purge func()
+}
+
+func (p *purgingSubmit) Submit(ctx context.Context, conv int64, in agentrt.Input) (int64, error) {
+	p.purge()
+	return p.fakeRuntime.Submit(ctx, conv, in)
+}
+
+func TestStartReportsNoSuccessWhenTheRowIsPurgedDuringTheSubmit(t *testing.T) {
+	e := newEnv(t, false)
+	owner, workspace := e.setup()
+	e.svc.agent = func(context.Context) (Runtime, error) {
+		return &purgingSubmit{fakeRuntime: e.rt, purge: func() {
+			if _, err := DeleteOwned(context.Background(), e.db, owner.id); err != nil {
+				t.Fatal(err)
+			}
+		}}, nil
+	}
+	st := Start{Workspace: workspace, User: owner.id, Prompt: "Do work", Origin: Origin{Kind: "app", Key: "app-effect:53", AppID: 5}}
+	if started, err := e.svc.Start(context.Background(), st); !errors.Is(err, errNotFound) {
+		t.Fatalf("Start = %+v, %v; want errNotFound for a purged row", started, err)
+	}
+}
+
+func TestADisabledOwnersStartWaitsAndRunsOnceWhenEnabled(t *testing.T) {
+	e := newEnv(t, false)
+	owner, workspace := e.setup()
+	armed := true
+	e.svc.userLanguage = func(context.Context, int64) string {
+		if armed {
+			armed = false
+			if _, err := e.db.Exec(`UPDATE users SET disabled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, owner.id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return ""
+	}
+	st := Start{Workspace: workspace, User: owner.id, Prompt: "Do work", Origin: Origin{Kind: "routine", Key: "routine-run:51", RoutineID: 1}}
+	if _, err := e.svc.Start(context.Background(), st); !errors.Is(err, access.ErrDisabled) {
+		t.Fatalf("Start = %v", err)
+	}
+	if _, err := e.db.Exec(`UPDATE users SET disabled_at = NULL WHERE id = ?`, owner.id); err != nil {
+		t.Fatal(err)
+	}
+	started, err := e.svc.Start(context.Background(), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.rt.created) != 1 || len(e.rt.inputs[started.Conversation.agentID]) != 1 {
+		t.Fatalf("created=%v inputs=%v", e.rt.created, e.rt.inputs)
+	}
+}
+
+func TestARetryAfterALostSubmissionIsRefusedOnceTheOwnerArchivedTheConversation(t *testing.T) {
+	e := newEnv(t, false)
+	owner, workspace := e.setup()
+	flaky := &failingSubmit{fakeRuntime: e.rt, fail: 1}
+	e.svc.agent = func(context.Context) (Runtime, error) { return flaky, nil }
+	st := Start{Workspace: workspace, User: owner.id, Prompt: "Do work", Origin: Origin{Kind: "routine", Key: "routine-run:52", RoutineID: 4}}
+	if _, err := e.svc.Start(context.Background(), st); !errors.Is(err, ErrRuntimeDown) {
+		t.Fatalf("the lost submission error = %v", err)
+	}
+	var id int64
+	if err := e.db.QueryRow(`SELECT id FROM conversations WHERE origin = ?`, st.Origin.Key).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	one := path(workspace, fmt.Sprintf("/%d", id))
+	owner.expect(http.StatusOK, http.MethodPatch, one, map[string]any{"archived": true})
+	if _, err := e.svc.Start(context.Background(), st); !errors.Is(err, ErrArchived) {
+		t.Fatalf("a retry into an archived conversation = %v", err)
+	}
+	if got := len(e.rt.inputs); got != 0 {
+		t.Fatalf("an archived conversation received a turn: %v", e.rt.inputs)
+	}
+	owner.expect(http.StatusOK, http.MethodPatch, one, map[string]any{"archived": false})
+	started, err := e.svc.Start(context.Background(), st)
+	if err != nil || started.Conversation.ID != id || len(e.rt.inputs[started.Conversation.agentID]) != 1 {
+		t.Fatalf("the retry after unarchiving = %+v, %v, inputs=%v", started, err, e.rt.inputs)
 	}
 }
 

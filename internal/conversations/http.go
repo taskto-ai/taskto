@@ -478,9 +478,18 @@ func (s *Service) handleSetModel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, req)
 }
 
-func validTitle(w http.ResponseWriter, title string) (string, bool) {
+func cleanTitle(title string) (string, bool) {
 	title = strings.TrimSpace(title)
-	if utf8.RuneCountInString(title) > maxTitleLen || strings.IndexFunc(title, func(r rune) bool { return !unicode.IsPrint(r) && r != ' ' }) >= 0 {
+	if !utf8.ValidString(title) || utf8.RuneCountInString(title) > maxTitleLen ||
+		strings.IndexFunc(title, func(r rune) bool { return !unicode.IsPrint(r) && r != ' ' }) >= 0 {
+		return "", false
+	}
+	return title, true
+}
+
+func validTitle(w http.ResponseWriter, title string) (string, bool) {
+	title, ok := cleanTitle(title)
+	if !ok {
 		writeError(w, http.StatusBadRequest, apierr.CodeConversationTitleInvalid,
 			fmt.Sprintf("title must be up to %d printable characters", maxTitleLen), apierr.Params{"max": maxTitleLen})
 		return "", false

@@ -53,6 +53,8 @@ var (
 	ErrNotMember    = errors.New("the user is not an active member of the workspace")
 	ErrModelUnknown = errors.New("the model provider isn't available to the user")
 	ErrOrigin       = errors.New("the origin key is invalid or already belongs to another conversation")
+	ErrTitle        = errors.New("the title must be up to 200 printable characters")
+	ErrArchived     = errors.New("the conversation is archived: unarchive it first")
 )
 
 func (s *Service) Start(ctx context.Context, st Start) (Started, error) {
@@ -65,6 +67,11 @@ func (s *Service) Start(ctx context.Context, st Start) (Started, error) {
 	if strings.TrimSpace(st.Prompt) == "" || !utf8.ValidString(st.Prompt) {
 		return Started{}, errors.New("the prompt must not be empty")
 	}
+	title, titleOK := cleanTitle(st.Title)
+	if !titleOK {
+		return Started{}, ErrTitle
+	}
+	st.Title = title
 	if (st.Model.Provider == "") != (st.Model.ModelID == "") {
 		return Started{}, errors.New("the model must include both provider and model id")
 	}
@@ -102,7 +109,13 @@ func (s *Service) Start(ctx context.Context, st Start) (Started, error) {
 	}
 	model, _ := rt.Model(ctx, conversation.agentID)
 	if err := s.ensureUsageMark(ctx, rt, conversation.ID, conversation.agentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Started{}, errNotFound
+		}
 		return Started{}, runtimeError(ctx, err)
+	}
+	if err := s.stillEligible(ctx, st, conversation); err != nil {
+		return Started{}, err
 	}
 	submission, err := rt.Submit(ctx, conversation.agentID, in)
 	if err != nil {
@@ -127,6 +140,34 @@ func (s *Service) activeMember(ctx context.Context, workspace, user int64) error
 	}
 	if disabled {
 		return access.ErrDisabled
+	}
+	return nil
+}
+
+func (s *Service) stillEligible(ctx context.Context, st Start, c Conversation) error {
+	var archived, member, disabled bool
+	err := s.db.QueryRowContext(ctx, `SELECT c.archived_at IS NOT NULL, m.user_id IS NOT NULL, COALESCE(u.disabled_at IS NOT NULL, 0)
+		FROM conversations c
+		LEFT JOIN memberships m ON m.workspace_id = c.workspace_id AND m.user_id = c.owner_id
+		LEFT JOIN users u ON u.id = c.owner_id
+		WHERE c.id = ? AND c.workspace_id = ? AND c.owner_id = ? AND c.agent_id = ? AND c.origin = ? AND c.origin_kind = ?
+		AND c.origin_space_id IS ? AND c.origin_app_id IS ? AND c.origin_routine_id IS ?`,
+		c.ID, st.Workspace, st.User, c.agentID, st.Origin.Key, st.Origin.Kind,
+		nullableID(st.Origin.SpaceID), nullableID(st.Origin.AppID), nullableID(st.Origin.RoutineID)).
+		Scan(&archived, &member, &disabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errNotFound
+	}
+	if err != nil {
+		return err
+	}
+	switch {
+	case !member:
+		return ErrNotMember
+	case disabled:
+		return access.ErrDisabled
+	case archived:
+		return ErrArchived
 	}
 	return nil
 }
@@ -274,9 +315,15 @@ func (s *Service) Stop(ctx context.Context, ref Ref) error {
 }
 
 func (s *Service) recordSubmission(ctx context.Context, id, agentID, submission int64) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET origin_submission = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+	res, err := s.db.ExecContext(ctx, `UPDATE conversations SET origin_submission = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 		WHERE id = ? AND agent_id = ?`, submission, id, agentID)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return errors.Join(err, errNotFound)
+	}
+	return nil
 }
 
 func (s *Service) agentConversation(ctx context.Context, ref Ref, submission sql.NullInt64) (int64, error) {
