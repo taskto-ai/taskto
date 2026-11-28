@@ -26,7 +26,7 @@ func cliTranscript() string {
 func cliEntry(id int) map[string]any {
 	return map[string]any{"id": id, "kind": "pi.assistant", "model": []any{
 		map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "toolCall", "id": "c1", "name": "cli_turn", "arguments": map[string]any{"cli": "claude"}}}},
-		map[string]any{"role": "toolResult", "toolCallId": "c1", "toolName": "cli_turn",
+		map[string]any{"role": "toolResult", "toolCallId": "c1", "toolName": "cli_turn", "isError": false,
 			"content": []any{map[string]any{"type": "text", "text": cliAnswer}},
 			"details": map[string]any{"transcript": cliTranscript(), "apps": []any{map[string]any{"space": 3, "app": 4}}}},
 	}}

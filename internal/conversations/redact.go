@@ -47,7 +47,7 @@ func (f *viewerFilter) redact(raw []byte) ([]byte, error) {
 			}
 		}
 	}
-	if !scrub(doc) && !dropped {
+	if !scrub(doc, nil) && !dropped {
 		return raw, nil
 	}
 	return json.Marshal(doc)
@@ -209,12 +209,12 @@ func (f *viewerFilter) splice(parts []any) {
 	f.cli = slices.Replace(slices.Clone(f.cli), at, at+count, added...)
 }
 
-func scrub(v any) bool {
+func scrub(v any, diagnostics []any) bool {
 	changed := false
 	switch v := v.(type) {
 	case map[string]any:
 		if v["role"] == "toolResult" && v["toolName"] == cliTool {
-			changed = keepHarnessNotes(v) || changed
+			changed = keepHarnessDiagnostics(v, diagnostics) || changed
 			if details, ok := v["details"].(map[string]any); ok {
 				if _, kept := details["transcript"]; kept {
 					delete(details, "transcript")
@@ -228,36 +228,59 @@ func scrub(v any) bool {
 				changed = true
 			}
 		}
-		for _, child := range v {
-			changed = scrub(child) || changed
+		for key, child := range v {
+			var own []any
+			if key == "model" {
+				own = entryDiagnostics(v)
+			}
+			changed = scrub(child, own) || changed
 		}
 	case []any:
 		for _, child := range v {
-			changed = scrub(child) || changed
+			changed = scrub(child, diagnostics) || changed
 		}
 	}
 	return changed
 }
 
-const harnessNotes = "<harness>\n"
+func entryDiagnostics(entry map[string]any) []any {
+	data, _ := entry["data"].(map[string]any)
+	list, _ := data["diagnostics"].([]any)
+	return list
+}
 
-func keepHarnessNotes(result map[string]any) bool {
+func renderDiagnostics(diagnostics []any) (string, bool) {
+	lines := make([]string, 0, len(diagnostics))
+	for _, item := range diagnostics {
+		d, ok := item.(map[string]any)
+		severity, _ := d["severity"].(string)
+		message, _ := d["message"].(string)
+		if !ok || severity == "" || message == "" {
+			return "", false
+		}
+		lines = append(lines, "["+severity+"] "+message)
+	}
+	return "<harness>\n" + strings.Join(lines, "\n") + "\n</harness>", len(lines) > 0
+}
+
+func keepHarnessDiagnostics(result map[string]any, diagnostics []any) bool {
+	if failed, known := result["isError"].(bool); known && !failed {
+		return false
+	}
 	content, ok := result["content"].([]any)
 	if !ok {
 		return false
 	}
-	isNote := func(item any) bool {
-		part, ok := item.(map[string]any)
-		text, _ := part["text"].(string)
-		return ok && part["type"] == "text" && strings.HasPrefix(text, harnessNotes)
+	var kept []any
+	if note, ok := renderDiagnostics(diagnostics); ok && len(content) > 0 {
+		last, _ := content[len(content)-1].(map[string]any)
+		if text, _ := last["text"].(string); last["type"] == "text" && text == note {
+			kept = content[len(content)-1:]
+		}
 	}
-	if !slices.ContainsFunc(content, isNote) {
-		return false
+	if kept == nil {
+		kept = []any{}
 	}
-	kept := slices.DeleteFunc(slices.Clone(content), func(item any) bool {
-		part, ok := item.(map[string]any)
-		return ok && part["type"] == "text" && !isNote(item)
-	})
 	if len(kept) == len(content) {
 		return false
 	}
