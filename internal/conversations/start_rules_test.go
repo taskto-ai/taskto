@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -45,22 +46,17 @@ func TestStartRefusesWhatIsNotAValidTurn(t *testing.T) {
 	owner, workspace := e.setup()
 	valid := Start{Workspace: workspace, User: owner.id, Prompt: "Do work", Origin: Origin{Kind: "app", Key: "app-effect:30"}}
 	cases := map[string]func(*Start){
-		"unknown kind":         func(s *Start) { s.Origin.Kind = "user" },
-		"empty kind":           func(s *Start) { s.Origin.Kind = "" },
-		"empty key":            func(s *Start) { s.Origin.Key = "" },
-		"key of 101 bytes":     func(s *Start) { s.Origin.Key = strings.Repeat("k", 101) },
-		"key with a tab":       func(s *Start) { s.Origin.Key = "a\tb" },
-		"key with a DEL":       func(s *Start) { s.Origin.Key = "a\x7fb" },
-		"key not ASCII":        func(s *Start) { s.Origin.Key = "chave-ç" },
-		"blank prompt":         func(s *Start) { s.Prompt = " \n\t" },
-		"title of 201":         func(s *Start) { s.Title = strings.Repeat("x", 201) },
-		"title with a newline": func(s *Start) { s.Title = "a\nb" },
-		"title with a tab":     func(s *Start) { s.Title = "a\tb" },
-		"title with a NUL":     func(s *Start) { s.Title = "a\x00b" },
-		"title not UTF-8":      func(s *Start) { s.Title = "a\xffb" },
-		"prompt not UTF-8":     func(s *Start) { s.Prompt = "a\xffb" },
-		"provider only":        func(s *Start) { s.Model = agentrt.ModelRef{Provider: "script"} },
-		"model id only":        func(s *Start) { s.Model = agentrt.ModelRef{ModelID: "script-1"} },
+		"unknown kind":     func(s *Start) { s.Origin.Kind = "user" },
+		"empty kind":       func(s *Start) { s.Origin.Kind = "" },
+		"empty key":        func(s *Start) { s.Origin.Key = "" },
+		"key of 101 bytes": func(s *Start) { s.Origin.Key = strings.Repeat("k", 101) },
+		"key with a tab":   func(s *Start) { s.Origin.Key = "a\tb" },
+		"key with a DEL":   func(s *Start) { s.Origin.Key = "a\x7fb" },
+		"key not ASCII":    func(s *Start) { s.Origin.Key = "chave-ç" },
+		"blank prompt":     func(s *Start) { s.Prompt = " \n\t" },
+		"prompt not UTF-8": func(s *Start) { s.Prompt = "a\xffb" },
+		"provider only":    func(s *Start) { s.Model = agentrt.ModelRef{Provider: "script"} },
+		"model id only":    func(s *Start) { s.Model = agentrt.ModelRef{ModelID: "script-1"} },
 		"another workspace": func(s *Start) {
 			s.Model = agentrt.ModelRef{Provider: fmt.Sprintf("ws%d-gateway", s.Workspace+1), ModelID: "x"}
 		},
@@ -70,6 +66,20 @@ func TestStartRefusesWhatIsNotAValidTurn(t *testing.T) {
 		change(&st)
 		if _, err := e.svc.Start(context.Background(), st); err == nil {
 			t.Errorf("%s: Start was admitted", name)
+		}
+	}
+	badTitles := map[string]string{
+		"title of 201":         strings.Repeat("x", 201),
+		"title with a newline": "a\nb",
+		"title with a tab":     "a\tb",
+		"title with a NUL":     "a\x00b",
+		"title not UTF-8":      "a\xffb",
+	}
+	for name, title := range badTitles {
+		st := valid
+		st.Title = title
+		if _, err := e.svc.Start(context.Background(), st); !errors.Is(err, ErrTitle) {
+			t.Errorf("%s: Start = %v, want ErrTitle", name, err)
 		}
 	}
 	if len(e.rt.created) != 0 || len(e.rt.inputs) != 0 {
@@ -109,8 +119,8 @@ func TestStartTitleFollowsTheConversationRouteRule(t *testing.T) {
 	over := st
 	over.Origin.Key = "app-effect:32"
 	over.Title = strings.Repeat("é", 201)
-	if _, err := e.svc.Start(context.Background(), over); err == nil {
-		t.Fatal("a title of 201 characters was admitted")
+	if _, err := e.svc.Start(context.Background(), over); !errors.Is(err, ErrTitle) {
+		t.Fatalf("a title of 201 characters = %v, want ErrTitle", err)
 	}
 	if len(e.rt.created) != 1 {
 		t.Fatalf("a refused title reached the runtime: created=%v", e.rt.created)
@@ -149,6 +159,21 @@ func TestStartChecksTheOwnerAndTheRowAgainJustBeforeTheSubmit(t *testing.T) {
 		"the conversation row is purged": {
 			change: func(e *env, owner *client, workspace int64, _ *Conversation) {
 				if _, err := DeleteOwned(context.Background(), e.db, owner.id); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: func(err error) bool { return errors.Is(err, errNotFound) },
+		},
+		"the runtime conversation behind the row is another": {
+			change: func(e *env, owner *client, workspace int64, _ *Conversation) {
+				var id int64
+				if err := e.db.QueryRow(`SELECT id FROM conversations WHERE origin = 'app-effect:50'`).Scan(&id); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := e.db.Exec(`DELETE FROM conversations WHERE id = ?`, id); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := e.db.Exec(`INSERT INTO conversations (id, workspace_id, owner_id, agent_id, title, origin, origin_kind, origin_app_id) VALUES (?, ?, ?, 999, '', 'app-effect:50', 'app', 5)`, id, workspace, owner.id); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -615,5 +640,47 @@ func TestOutcomeRefusesASubmissionThatIsNotTheConversationsOwn(t *testing.T) {
 	}
 	if _, err := e.svc.Outcome(context.Background(), ref, started.Submission, time.Second); err != nil {
 		t.Fatalf("Outcome with its own submission = %v", err)
+	}
+}
+
+func TestAStaleStartCannotInitializeTheUsageOfAReplacementConversation(t *testing.T) {
+	e := newEnv(t, false)
+	owner, workspace := e.setup()
+	member := e.invite(owner, workspace, "member@example.com")
+	var replacement Conversation
+	armed := true
+	e.rt.onEntries = func() {
+		if !armed {
+			return
+		}
+		armed = false
+		if _, err := DeleteOwned(context.Background(), e.db, owner.id); err != nil {
+			t.Error(err)
+			return
+		}
+		got, err := e.svc.insertWithOrigin(context.Background(), Start{Workspace: workspace, User: member.id, Origin: Origin{Kind: "app", Key: "app-effect:61", AppID: 6}}, 102)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		replacement = got
+	}
+	st := Start{Workspace: workspace, User: owner.id, Prompt: "Do work", Origin: Origin{Kind: "app", Key: "app-effect:60", AppID: 5}}
+	if started, err := e.svc.Start(context.Background(), st); !errors.Is(err, errNotFound) {
+		t.Fatalf("the stale Start = %+v, %v; want errNotFound", started, err)
+	}
+	var oldID int64
+	if replacement.ID == 0 {
+		t.Fatal("no replacement conversation was made")
+	}
+	if err := e.db.QueryRow(`SELECT id FROM conversations WHERE origin = 'app-effect:61'`).Scan(&oldID); err != nil || oldID != replacement.ID {
+		t.Fatalf("replacement id = %d, %v", oldID, err)
+	}
+	var mark sql.NullInt64
+	if err := e.db.QueryRow(`SELECT usage_mark FROM conversations WHERE id = ?`, replacement.ID).Scan(&mark); err != nil || mark.Valid {
+		t.Fatalf("the stale Start set the replacement's usage mark: %+v, %v", mark, err)
+	}
+	if len(e.rt.inputs[101])+len(e.rt.inputs[102]) != 0 {
+		t.Fatalf("a turn was submitted: %v", e.rt.inputs)
 	}
 }

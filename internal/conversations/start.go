@@ -108,9 +108,9 @@ func (s *Service) Start(ctx context.Context, st Start) (Started, error) {
 		in.Capability = s.capability(conversation.ID, conversation.agentID)
 	}
 	model, _ := rt.Model(ctx, conversation.agentID)
-	if err := s.ensureUsageMark(ctx, rt, conversation.ID, conversation.agentID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Started{}, errNotFound
+	if err := s.startUsageMarkFor(ctx, rt, st, conversation); err != nil {
+		if errors.Is(err, errNotFound) {
+			return Started{}, err
 		}
 		return Started{}, runtimeError(ctx, err)
 	}
@@ -144,16 +144,51 @@ func (s *Service) activeMember(ctx context.Context, workspace, user int64) error
 	return nil
 }
 
+const claimedRow = `c.id = ? AND c.workspace_id = ? AND c.owner_id = ? AND c.agent_id = ? AND c.origin = ? AND c.origin_kind = ?
+	AND c.origin_space_id IS ? AND c.origin_app_id IS ? AND c.origin_routine_id IS ?`
+
+func claimedArgs(st Start, c Conversation) []any {
+	return []any{c.ID, st.Workspace, st.User, c.agentID, st.Origin.Key, st.Origin.Kind,
+		nullableID(st.Origin.SpaceID), nullableID(st.Origin.AppID), nullableID(st.Origin.RoutineID)}
+}
+
+func (s *Service) claimedUsageMark(ctx context.Context, st Start, c Conversation) (sql.NullInt64, error) {
+	var mark sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT c.usage_mark FROM conversations c WHERE `+claimedRow, claimedArgs(st, c)...).Scan(&mark)
+	if errors.Is(err, sql.ErrNoRows) {
+		return mark, errNotFound
+	}
+	return mark, err
+}
+
+func (s *Service) startUsageMarkFor(ctx context.Context, rt Runtime, st Start, c Conversation) error {
+	mark, err := s.claimedUsageMark(ctx, st, c)
+	if err != nil || mark.Valid {
+		return err
+	}
+	cursor, err := s.entryCursor(ctx, rt, c.agentID)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE conversations AS c SET usage_mark = ? WHERE `+claimedRow+` AND c.usage_mark IS NULL`,
+		append([]any{cursor}, claimedArgs(st, c)...)...)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n > 0 {
+		return err
+	}
+	_, err = s.claimedUsageMark(ctx, st, c)
+	return err
+}
+
 func (s *Service) stillEligible(ctx context.Context, st Start, c Conversation) error {
 	var archived, member, disabled bool
 	err := s.db.QueryRowContext(ctx, `SELECT c.archived_at IS NOT NULL, m.user_id IS NOT NULL, COALESCE(u.disabled_at IS NOT NULL, 0)
 		FROM conversations c
 		LEFT JOIN memberships m ON m.workspace_id = c.workspace_id AND m.user_id = c.owner_id
 		LEFT JOIN users u ON u.id = c.owner_id
-		WHERE c.id = ? AND c.workspace_id = ? AND c.owner_id = ? AND c.agent_id = ? AND c.origin = ? AND c.origin_kind = ?
-		AND c.origin_space_id IS ? AND c.origin_app_id IS ? AND c.origin_routine_id IS ?`,
-		c.ID, st.Workspace, st.User, c.agentID, st.Origin.Key, st.Origin.Kind,
-		nullableID(st.Origin.SpaceID), nullableID(st.Origin.AppID), nullableID(st.Origin.RoutineID)).
+		WHERE `+claimedRow, claimedArgs(st, c)...).
 		Scan(&archived, &member, &disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return errNotFound
