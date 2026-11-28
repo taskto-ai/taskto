@@ -214,9 +214,9 @@ func validBody(body string) *apierr.Error {
 }
 
 func (in Input) normalized() (Input, *apierr.Error) {
-	in.Name = strings.TrimSpace(in.Name)
-	in.Title = strings.TrimSpace(in.Title)
-	in.Description = strings.TrimSpace(in.Description)
+	in.Name = strings.Trim(in.Name, " \t")
+	in.Title = strings.Trim(in.Title, " \t")
+	in.Description = strings.Trim(in.Description, " \t")
 	for _, err := range []*apierr.Error{
 		validName(in.Name),
 		textLength(in.Title, MaxTitle, apierr.CodeSkillTitleLength, "title"),
@@ -236,7 +236,7 @@ func (p Patch) normalized() (Patch, *apierr.Error) {
 	}
 	trim := func(v **string) {
 		if *v != nil {
-			t := strings.TrimSpace(**v)
+			t := strings.Trim(**v, " \t")
 			*v = &t
 		}
 	}

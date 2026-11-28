@@ -1613,7 +1613,7 @@ A skill, as every route below answers it:
 `scope` is `user`, `space` or `workspace`; `space_id` is there for a space's skills only. `name`
 is a lowercase letter followed by 1 to 39 lowercase letters, digits or hyphens, and unique per
 owner (a person, a space, the workspace); `title` is 1 to 100 characters and `description` 1 to 300,
-each on one line (no line break of any kind, such as a line or paragraph separator); `body` is Markdown of 1 byte to 32 KiB. A request
+each on one line (no line break of any kind, such as a line or paragraph separator, anywhere in the field, at its start or end included; only spaces and tabs are trimmed from the ends); `body` is Markdown of 1 byte to 32 KiB. A request
 body is read up to the size a valid skill takes when every character is written as a JSON escape (about 200 KiB); a bigger one is `400 invalid_json`. `origin` is `""` for a skill written
 here. An owner holds at most 200 skills. A list is `{"skills": [...]}`, by `name`.
 
@@ -1629,7 +1629,9 @@ The same four routes exist for each owner:
   get the enabled ones; those who manage them get all. Who the caller is, whether they are still a
   member (`404 workspace_not_found` otherwise) and whether they may read or manage the owner are
   read again when the request is served, in the same transaction as the list or the change, so a
-  removal, a disabling or a demotion that commits after the request was admitted is honoured.
+  removal, a disabling or a demotion that commits after the request was admitted is honoured. A
+  list is read from one database snapshot taken when that check is made: a change committed after
+  it is not in the answer, and one committed before it is.
 - `POST …/skills` with `{"name", "title", "description", "body", "enabled"}` (`enabled` is
   optional and defaults to `true`; other fields are `400 invalid_json`) answers `201` with the
   skill; `409 skill_name_taken` or `409 too_many_skills`.

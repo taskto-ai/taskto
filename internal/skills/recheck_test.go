@@ -143,6 +143,25 @@ func TestListFollowsWhoMayReadAndManageAtTheTimeOfTheRead(t *testing.T) {
 	}
 }
 
+func TestListAnswersFromTheMomentItWasAuthorizedAt(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	team := w.owner(ScopeSpace, 0, w.team)
+	w.create(team, w.bob, "old-skill")
+	w.hooks.BeforeQuery("FROM skills WHERE", func() {
+		w.exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, w.team, w.carol)
+		w.create(team, w.bob, "new-skill")
+	})
+
+	got, err := w.store.List(ctx, team, w.carol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := names(got); !slices.Equal(n, []string{"space:old-skill"}) {
+		t.Fatalf("a list that was authorized before the removal and read after a later write: %v", n)
+	}
+}
+
 func TestForUserAnswersFromOneMomentWhenAccessIsRevokedMidway(t *testing.T) {
 	setup := func() *world {
 		w := newWorld(t)
@@ -278,6 +297,37 @@ func TestAOneLineFieldHasNoLineBreakOfAnyKind(t *testing.T) {
 		}
 		if _, err := w.store.Update(ctx, o, w.bob, made.ID, Patch{Description: &text}); code(err) != apierr.CodeSkillDescriptionLength {
 			t.Errorf("a patched description with %s: %v", name, err)
+		}
+	}
+	for name, r := range map[string]rune{"a line separator": 0x2028, "a paragraph separator": 0x2029, "a next line": 0x85, "a line feed": 0x0a} {
+		for place, wrap := range map[string]func(string) string{
+			"leading":  func(s string) string { return string(r) + s },
+			"trailing": func(s string) string { return s + string(r) },
+		} {
+			n++
+			in := input(fmt.Sprintf("edge-%d", n))
+			in.Title = wrap("Title")
+			if _, err := w.store.Create(ctx, o, w.bob, in); code(err) != apierr.CodeSkillTitleLength {
+				t.Errorf("a title with %s %s: %v", place, name, err)
+			}
+			in = input(fmt.Sprintf("edge-d%d", n))
+			in.Description = wrap("Description")
+			if _, err := w.store.Create(ctx, o, w.bob, in); code(err) != apierr.CodeSkillDescriptionLength {
+				t.Errorf("a description with %s %s: %v", place, name, err)
+			}
+			title, description := wrap("Title"), wrap("Description")
+			if _, err := w.store.Update(ctx, o, w.bob, made.ID, Patch{Title: &title}); code(err) != apierr.CodeSkillTitleLength {
+				t.Errorf("a patched title with %s %s: %v", place, name, err)
+			}
+			if _, err := w.store.Update(ctx, o, w.bob, made.ID, Patch{Description: &description}); code(err) != apierr.CodeSkillDescriptionLength {
+				t.Errorf("a patched description with %s %s: %v", place, name, err)
+			}
+			padded := " \t" + "Title" + "\t "
+			in = input(fmt.Sprintf("padded-%d", n))
+			in.Title = padded
+			if got, err := w.store.Create(ctx, o, w.bob, in); err != nil || got.Title != "Title" {
+				t.Errorf("a title padded with spaces and tabs: %q, %v", got.Title, err)
+			}
 		}
 	}
 	tabbed := input("tabbed")

@@ -2,8 +2,11 @@
 
 A **skill** is a named, described set of instructions: "how we write a quote", "our support
 tone", "closing the month". People teach the agent how their business does something once, and
-the agent can use it in every conversation after that. This page is about storing and managing
+the agent is meant to use it in every conversation after that. This page is about storing and managing
 skills. The routes are in [the API](api.md#skills).
+
+> **Status:** saved skills are stored and managed here, and are not yet used in conversations or in
+> the CLI workers. The agent does not apply them in this release.
 
 ## What a skill is
 
@@ -52,8 +55,8 @@ own skill is stored only for a member of its workspace, which the schema also ke
 `skills.Store.ForUser(workspace, user)` is the one answer to "which skills may this person use
 now?": the enabled skills of the workspace, of every shared space the person can read at that
 moment (asked of the access checker, never worked out apart from it), and the person's own.
-Someone who is not a member of the workspace, or whose account is disabled, gets none. Using the
-skills in conversations, and in the CLI workers, is built on this.
+Someone who is not a member of the workspace, or whose account is disabled, gets none. Conversations and
+the CLI workers do not use these skills yet.
 
 ## Audit and export
 
