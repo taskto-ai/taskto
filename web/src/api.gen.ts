@@ -243,6 +243,7 @@ export type AppsDefinition = {
   collection: AppsCollection
   actions: Record<string, AppsAction>
   summaries?: Record<string, AppsSummary>
+  series?: Record<string, AppsSeries>
   contributions?: AppsContributions
   integrations?: Record<string, AppsIntegrationSlot>
 }
@@ -336,6 +337,7 @@ export type AppsOfflineDefinition = {
   screens?: AppsOfflineScreen[]
   actions: Record<string, AppsOfflineAction>
   summaries?: Record<string, AppsSummary>
+  series?: Record<string, AppsSeries>
 }
 
 export type AppsOfflineScreen = {
@@ -356,6 +358,16 @@ export type AppsScreen = {
   root: string
   record?: boolean
   components: unknown[] | null
+}
+
+export type AppsSeries = {
+  kind: string
+  field?: string
+  group_by: string
+  bucket?: string
+  last?: number
+  split_by?: string
+  where?: AppsRule
 }
 
 export type AppsSlotLive = {
@@ -463,6 +475,15 @@ export type BoardsMentionedPerson = {
   name: string
 }
 
+export type CLIWorkerStatus = {
+  mode: string
+  reachable: boolean
+  authority_lost: boolean
+  other_installation: boolean
+  boot?: string
+  installation?: string
+}
+
 export type Card = {
   id: number
   board_id: number
@@ -544,6 +565,35 @@ export type DeletionStatus = {
   two_factor: boolean
   fresh: boolean
   blockers: AuthDeletionBlocker[]
+}
+
+export type Desk = {
+  id: number
+  name: string
+  layout: unknown
+  version: number
+  updated_at: string
+}
+
+export type DeskChanged = {
+  error: string
+  code: string
+  current: Desk
+}
+
+export type DeskLayoutWrite = {
+  version: number
+  layout: unknown
+}
+
+export type DeskList = {
+  desks: DeskSummary[]
+}
+
+export type DeskSummary = {
+  id: number
+  name: string
+  updated_at: string
 }
 
 export type Doc = {
@@ -691,6 +741,10 @@ export type Member = {
   two_factor?: boolean
 }
 
+export type NoteReply = {
+  submission_id: number
+}
+
 export type NotificationItem = {
   id: number
   workspace_id: number
@@ -749,6 +803,87 @@ export type RecordVersion = {
   by: AppsAuthor | null
   action?: string
   synthetic?: boolean
+}
+
+export type SearchCardResult = {
+  space_id: number
+  space_name: string
+  board_id: number
+  board_name: string
+  card_id: number
+  title: string
+  column: string
+  snippet: SearchSegment[] | null
+}
+
+export type SearchConversationResult = {
+  conversation_id: number
+  title: string
+  archived: boolean
+  updated_at: string
+  snippet: SearchSegment[] | null
+}
+
+export type SearchPalette = {
+  places: SearchPlaceResults
+  docs: SearchResult[] | null
+  cards: SearchCardResult[] | null
+  records: SearchRecordResult[] | null
+  conversations: SearchConversationResult[] | null
+  incomplete: boolean
+}
+
+export type SearchPlaceApp = {
+  space_id: number
+  space_name: string
+  app_id: number
+  name: string
+}
+
+export type SearchPlaceBoard = {
+  space_id: number
+  space_name: string
+  board_id: number
+  name: string
+  kind: string
+}
+
+export type SearchPlaceResults = {
+  spaces: SearchPlaceSpace[] | null
+  apps: SearchPlaceApp[] | null
+  boards: SearchPlaceBoard[] | null
+}
+
+export type SearchPlaceSpace = {
+  id: number
+  name: string
+  kind: string
+}
+
+export type SearchRecordResult = {
+  space_id: number
+  space_name: string
+  app_id: number
+  app_name: string
+  record_id: number
+  snippet: SearchSegment[] | null
+}
+
+export type SearchResult = {
+  space_id: number
+  space_name: string
+  path: string
+  title: string
+  snippet: SearchSegment[] | null
+  score: number
+  match: string
+  version: string
+  commit: string
+}
+
+export type SearchSegment = {
+  text: string
+  match?: boolean
 }
 
 export type SendReply = {

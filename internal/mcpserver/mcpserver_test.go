@@ -17,6 +17,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/agenttools"
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
@@ -520,5 +521,36 @@ func TestATokenListsOnlySafeFieldsOfItsSpacesIntegrations(t *testing.T) {
 		if code, refused, text := callTool(t, f.endpoint, c.token, "list_integrations", c.args); code != http.StatusOK || !refused || text != "error: not found" {
 			t.Errorf("%s: %d %v %q, want not found", c.why, code, refused, text)
 		}
+	}
+}
+
+type notReadyBrowser struct{}
+
+func (notReadyBrowser) Call(context.Context, int64, int64, string, json.RawMessage) (any, error) {
+	return nil, &agenttools.Refusal{Status: http.StatusServiceUnavailable, Code: apierr.CodeCLIWorkerNotReady, Message: "the CLI worker isn't ready yet: try again in a moment"}
+}
+
+func TestForTurnsKeepsARefusalsCode(t *testing.T) {
+	f := newFixture(t)
+	tools := agenttools.New(agenttools.Options{DB: f.db, Browser: notReadyBrowser{}})
+	h := ForTurns("test", f.callerA, tools, true)
+	_, isError, text := callTool(t, h, "any-turn-token", "browser_tabs", map[string]any{})
+	if !isError || !strings.Contains(text, string(apierr.CodeCLIWorkerNotReady)) {
+		t.Errorf("browser_tabs = %v %q, want an error with the code %s", isError, text, apierr.CodeCLIWorkerNotReady)
+	}
+}
+
+func TestForTurnsKeepsATokenRefusalsCode(t *testing.T) {
+	f := newFixture(t)
+	h := f.forTurns(false, func(*http.Request) (agenttools.Caller, error) {
+		return agenttools.Caller{}, &agenttools.Refusal{Status: http.StatusServiceUnavailable, Code: apierr.CodeCLIWorkerNotReady, Message: "not ready"}
+	})
+	rec := rpc(t, h, "any-turn-token", "tools/list", map[string]any{})
+	var body struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != http.StatusServiceUnavailable || body.Code != string(apierr.CodeCLIWorkerNotReady) {
+		t.Errorf("a refused token = %d %s, want 503 with %s", rec.Code, rec.Body, apierr.CodeCLIWorkerNotReady)
 	}
 }

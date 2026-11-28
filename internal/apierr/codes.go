@@ -195,6 +195,8 @@ const (
 	CodeHomeLimit          Code = "home_limit"
 	CodeHomeOrderInvalid   Code = "home_order_invalid"
 	CodeHomeDefaultsShared Code = "home_defaults_shared"
+	CodeDeskChanged        Code = "desk_changed"
+	CodeDeskInvalid        Code = "desk_invalid"
 
 	CodeAuditTimeInvalid Code = "audit_time_invalid"
 
@@ -230,6 +232,7 @@ const (
 	CodeConversationNotFound     Code = "conversation_not_found"
 	CodeConversationArchived     Code = "conversation_archived"
 	CodeConversationTitleInvalid Code = "conversation_title_invalid"
+	CodeConversationNoteInvalid  Code = "conversation_note_invalid"
 	CodeConversationLost         Code = "conversation_lost"
 	CodeConversationNoModel      Code = "conversation_no_model"
 	CodeAgentOff                 Code = "agent_off"
@@ -283,6 +286,7 @@ const (
 	CodeCLIWorkersNoBoundary   Code = "cli_workers_no_boundary"
 	CodeCLINotInstalled        Code = "cli_not_installed"
 	CodeCLIWorkerClosing       Code = "cli_worker_closing"
+	CodeCLIWorkerNotReady      Code = "cli_worker_not_ready"
 	CodeCLIAccountForgotten    Code = "cli_account_forgotten"
 	CodeCLIAccountRemoving     Code = "cli_account_removing"
 	CodeCLIAccountBusy         Code = "cli_account_busy"

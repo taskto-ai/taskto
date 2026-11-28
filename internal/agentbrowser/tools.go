@@ -11,7 +11,10 @@ import (
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/agenttools"
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/browser"
+	"taskto.ai/taskto/internal/cliaccounts"
+	"taskto.ai/taskto/internal/cliworker"
 )
 
 type toolArgs struct {
@@ -92,7 +95,11 @@ func (s *Service) Call(ctx context.Context, user, conversation int64, name strin
 	if !known {
 		return nil, refuse(http.StatusNotFound, "unknown tool")
 	}
-	if err := s.Usable(ctx); err != nil {
+	if err := s.Usable(ctx, user); err != nil {
+		var e *apierr.Error
+		if errors.As(err, &e) {
+			return nil, &agenttools.Refusal{Status: e.Status, Message: e.Msg, Code: e.Code}
+		}
 		return nil, refuse(http.StatusConflict, "%s", err.Error())
 	}
 	a, err := decodeArgs(name, raw)
@@ -116,7 +123,11 @@ func (s *Service) Call(ctx context.Context, user, conversation int64, name strin
 	if err := action.Check(); err != nil {
 		return nil, toolError(ctx, name, err)
 	}
-	res, err := s.b.Do(ctx, user, action)
+	acct, err := s.acct(ctx, user)
+	if err != nil {
+		return nil, toolError(ctx, name, err)
+	}
+	res, err := s.b.Do(ctx, acct, action)
 	if err != nil {
 		return nil, toolError(ctx, name, err)
 	}
@@ -154,8 +165,10 @@ func toolError(ctx context.Context, name string, err error) error {
 		return refuse(http.StatusNotFound, "%s", err.Error())
 	case errors.Is(err, browser.ErrStaleRef), errors.Is(err, browser.ErrNotAgentTab):
 		return refuse(http.StatusConflict, "%s", err.Error())
-	case errors.Is(err, browser.ErrUnavailable), errors.Is(err, browser.ErrBusy), errors.Is(err, browser.ErrClosed), errors.Is(err, browser.ErrNotRunning), errors.Is(err, browser.ErrAccountClosing):
+	case errors.Is(err, browser.ErrUnavailable), errors.Is(err, browser.ErrBusy), errors.Is(err, browser.ErrClosed), errors.Is(err, browser.ErrNotRunning), errors.Is(err, browser.ErrAccountClosing), errors.Is(err, cliworker.ErrForgotten):
 		return refuse(http.StatusServiceUnavailable, "%s", err.Error())
+	case errors.Is(err, browser.ErrUnreachable):
+		return &agenttools.Refusal{Status: http.StatusServiceUnavailable, Message: cliaccounts.ErrNotReady.Error(), Code: apierr.CodeCLIWorkerNotReady}
 	case ctx.Err() != nil:
 		return ctx.Err()
 	}

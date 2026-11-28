@@ -28,7 +28,7 @@ func waitLogin(t *testing.T, l *cliworker.Login) cliworker.LoginInfo {
 
 func status(t *testing.T, w *cliworker.Worker, user int64, cli cliworker.CLI) cliworker.AuthStatus {
 	t.Helper()
-	st, err := w.Status(context.Background(), user, cli, "")
+	st, err := w.Status(context.Background(), acct(user), cli, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,11 +37,12 @@ func status(t *testing.T, w *cliworker.Worker, user int64, cli cliworker.CLI) cl
 
 func TestClaudeCodeLogin(t *testing.T) {
 	h := newHarness(t, nil)
-	dirs, _ := h.layout.Ensure(1)
+	h.introduce(t, 1, 2)
+	dirs, _ := h.layout.Ensure(h.w.HomeForTest(acct(1)))
 	if st := status(t, h.w, 1, cliworker.Claude); st.LoggedIn {
 		t.Fatal("signed in before the login")
 	}
-	l, err := h.w.StartLogin(1, cliworker.Claude, "")
+	l, err := h.w.StartLogin(acct(1), cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,15 +50,15 @@ func TestClaudeCodeLogin(t *testing.T) {
 	if info.State != cliworker.LoginWaiting || !info.NeedsCode || !info.URLTrusted || !strings.HasPrefix(info.URL, "https://claude.com/cai/oauth/authorize?") || !strings.HasSuffix(info.URL, "state=fake") {
 		t.Fatalf("info = %+v", info)
 	}
-	if again, _ := h.w.StartLogin(1, cliworker.Claude, ""); again != l {
+	if again, _ := h.w.StartLogin(acct(1), cliworker.Claude, ""); again != l {
 		t.Error("a second start began another login")
 	}
 	for _, bad := range []string{"", "two words", strings.Repeat("x", 513), "line\nbreak"} {
-		if err := h.w.SubmitLoginCode(1, cliworker.Claude, "", bad); !errors.Is(err, cliworker.ErrBadCode) {
+		if err := h.w.SubmitLoginCode(acct(1), cliworker.Claude, "", bad); !errors.Is(err, cliworker.ErrBadCode) {
 			t.Errorf("code %q: %v", bad, err)
 		}
 	}
-	if err := h.w.SubmitLoginCode(1, cliworker.Claude, "", clitest.GoodCode); err != nil {
+	if err := h.w.SubmitLoginCode(acct(1), cliworker.Claude, "", clitest.GoodCode); err != nil {
 		t.Fatal(err)
 	}
 	if info := waitLogin(t, l); info.State != cliworker.LoginConnected {
@@ -73,31 +74,33 @@ func TestClaudeCodeLogin(t *testing.T) {
 
 func TestClaudeCodeLoginWrongCode(t *testing.T) {
 	h := newHarness(t, nil)
-	l, err := h.w.StartLogin(1, cliworker.Claude, "")
+	h.introduce(t, 1, 2)
+	l, err := h.w.StartLogin(acct(1), cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.w.SubmitLoginCode(1, cliworker.Claude, "", "wrong-code"); err != nil {
+	if err := h.w.SubmitLoginCode(acct(1), cliworker.Claude, "", "wrong-code"); err != nil {
 		t.Fatal(err)
 	}
 	info := waitLogin(t, l)
 	if info.State != cliworker.LoginFailed || !strings.Contains(info.Message, "Invalid code") {
 		t.Fatalf("info = %+v", info)
 	}
-	if err := h.w.SubmitLoginCode(1, cliworker.Claude, "", clitest.GoodCode); !errors.Is(err, cliworker.ErrNoLogin) {
+	if err := h.w.SubmitLoginCode(acct(1), cliworker.Claude, "", clitest.GoodCode); !errors.Is(err, cliworker.ErrNoLogin) {
 		t.Errorf("a code for a finished login: %v", err)
 	}
 }
 
 func TestDeviceCodeLogins(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	for cli, want := range map[cliworker.CLI][2]string{
 		cliworker.Codex: {"https://auth.openai.com/codex/device", "FAKE-C0DE1"},
 		cliworker.Grok:  {"https://accounts.x.ai/oauth2/device?user_code=GR0K-FAKE", "GR0K-FAKE"},
 	} {
 		t.Run(string(cli), func(t *testing.T) {
-			dirs, _ := h.layout.Ensure(1)
-			l, err := h.w.StartLogin(1, cli, "")
+			dirs, _ := h.layout.Ensure(h.w.HomeForTest(acct(1)))
+			l, err := h.w.StartLogin(acct(1), cli, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -105,7 +108,7 @@ func TestDeviceCodeLogins(t *testing.T) {
 			if info.State != cliworker.LoginWaiting || info.URL != want[0] || !info.URLTrusted || info.Code != want[1] || info.NeedsCode {
 				t.Fatalf("info = %+v", info)
 			}
-			if err := h.w.SubmitLoginCode(1, cli, "", "x"); !errors.Is(err, cliworker.ErrNoCodeNeeded) {
+			if err := h.w.SubmitLoginCode(acct(1), cli, "", "x"); !errors.Is(err, cliworker.ErrNoCodeNeeded) {
 				t.Errorf("a code for a device login: %v", err)
 			}
 			clitest.Approve(t, dirs.Config(cli))
@@ -121,8 +124,9 @@ func TestDeviceCodeLogins(t *testing.T) {
 
 func TestDeviceCodeDeclined(t *testing.T) {
 	h := newHarness(t, nil)
-	dirs, _ := h.layout.Ensure(1)
-	l, err := h.w.StartLogin(1, cliworker.Codex, "")
+	h.introduce(t, 1, 2)
+	dirs, _ := h.layout.Ensure(h.w.HomeForTest(acct(1)))
+	l, err := h.w.StartLogin(acct(1), cliworker.Codex, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,38 +138,40 @@ func TestDeviceCodeDeclined(t *testing.T) {
 
 func TestCancelLogin(t *testing.T) {
 	h := newHarness(t, nil)
-	l, err := h.w.StartLogin(1, cliworker.Grok, "")
+	h.introduce(t, 1, 2)
+	l, err := h.w.StartLogin(acct(1), cliworker.Grok, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.w.CancelLogin(1, cliworker.Grok, "")
+	h.w.CancelLogin(acct(1), cliworker.Grok, "")
 	if info := waitLogin(t, l); info.State != cliworker.LoginCancelled {
 		t.Fatalf("info = %+v", info)
 	}
-	again, err := h.w.StartLogin(1, cliworker.Grok, "")
+	again, err := h.w.StartLogin(acct(1), cliworker.Grok, "")
 	if err != nil || again == l || again.Info().State != cliworker.LoginWaiting {
 		t.Fatalf("restart: %v %+v", err, again.Info())
 	}
-	h.w.CancelLogin(1, cliworker.Grok, "")
+	h.w.CancelLogin(acct(1), cliworker.Grok, "")
 }
 
 func TestLoginsAreTheUsers(t *testing.T) {
 	h := newHarness(t, nil)
-	l, err := h.w.StartLogin(1, cliworker.Claude, "")
+	h.introduce(t, 1, 2)
+	l, err := h.w.StartLogin(acct(1), cliworker.Claude, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := h.w.Login(2, cliworker.Claude, ""); ok {
+	if _, ok := h.w.Login(acct(2), cliworker.Claude, ""); ok {
 		t.Error("user 2 sees user 1's login")
 	}
-	if err := h.w.SubmitLoginCode(2, cliworker.Claude, "", clitest.GoodCode); !errors.Is(err, cliworker.ErrNoLogin) {
+	if err := h.w.SubmitLoginCode(acct(2), cliworker.Claude, "", clitest.GoodCode); !errors.Is(err, cliworker.ErrNoLogin) {
 		t.Errorf("user 2 answered user 1's login: %v", err)
 	}
-	h.w.CancelLogin(2, cliworker.Claude, "")
+	h.w.CancelLogin(acct(2), cliworker.Claude, "")
 	if l.Info().State != cliworker.LoginWaiting {
 		t.Errorf("user 2 cancelled user 1's login: %+v", l.Info())
 	}
-	if err := h.w.SubmitLoginCode(1, cliworker.Claude, "", clitest.GoodCode); err != nil {
+	if err := h.w.SubmitLoginCode(acct(1), cliworker.Claude, "", clitest.GoodCode); err != nil {
 		t.Fatal(err)
 	}
 	if info := waitLogin(t, l); info.State != cliworker.LoginConnected {
@@ -185,7 +191,7 @@ func TestLogout(t *testing.T) {
 			if !status(t, h.w, 1, cli).LoggedIn {
 				t.Fatal("not signed in")
 			}
-			if err := h.w.Logout(context.Background(), 1, cli, ""); err != nil {
+			if err := h.w.Logout(context.Background(), acct(1), cli, ""); err != nil {
 				t.Fatal(err)
 			}
 			if status(t, h.w, 1, cli).LoggedIn {

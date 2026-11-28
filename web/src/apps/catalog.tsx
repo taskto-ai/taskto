@@ -10,6 +10,7 @@ import { PhotoField, PhotoStrip, useAppFiles } from './PhotoInput'
 import { type PhotoLimits, photoIds, signatureId } from './photos'
 import { holds, type Rule, type Values } from './rules'
 import { SignatureField } from './SignaturePad'
+import { TableComponent } from './TableView'
 
 export const APPS_CATALOG_ID = 'https://taskto.ai/catalogs/apps/v1.json'
 
@@ -255,6 +256,7 @@ export const appsCatalog = new Catalog(
     ...(TextField ? [TextField] : []),
     Icon,
     Stat,
+    TableComponent,
     Markdown,
     Show,
     PhotoInput,

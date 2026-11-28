@@ -127,7 +127,8 @@ is still the live release. `create_app` and
 the app, in the web app ([drafts and releases](api.md#drafts-and-releases)): no tool does either. Read-only tools say so
 (`readOnlyHint`), so a client can call them without asking you each time. Results and
 refusals are the conversation agent's: a refusal is a tool error (`isError`) saying why
-(`not found`, read-only, a stale version), for the model to act on. Their bounds are the
+(`not found`, read-only, a stale version), for the model to act on, ending with its code when it
+has one (`(code: cli_worker_not_ready)`: try again in a moment). Their bounds are the
 same too: results of at most 64 KiB, documents read 32 KiB at a time.
 
 Start with `list_spaces`, for the tools that take a `space_id`. A card is assigned to a person by the `id` `list_members` returns.

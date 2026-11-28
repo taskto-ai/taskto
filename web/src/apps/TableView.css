@@ -1,0 +1,13 @@
+@layer screens {
+  .ui-app-table {
+    display: grid;
+    gap: var(--space-2);
+    min-inline-size: 0;
+  }
+
+  .ui-app-table-more {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+}

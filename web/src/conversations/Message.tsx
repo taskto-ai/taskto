@@ -4,11 +4,33 @@ import { AgentDot } from '../ui/AgentDot'
 import { Notice } from '../ui/Notice'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { leadingAgent } from './agentMention'
+import type { Changed } from './changes'
 import { ToolLine } from './ToolLine'
+import { TurnChanges } from './TurnChanges'
 import type { ChatMessage, ToolUse } from './transcript'
 
-export function Message({ message, workspace, apps }: { message: ChatMessage; workspace: number; apps: Set<ToolUse> }) {
+export function Message({
+  message,
+  workspace,
+  apps,
+  changes,
+}: {
+  message: ChatMessage
+  workspace: number
+  apps: Set<ToolUse>
+  changes?: Changed[]
+}) {
   const t = useT()
+  if (message.role === 'note') {
+    return (
+      <article className="ui-chat-msg" data-role="note">
+        <p className="ui-chat-note-label">{t('conversations.note.hidden')}</p>
+        <div className="ui-chat-markdown">
+          <Markdown text={message.text} headingShift={2} lineBreaks />
+        </div>
+      </article>
+    )
+  }
   if (message.role === 'user') {
     const agent = leadingAgent(message.text)
     return (
@@ -45,6 +67,7 @@ export function Message({ message, workspace, apps }: { message: ChatMessage; wo
         {message.tools.map((tool) => (
           <ToolLine key={tool.id} tool={tool} workspace={workspace} launched={apps.has(tool)} />
         ))}
+        {changes && <TurnChanges changes={changes} workspace={workspace} />}
         {message.pending && !message.text && <span className="ui-chat-pending">{'…'}</span>}
         {message.error && <Notice tone="danger">{message.error}</Notice>}
       </div>

@@ -86,7 +86,7 @@ func TestRealCLIsCallTaskToTools(t *testing.T) {
 			if q.Tool != "mcp__taskto__write_doc" {
 				t.Errorf("question = %+v", q)
 			}
-			if err := w.Answer(1, 7, q.ID, true); err != nil {
+			if err := w.Answer(acct(1), 7, q.ID, true); err != nil {
 				t.Fatal(err)
 			}
 			events = waitDone(t, turn, 3*time.Minute)

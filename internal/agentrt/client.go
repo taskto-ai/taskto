@@ -30,11 +30,17 @@ func New(socketPath string) *Client {
 }
 
 type Input struct {
-	Content    string `json:"content"`
-	WhenBusy   string `json:"whenBusy,omitempty"`
-	RequestID  string `json:"requestId,omitempty"`
-	Capability string `json:"capability,omitempty"`
-	Language   string `json:"language"`
+	Content    string      `json:"content"`
+	WhenBusy   string      `json:"whenBusy,omitempty"`
+	RequestID  string      `json:"requestId,omitempty"`
+	Capability string      `json:"capability,omitempty"`
+	Language   string      `json:"language"`
+	Entry      *InputEntry `json:"entry,omitempty"`
+}
+
+type InputEntry struct {
+	Kind string          `json:"kind"`
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 type Message struct {
@@ -168,6 +174,20 @@ func (c *Client) Submit(ctx context.Context, conversation int64, in Input) (int6
 		SubmissionID int64 `json:"submissionId"`
 	}
 	err := c.do(ctx, http.MethodPost, "/conversations/"+itoa(conversation)+"/submit", in, &out)
+	return out.SubmissionID, err
+}
+
+type NoteInput struct {
+	Text      string `json:"text"`
+	Author    int64  `json:"author"`
+	RequestID string `json:"requestId,omitempty"`
+}
+
+func (c *Client) Note(ctx context.Context, conversation int64, n NoteInput) (int64, error) {
+	var out struct {
+		SubmissionID int64 `json:"submissionId"`
+	}
+	err := c.do(ctx, http.MethodPost, "/conversations/"+itoa(conversation)+"/note", n, &out)
 	return out.SubmissionID, err
 }
 

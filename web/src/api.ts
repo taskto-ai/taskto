@@ -323,6 +323,18 @@ export type OfflineApp = {
     screens?: { name: string; record?: boolean }[]
     actions: Record<string, { kind: AppActionKind; screen?: string; then?: string }>
     summaries?: Record<string, { kind: 'count' | 'sum'; field?: string; where?: unknown }>
+    series?: Record<
+      string,
+      {
+        kind: 'count' | 'sum' | 'avg'
+        field?: string
+        group_by: string
+        bucket?: 'day' | 'week' | 'month'
+        last?: number
+        split_by?: string
+        where?: unknown
+      }
+    >
   }
   messages: unknown[]
   scope: 'all' | 'own'
@@ -377,6 +389,22 @@ export type Checklist = {
   complete: boolean
   items: { id: ChecklistStep; state: 'done' | 'todo' | 'skipped'; optional: boolean }[]
 }
+
+export type DeskTab = { id: string; path: string }
+export type DeskLayoutNode = {
+  split?: 'row' | 'column'
+  sizes?: number[]
+  children?: DeskLayoutNode[]
+  group?: string
+  active?: string
+  tabs?: DeskTab[]
+}
+export type DeskLayout = { v: 1; focus: string; root: DeskLayoutNode | null }
+export type Desk = { id: number; name: string; layout: unknown; version: number; updated_at: string }
+export type DeskSummary = { id: number; name: string; updated_at: string }
+export type DeskList = { desks: DeskSummary[] }
+export type DeskLayoutWrite = { version: number; layout: unknown }
+export type DeskChanged = { error: string; code: 'desk_changed'; current: Desk }
 
 export type AvailableApp = {
   space_id: number
@@ -960,6 +988,16 @@ export type UpdateAvailable = {
 export type UpdateRequested = { requested_at: string }
 
 export const updatesPath = (workspace: number) => `${ws(workspace)}/updates`
+
+export type CLIWorkerStatus = {
+  mode: string
+  reachable: boolean
+  authority_lost: boolean
+  other_installation: boolean
+  boot?: string
+  installation?: string
+}
+export const cliWorkerPath = (workspace: number) => `${ws(workspace)}/cli-worker`
 export const updateRequestPath = (workspace: number) => `${ws(workspace)}/updates/request`
 
 export type StorageLimits = { workspace: number; user: number }
