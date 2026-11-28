@@ -2,14 +2,202 @@ package conversations
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
 	"taskto.ai/taskto/internal/agentrt"
 )
+
+func usageEntries(first, last int64) []json.RawMessage {
+	var entries []json.RawMessage
+	for id := first; id <= last; id++ {
+		entries = append(entries, json.RawMessage(fmt.Sprintf(`{"id":%d,"kind":"pi.assistant","model":[{"role":"assistant","provider":"provider-a","usage":{"input":3,"output":2}}]}`, id)))
+	}
+	return entries
+}
+
+func agentUsage(t *testing.T, e *env, user int64) (input, output, turns int64) {
+	t.Helper()
+	err := e.db.QueryRow(`SELECT coalesce(sum(input_tokens), 0), coalesce(sum(output_tokens), 0), coalesce(sum(turns), 0) FROM agent_usage_daily WHERE user_id = ? AND source = 'agent'`, user).Scan(&input, &output, &turns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return input, output, turns
+}
+
+func clearUsageMark(t *testing.T, e *env, conversation int64) {
+	t.Helper()
+	if _, err := e.db.Exec(`UPDATE conversations SET usage_mark = NULL WHERE id = ?`, conversation); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgentTurnRecordsAssistantUsageFromDurableEntries(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: {
+		json.RawMessage(`{"id":1,"kind":"pi.user","model":[{"role":"user","content":"hi"}]}`),
+		json.RawMessage(`{"id":2,"kind":"pi.assistant","model":[{"role":"assistant","provider":"provider-a","usage":{"input":3,"output":2}}]}`),
+		json.RawMessage(`{"id":3,"kind":"pi.assistant","model":[{"role":"assistant","provider":"provider-a","usage":{"input":4,"output":3}}]}`),
+	}}
+	p := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
+		t.Fatal(err)
+	}
+	if input, output, turns := agentUsage(t, e, owner.id); input != 7 || output != 5 || turns != 1 {
+		t.Fatalf("recorded usage = %d input, %d output, %d turns", input, output, turns)
+	}
+}
+
+func TestAgentUsageIsCountedOnceWhenCollectorsOverlap(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: usageEntries(1, 4)}
+	p := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}
+	clearUsageMark(t, e, c.ID)
+	for _, cursor := range []int64{0, 4} {
+		if err := e.svc.startUsageMark(context.Background(), c.ID, cursor); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if input, output, _ := agentUsage(t, e, owner.id); input != 12 || output != 8 {
+		t.Fatalf("recorded usage = %d input, %d output", input, output)
+	}
+	e.rt.rawEntries[agent] = usageEntries(1, 5)
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
+		t.Fatal(err)
+	}
+	if input, output, _ := agentUsage(t, e, owner.id); input != 15 || output != 10 {
+		t.Fatalf("usage after a later reply = %d input, %d output", input, output)
+	}
+}
+
+func TestTheMarkStaysWhereItWasWhenTheTotalsCannotBeWritten(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: usageEntries(1, 4)}
+	broken := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws + 1000, User: owner.id}
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, broken, "script"); err == nil {
+		t.Fatal("recording for a workspace that does not exist succeeded")
+	}
+	var mark sql.NullInt64
+	if err := e.db.QueryRow(`SELECT usage_mark FROM conversations WHERE id = ?`, c.ID).Scan(&mark); err != nil || !mark.Valid || mark.Int64 != 0 {
+		t.Fatalf("mark after a failed record = %+v, %v", mark, err)
+	}
+	p := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
+		t.Fatal(err)
+	}
+	if input, output, _ := agentUsage(t, e, owner.id); input != 12 || output != 8 {
+		t.Fatalf("usage after the retry = %d input, %d output", input, output)
+	}
+}
+
+func TestAgentUsageReadsEveryEntryAcrossPages(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	count := int64(maxPageEntries)*2 + 30
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: usageEntries(1, count)}
+	if _, err := e.db.Exec(`UPDATE conversations SET usage_mark = 5 WHERE id = ?`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	p := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
+		t.Fatal(err)
+	}
+	want := count - 5
+	if input, output, _ := agentUsage(t, e, owner.id); input != 3*want || output != 2*want {
+		t.Fatalf("recorded usage = %d input, %d output, want %d and %d", input, output, 3*want, 2*want)
+	}
+}
+
+func TestAgentUsageCountsOneTurnPerUserMessage(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: {
+		json.RawMessage(`{"id":1,"model":[{"role":"user","content":"a"}]}`),
+		json.RawMessage(`{"id":2,"model":[{"role":"assistant","provider":"provider-a","usage":{"input":1,"output":1}}]}`),
+		json.RawMessage(`{"id":3,"model":[{"role":"toolResult","toolName":"search"}]}`),
+		json.RawMessage(`{"id":4,"model":[{"role":"assistant","provider":"provider-a","usage":{"input":1,"output":1}}]}`),
+		json.RawMessage(`{"id":5,"model":[{"role":"user","content":"b"}]}`),
+		json.RawMessage(`{"id":6,"model":[{"role":"assistant","provider":"provider-a","usage":{"input":1,"output":1}}]}`),
+	}}
+	p := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
+		t.Fatal(err)
+	}
+	if input, _, turns := agentUsage(t, e, owner.id); input != 3 || turns != 2 {
+		t.Fatalf("usage = %d input, %d turns", input, turns)
+	}
+}
+
+func TestSendWithoutAMarkFailsWhenTheEntriesCannotBeRead(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	if _, err := e.db.Exec(`UPDATE conversations SET usage_mark = NULL WHERE id = ?`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	agent := c.agentIDForTest(t, e)
+	e.rt.err = errors.New("entries unavailable")
+	if err := e.svc.ensureUsageMark(context.Background(), e.rt, c.ID, agent); err == nil {
+		t.Fatal("ensureUsageMark succeeded without reading the entries")
+	}
+	var mark sql.NullInt64
+	if err := e.db.QueryRow(`SELECT usage_mark FROM conversations WHERE id = ?`, c.ID).Scan(&mark); err != nil || mark.Valid {
+		t.Fatalf("mark = %+v, %v", mark, err)
+	}
+	e.rt.err = nil
+	if err := e.svc.ensureUsageMark(context.Background(), e.rt, c.ID, agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.QueryRow(`SELECT usage_mark FROM conversations WHERE id = ?`, c.ID).Scan(&mark); err != nil || !mark.Valid {
+		t.Fatalf("mark = %+v, %v", mark, err)
+	}
+}
+
+func TestAgentUsageNeedsAStartingMark(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	e.rt.rawEntries = map[int64][]json.RawMessage{agent: usageEntries(1, 3)}
+	clearUsageMark(t, e, c.ID)
+	p := Principal{Conversation: c.ID, AgentConversation: agent, Workspace: ws, User: owner.id}
+	if err := e.svc.recordAgentUsage(context.Background(), e.rt, p, "script"); err != nil {
+		t.Fatal(err)
+	}
+	if input, _, turns := agentUsage(t, e, owner.id); input != 0 || turns != 0 {
+		t.Fatalf("usage without a mark = %d input, %d turns", input, turns)
+	}
+}
 
 func TestTranscriptIsWhatWasSaid(t *testing.T) {
 	e := newEnv(t, false)

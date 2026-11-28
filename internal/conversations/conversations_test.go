@@ -27,25 +27,27 @@ import (
 const password = "a-long-enough-password"
 
 type fakeRuntime struct {
-	mu      sync.Mutex
-	next    int64
-	models  map[int64]agentrt.ModelRef
-	created []agentrt.ModelRef
-	inputs  map[int64][]agentrt.Input
-	watches []*fakeWatch
-	aborts  map[int64]int
-	err     error
-	onAbort func(ctx context.Context)
-	replies map[int64][]agentrt.Message
-	settle  chan struct{}
-	waited  atomic.Int64
-	waitErr error
+	mu         sync.Mutex
+	next       int64
+	models     map[int64]agentrt.ModelRef
+	created    []agentrt.ModelRef
+	inputs     map[int64][]agentrt.Input
+	notes      map[int64][]agentrt.NoteInput
+	watches    []*fakeWatch
+	aborts     map[int64]int
+	err        error
+	onAbort    func(ctx context.Context)
+	replies    map[int64][]agentrt.Message
+	rawEntries map[int64][]json.RawMessage
+	settle     chan struct{}
+	waited     atomic.Int64
+	waitErr    error
 }
 
 var setupToken = auth.NewSetupToken()
 
 func newFakeRuntime() *fakeRuntime {
-	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, aborts: map[int64]int{}}
+	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, notes: map[int64][]agentrt.NoteInput{}, aborts: map[int64]int{}}
 }
 
 var defaultModel = agentrt.ModelRef{Provider: "script", ModelID: "script-1"}
@@ -73,6 +75,16 @@ func (f *fakeRuntime) Submit(_ context.Context, conv int64, in agentrt.Input) (i
 	}
 	f.inputs[conv] = append(f.inputs[conv], in)
 	return int64(1000 + len(f.inputs[conv])), nil
+}
+
+func (f *fakeRuntime) Note(_ context.Context, conv int64, n agentrt.NoteInput) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return 0, f.err
+	}
+	f.notes[conv] = append(f.notes[conv], n)
+	return int64(2000 + len(f.notes[conv])), nil
 }
 
 func (f *fakeRuntime) Messages(_ context.Context, conv int64) ([]agentrt.Message, error) {
@@ -140,6 +152,31 @@ func (f *fakeRuntime) Entries(_ context.Context, conv, before int64, limit int) 
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
+	}
+	if entries, ok := f.rawEntries[conv]; ok {
+		var all []json.RawMessage
+		for _, raw := range entries {
+			var entry struct {
+				ID int64 `json:"id"`
+			}
+			if json.Unmarshal(raw, &entry) == nil && (before == 0 || entry.ID < before) {
+				all = append(all, raw)
+			}
+		}
+		page := struct {
+			Entries []json.RawMessage `json:"entries"`
+			Before  int64             `json:"before,omitempty"`
+		}{Entries: []json.RawMessage{}}
+		if len(all) > limit {
+			var entry struct {
+				ID int64 `json:"id"`
+			}
+			_ = json.Unmarshal(all[len(all)-limit-1], &entry)
+			page.Before = entry.ID
+			all = all[len(all)-limit:]
+		}
+		page.Entries = append(page.Entries, all...)
+		return json.Marshal(page)
 	}
 	type entry struct {
 		ID      int64  `json:"id"`
@@ -496,8 +533,20 @@ func TestSend(t *testing.T) {
 	inputs := e.rt.inputs[c.agentIDForTest(t, e)]
 	e.rt.mu.Unlock()
 	want := []agentrt.Input{{Content: "hello"}, {Content: "now this", WhenBusy: "steer", RequestID: "r-1"}, {Content: "later", WhenBusy: "followUp"}}
-	if fmt.Sprint(inputs) != fmt.Sprint(want) {
-		t.Fatalf("the agent runtime got %+v, want %+v", inputs, want)
+	if len(inputs) != len(want) {
+		t.Fatalf("the agent runtime got %+v, want %d messages", inputs, len(want))
+	}
+	for i := range want {
+		if inputs[i].Content != want[i].Content || inputs[i].WhenBusy != want[i].WhenBusy || inputs[i].RequestID != want[i].RequestID {
+			t.Fatalf("the agent runtime got %+v, want %+v", inputs[i], want[i])
+		}
+		var data struct {
+			V      int   `json:"v"`
+			Author int64 `json:"author"`
+		}
+		if inputs[i].Entry == nil || inputs[i].Entry.Kind != "taskto.input" || json.Unmarshal(inputs[i].Entry.Data, &data) != nil || data.V != 1 || data.Author != owner.id {
+			t.Fatalf("the agent runtime got input entry %+v, want taskto.input by %d", inputs[i].Entry, owner.id)
+		}
 	}
 
 	read := decode[struct{ Messages []agentrt.Message }](t, owner.expect(http.StatusOK, http.MethodGet, msgs, nil))
@@ -633,6 +682,7 @@ func TestConversationsArePrivateToTheirOwner(t *testing.T) {
 			{http.MethodGet, one + "/cli-permissions", nil},
 			{http.MethodPost, one + "/cli-permissions/q1", map[string]any{"allow": true}},
 			{http.MethodPost, one + "/messages", map[string]any{"content": "hi"}},
+			{http.MethodPost, one + "/notes", map[string]any{"content": "a note"}},
 			{http.MethodGet, one + "/messages", nil},
 			{http.MethodGet, one + "/model", nil},
 			{http.MethodPut, one + "/model", map[string]any{"provider": "script", "model_id": "script-1"}},
@@ -669,7 +719,7 @@ func TestConversationsArePrivateToTheirOwner(t *testing.T) {
 		t.Fatalf("the conversation changed: %+v", got)
 	}
 	e.rt.mu.Lock()
-	if n := len(e.rt.inputs) + len(e.rt.watches) + len(e.rt.aborts); n != 0 {
+	if n := len(e.rt.inputs) + len(e.rt.notes) + len(e.rt.watches) + len(e.rt.aborts); n != 0 {
 		t.Fatalf("the agent runtime got %d calls for denied requests", n)
 	}
 	e.rt.mu.Unlock()

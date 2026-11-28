@@ -61,12 +61,15 @@ Minted by the server for each worker turn it starts, whatever account it runs on
 | Claim | |
 |---|---|
 | user, conversation | whom it acts for |
+| identity | the user's account's (`users.cli_identity`): a number a restore gave again is another account, which the token doesn't reach |
+| workspace | the conversation's when the turn started: the conversation's number in another workspace is another conversation |
 | turn | the worker turn (`c<conversation>-<turn>`, or a switch's `…-s1`) |
 | nonce | tells two tokens of one turn apart: a replay gets a new one, and the old one stops |
 | expiry | two hours, as the proxy's: the longest turn and a wait for a place |
 
-- It is `ttm1.<claims>.<MAC>`, signed with the server key (`serverkey.MAC`) under a purpose of
-  its own, so a proxy token isn't a tools token or the other way round. It is stateless, so a
+- It is `ttm1.<sealed claims>.<MAC>`: the claims sealed with the server key (`serverkey.Seal`),
+  so the CLI that holds the token can read none of them, the account's identity included, then a
+  MAC of the sealed bytes (`serverkey.MAC`) under a purpose of its own, so a proxy token isn't a tools token or the other way round. It is stateless, so a
   server restart in the middle of a turn doesn't break it.
 - **It stops with its turn**, two ways:
   - the worker must still be running the turn the token names: the server asks it on every
@@ -77,8 +80,9 @@ Minted by the server for each worker turn it starts, whatever account it runs on
   - when the server sees the turn's `done` event, or starts the same turn again (a replay), it
     refuses the turn's earlier tokens, by their nonce, as the proxy does. This list is in memory;
     it covers the replay, which the worker's answer can't tell apart.
-- **Every request is checked again**: the signature, the expiry, the nonce list and the
-  worker's turn; then the conversation must exist, not be archived, still be the claimed user's, and that user must still
+- **Every request is checked again**: the signature, the expiry, the nonce list, the user's
+  identity and the worker's turn (a worker that can't be asked is `503 cli_worker_not_ready`, with
+  no tool run, not a bad token); then the conversation must exist, not be archived, still be the claimed user's, and that user must still
   be a member of its workspace (`conversations.PrincipalOf`). The caller is built from what the
   database says now: the conversation's workspace and owner. The token never names a workspace,
   and nothing the CLI sends says whom a call is for.

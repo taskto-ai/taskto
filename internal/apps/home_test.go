@@ -185,8 +185,14 @@ func plannerDefinition(t *testing.T) Definition {
 func TestPinAnAppAndPlaceAWidget(t *testing.T) {
 	w := newWorld(t)
 	app := w.contribute(w.alice, w.alicePrivate, w.aliceApp, offers())
+	if _, err := w.e.db.Exec(`UPDATE apps SET icon = '🧾' WHERE id = ?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	pin := w.place(w.alice, w.alicePrivate, app, KindPin, "", http.StatusCreated)
+	if pin.AppIcon != "🧾" {
+		t.Fatalf("the pin lost the app's icon: %+v", pin)
+	}
 	if pin.State != StateReady || pin.Label != "Spend" || pin.Source != SourcePersonal || pin.Release == nil {
 		t.Fatalf("pin = %+v", pin)
 	}
@@ -205,6 +211,9 @@ func TestPinAnAppAndPlaceAWidget(t *testing.T) {
 	home := w.home(w.alice)
 	if len(home.Widgets) != 1 || len(home.Pins) != 1 || home.Widgets[0].ID != widget.ID || home.Pins[0].AppName != app.Name {
 		t.Fatalf("home = %+v", home)
+	}
+	if home.Pins[0].AppIcon != "🧾" || home.Widgets[0].AppIcon != "🧾" {
+		t.Fatalf("home's icons = %q and %q", home.Pins[0].AppIcon, home.Widgets[0].AppIcon)
 	}
 	if other := w.home(w.bob); len(other.Widgets)+len(other.Pins)+len(other.Hidden) != 0 {
 		t.Fatalf("bob's home = %+v", other)
@@ -316,6 +325,58 @@ func TestWidgetsFollowTheAppsAccessRules(t *testing.T) {
 	}
 	if _, code := w.widgetData(w.bob, w.shared, app, "spend"); code != http.StatusNotFound {
 		t.Fatalf("a former member's widget = %d", code)
+	}
+}
+
+func TestSeriesUseOnlyRowsTheViewerMayRead(t *testing.T) {
+	w := newWorld(t)
+	app := w.view(w.alice, w.shared, w.sharedApp)
+	d := *app.Draft
+	d.Series = map[string]Series{"by_description": {Kind: "count", GroupBy: "description"}}
+	rec := w.alice.do(http.MethodPatch, appPath(w.shared, app.ID, ""), map[string]any{"version": app.Version, "definition": d})
+	expect(t, rec, http.StatusOK)
+	app = w.publish(w.alice, w.shared, decode[App](w.e.t, rec))
+	w.mustSetRoles(w.alice, w.shared, app,
+		grant(w.alice.id, access.AppBuilder, access.AppPublisher, access.AppDataManager, access.AppUser),
+		grant(w.bob.id, access.AppUser),
+	)
+	expect(t, w.owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", w.ws, w.shared.ID, w.bob.id), map[string]any{"role": access.RoleEditor}), http.StatusNoContent)
+	w.add(w.bob, w.shared, app, "bob-only", "1")
+	countRows := func(user *user) int {
+		rec := user.do(http.MethodGet, appPath(w.shared, app.ID, "/surface"), nil)
+		expect(t, rec, http.StatusOK)
+		msgs := decode[[]struct {
+			UpdateDataModel *struct {
+				Path  string
+				Value map[string]any
+			} `json:"updateDataModel"`
+		}](t, rec)
+		var data map[string]any
+		for _, msg := range msgs {
+			if msg.UpdateDataModel != nil && msg.UpdateDataModel.Path == "/" {
+				data = msg.UpdateDataModel.Value
+				break
+			}
+		}
+		if data == nil {
+			t.Fatal("the surface has no root data model")
+		}
+		if data["by_description"] == nil {
+			t.Fatalf("root data model lacks series: %s", rec.Body.String())
+		}
+		series := data["by_description"].(map[string]any)["series"].([]any)
+		values := series[0].(map[string]any)["values"].([]any)
+		total := 0
+		for _, value := range values {
+			total += int(value.(float64))
+		}
+		return total
+	}
+	if got := countRows(w.bob); got != 1 {
+		t.Fatalf("bob series counted %d rows, want its one row", got)
+	}
+	if got := countRows(w.alice); got != 2 {
+		t.Fatalf("manager series counted %d rows, want both rows", got)
 	}
 }
 
@@ -451,6 +512,9 @@ func TestSharedDefaults(t *testing.T) {
 func TestAvailableAppsAndWhoMaySetDefaults(t *testing.T) {
 	w := newWorld(t)
 	app := w.contribute(w.alice, w.shared, w.sharedApp, offers())
+	if _, err := w.e.db.Exec(`UPDATE apps SET icon = '🧾' WHERE id = ?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
 	list := func(u *user) []AvailableApp {
 		rec := u.do(http.MethodGet, homePath(w.ws, "/available"), nil)
 		expect(t, rec, http.StatusOK)
@@ -465,7 +529,7 @@ func TestAvailableAppsAndWhoMaySetDefaults(t *testing.T) {
 		return nil
 	}
 	got := find(list(w.alice), app.ID)
-	if got == nil || len(got.Widgets) != 2 || got.Pin == nil || !got.CanSetDefaults || got.SpaceKind != "shared" {
+	if got == nil || len(got.Widgets) != 2 || got.Pin == nil || !got.CanSetDefaults || got.SpaceKind != "shared" || got.Icon != "🧾" {
 		t.Fatalf("alice's %+v", got)
 	}
 	if got := find(list(w.bob), app.ID); got == nil || got.CanSetDefaults {

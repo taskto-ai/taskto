@@ -41,6 +41,11 @@ export type Contract = [
   Is<Check<Gen.Pin, Api.Pin>>,
   Is<Check<Gen.HomeItem, Api.HomeItem>>,
   Is<Check<Gen.HomeView, Api.HomeView>>,
+  Is<Check<Gen.Desk, Api.Desk>>,
+  Is<Check<Gen.DeskList, Api.DeskList>>,
+  Is<Check<Gen.DeskSummary, Api.DeskSummary>>,
+  Is<Check<Gen.DeskLayoutWrite, Api.DeskLayoutWrite>>,
+  Is<Check<Gen.DeskChanged, Api.DeskChanged>>,
   Is<Check<Gen.AvailableApp, Api.AvailableApp>>,
   Is<Check<Gen.Integration, Api.Integration>>,
   Is<Check<Gen.IntegrationsSecretSpec, Api.IntegrationSecretSpec>>,
@@ -56,4 +61,5 @@ export type Contract = [
   Is<Check<Gen.AppIntegrationApprovalList, Api.IntegrationApprovalList>>,
   Is<Check<Gen.UpdateReport, Api.UpdateStatus>>,
   Is<Check<Gen.UpdateRequested, Api.UpdateRequested>>,
+  Is<Check<Gen.CLIWorkerStatus, Api.CLIWorkerStatus>>,
 ]

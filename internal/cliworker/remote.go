@@ -13,19 +13,46 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 var remoteErrors = map[string]error{
-	"unavailable":    ErrUnavailable,
-	"turn_clash":     ErrTurnClash,
-	"closed":         ErrClosed,
-	"no_login":       ErrNoLogin,
-	"bad_code":       ErrBadCode,
-	"no_code_needed": ErrNoCodeNeeded,
-	"no_permission":  ErrNoPermission,
-	"forgotten":      ErrForgotten,
-	"removing":       ErrRemoving,
-	"busy":           ErrBusy,
+	"unavailable":        ErrUnavailable,
+	"turn_clash":         ErrTurnClash,
+	"closed":             ErrClosed,
+	"no_login":           ErrNoLogin,
+	"bad_code":           ErrBadCode,
+	"no_code_needed":     ErrNoCodeNeeded,
+	"no_permission":      ErrNoPermission,
+	"forgotten":          ErrForgotten,
+	"removing":           ErrRemoving,
+	"busy":               ErrBusy,
+	"incomplete":         ErrIncomplete,
+	"unknown_account":    ErrUnknownAccount,
+	"full":               ErrFull,
+	"stale_boot":         ErrStaleBoot,
+	"authority_lost":     cliowner.ErrAuthorityLost,
+	"other_installation": cliowner.ErrOtherInstallation,
+	"census_needed":      cliowner.ErrCensusNeeded,
+}
+
+const (
+	identityHeader     = "X-Taskto-Identity"
+	bootHeader         = "X-Taskto-Boot"
+	installationHeader = "X-Taskto-Installation"
+)
+
+func accountOf(r *http.Request, user int64) cliowner.Account {
+	return cliowner.Account{User: user, Identity: r.Header.Get(identityHeader), Boot: r.Header.Get(bootHeader), Installation: r.Header.Get(installationHeader)}
+}
+
+func queryUser(r *http.Request) int64 {
+	user, err := strconv.ParseInt(r.URL.Query().Get("user"), 10, 64)
+	if err != nil || user <= 0 {
+		return 0
+	}
+	return user
 }
 
 const remoteWait = 25 * time.Second
@@ -48,51 +75,55 @@ func (w *Worker) Handler() http.Handler {
 		if !decodeBody(rw, r, &req) {
 			return
 		}
-		l, err := w.StartLogin(req.User, req.CLI, req.Slot)
+		if err := r.Context().Err(); err != nil {
+			return
+		}
+		l, err := w.StartLogin(accountOf(r, req.User), req.CLI, req.Slot)
 		if err != nil {
 			refuse(rw, err)
 			return
 		}
 		reply(rw, l.Info())
 	})
-	withLogin := func(h func(rw http.ResponseWriter, r *http.Request, user int64, cli CLI, slot Slot)) http.HandlerFunc {
+	withLogin := func(h func(rw http.ResponseWriter, r *http.Request, a cliowner.Account, cli CLI, slot Slot)) http.HandlerFunc {
 		return func(rw http.ResponseWriter, r *http.Request) {
 			user, err := strconv.ParseInt(r.PathValue("user"), 10, 64)
 			cli, slot := CLI(r.PathValue("cli")), Slot(r.URL.Query().Get("slot"))
-			if err != nil || user <= 0 || !cli.Valid() || !slot.Valid() {
-				refuse(rw, badRequest{errors.New("invalid user, CLI or account")})
+			a := accountOf(r, user)
+			if err != nil || !a.Valid() || !cli.Valid() || !slot.Valid() {
+				refuse(rw, badRequest{errors.New("invalid account or CLI")})
 				return
 			}
-			h(rw, r, user, cli, slot)
+			h(rw, r, a, cli, slot)
 		}
 	}
-	mux.HandleFunc("GET /logins/{user}/{cli}", withLogin(func(rw http.ResponseWriter, _ *http.Request, user int64, cli CLI, slot Slot) {
-		l, ok := w.Login(user, cli, slot)
+	mux.HandleFunc("GET /logins/{user}/{cli}", withLogin(func(rw http.ResponseWriter, _ *http.Request, a cliowner.Account, cli CLI, slot Slot) {
+		l, ok := w.Login(a, cli, slot)
 		if !ok {
 			refuse(rw, ErrNoLogin)
 			return
 		}
 		reply(rw, l.Info())
 	}))
-	mux.HandleFunc("POST /logins/{user}/{cli}/code", withLogin(func(rw http.ResponseWriter, r *http.Request, user int64, cli CLI, slot Slot) {
+	mux.HandleFunc("POST /logins/{user}/{cli}/code", withLogin(func(rw http.ResponseWriter, r *http.Request, a cliowner.Account, cli CLI, slot Slot) {
 		var req struct {
 			Code string `json:"code"`
 		}
 		if !decodeBody(rw, r, &req) {
 			return
 		}
-		if err := w.SubmitLoginCode(user, cli, slot, req.Code); err != nil {
+		if err := w.SubmitLoginCode(a, cli, slot, req.Code); err != nil {
 			refuse(rw, err)
 			return
 		}
 		rw.WriteHeader(http.StatusNoContent)
 	}))
-	mux.HandleFunc("DELETE /logins/{user}/{cli}", withLogin(func(rw http.ResponseWriter, _ *http.Request, user int64, cli CLI, slot Slot) {
-		w.CancelLogin(user, cli, slot)
+	mux.HandleFunc("DELETE /logins/{user}/{cli}", withLogin(func(rw http.ResponseWriter, _ *http.Request, a cliowner.Account, cli CLI, slot Slot) {
+		w.CancelLogin(a, cli, slot)
 		rw.WriteHeader(http.StatusNoContent)
 	}))
-	mux.HandleFunc("GET /status/{user}/{cli}", withLogin(func(rw http.ResponseWriter, r *http.Request, user int64, cli CLI, slot Slot) {
-		st, err := w.Status(r.Context(), user, cli, slot)
+	mux.HandleFunc("GET /status/{user}/{cli}", withLogin(func(rw http.ResponseWriter, r *http.Request, a cliowner.Account, cli CLI, slot Slot) {
+		st, err := w.Status(r.Context(), a, cli, slot)
 		if err != nil {
 			refuse(rw, err)
 			return
@@ -108,11 +139,12 @@ func (w *Worker) Handler() http.Handler {
 		if !decodeBody(rw, r, &req) {
 			return
 		}
-		if req.User <= 0 || !req.CLI.Valid() || !req.Slot.Valid() {
-			refuse(rw, badRequest{errors.New("invalid user, CLI or account")})
+		a := accountOf(r, req.User)
+		if !a.Valid() || !req.CLI.Valid() || !req.Slot.Valid() {
+			refuse(rw, badRequest{errors.New("invalid account or CLI")})
 			return
 		}
-		if err := w.Logout(r.Context(), req.User, req.CLI, req.Slot); err != nil {
+		if err := w.Logout(r.Context(), a, req.CLI, req.Slot); err != nil {
 			refuse(rw, err)
 			return
 		}
@@ -125,30 +157,21 @@ func (w *Worker) Handler() http.Handler {
 		if !decodeBody(rw, r, &req) {
 			return
 		}
-		if req.User <= 0 {
-			refuse(rw, badRequest{errors.New("invalid user")})
-			return
-		}
-		if err := w.Forget(r.Context(), req.User); err != nil {
+		if err := w.Forget(r.Context(), accountOf(r, req.User)); err != nil {
 			refuse(rw, err)
 			return
 		}
 		rw.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("GET /authority", func(rw http.ResponseWriter, _ *http.Request) {
+		reply(rw, w.Authority())
+	})
 	mux.HandleFunc("POST /reconcile", func(rw http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Live   []int64   `json:"live"`
-			Next   int64     `json:"next"`
-			Before time.Time `json:"before"`
-		}
-		if !decodeBody(rw, r, &req) {
+		var req Census
+		if !decodeBodyLimit(rw, r, &req, maxCensus) {
 			return
 		}
-		if req.Next <= 0 || req.Before.IsZero() {
-			refuse(rw, badRequest{errors.New("invalid reconcile")})
-			return
-		}
-		if err := w.Reconcile(r.Context(), req.Live, req.Next, req.Before); err != nil {
+		if err := w.Reconcile(r.Context(), req); err != nil {
 			refuse(rw, err)
 			return
 		}
@@ -163,6 +186,9 @@ func (w *Worker) Handler() http.Handler {
 			refuse(rw, badRequest{err})
 			return
 		}
+		if err := r.Context().Err(); err != nil {
+			return
+		}
 		_, attached, err := w.Start(spec)
 		if err != nil {
 			refuse(rw, err)
@@ -170,8 +196,11 @@ func (w *Worker) Handler() http.Handler {
 		}
 		reply(rw, map[string]bool{"attached": attached})
 	})
+	turnOf := func(r *http.Request) (*Turn, bool) {
+		return w.TurnOf(accountOf(r, queryUser(r)), r.PathValue("id"))
+	}
 	mux.HandleFunc("GET /turns/{id}", func(rw http.ResponseWriter, r *http.Request) {
-		t, ok := w.Turn(r.PathValue("id"))
+		t, ok := turnOf(r)
 		if !ok {
 			http.Error(rw, `{"error":"unknown turn"}`, http.StatusNotFound)
 			return
@@ -190,7 +219,7 @@ func (w *Worker) Handler() http.Handler {
 		reply(rw, turnInfo{TurnSpec: spec, Over: t.Over()})
 	})
 	mux.HandleFunc("GET /turns/{id}/events", func(rw http.ResponseWriter, r *http.Request) {
-		t, ok := w.Turn(r.PathValue("id"))
+		t, ok := turnOf(r)
 		if !ok {
 			http.Error(rw, `{"error":"unknown turn"}`, http.StatusNotFound)
 			return
@@ -208,28 +237,31 @@ func (w *Worker) Handler() http.Handler {
 		reply(rw, map[string]any{"events": events, "done": done})
 	})
 	mux.HandleFunc("POST /turns/{id}/stop", func(rw http.ResponseWriter, r *http.Request) {
-		w.Stop(r.PathValue("id"))
+		if t, ok := turnOf(r); ok {
+			t.stop()
+		}
 		rw.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /permissions", func(rw http.ResponseWriter, r *http.Request) {
-		user, err1 := strconv.ParseInt(r.URL.Query().Get("user"), 10, 64)
-		conversation, err2 := strconv.ParseInt(r.URL.Query().Get("conversation"), 10, 64)
-		if err1 != nil || err2 != nil || user <= 0 || conversation <= 0 {
-			refuse(rw, badRequest{errors.New("invalid user or conversation")})
+		conversation, err := strconv.ParseInt(r.URL.Query().Get("conversation"), 10, 64)
+		a := accountOf(r, queryUser(r))
+		if err != nil || !a.Valid() || conversation <= 0 {
+			refuse(rw, badRequest{errors.New("invalid account or conversation")})
 			return
 		}
-		reply(rw, map[string]any{"requests": w.Permissions(user, conversation)})
+		reply(rw, map[string]any{"requests": w.Permissions(a, conversation)})
 	})
 	mux.HandleFunc("POST /permissions/answer", func(rw http.ResponseWriter, r *http.Request) {
 		var req answerRequest
 		if !decodeBody(rw, r, &req) {
 			return
 		}
-		if req.User <= 0 || req.Conversation <= 0 || req.ID == "" {
-			refuse(rw, badRequest{errors.New("invalid user, conversation or question")})
+		a := accountOf(r, req.User)
+		if !a.Valid() || req.Conversation <= 0 || req.ID == "" {
+			refuse(rw, badRequest{errors.New("invalid account, conversation or question")})
 			return
 		}
-		if err := w.Answer(req.User, req.Conversation, req.ID, req.Allow); err != nil {
+		if err := w.Answer(a, req.Conversation, req.ID, req.Allow); err != nil {
 			refuse(rw, err)
 			return
 		}
@@ -253,16 +285,19 @@ func reply(rw http.ResponseWriter, v any) {
 func refuse(rw http.ResponseWriter, err error) {
 	status, code := http.StatusBadRequest, "invalid"
 	for name, sentinel := range remoteErrors {
+		if errors.Is(err, ErrIncomplete) && name != "incomplete" {
+			continue
+		}
 		if errors.Is(err, sentinel) {
 			code = name
 			switch {
-			case errors.Is(sentinel, ErrUnavailable), errors.Is(sentinel, ErrClosed):
+			case errors.Is(sentinel, ErrUnavailable), errors.Is(sentinel, ErrClosed), errors.Is(sentinel, ErrFull):
 				status = http.StatusServiceUnavailable
 			case errors.Is(sentinel, ErrNoLogin), errors.Is(sentinel, ErrNoPermission):
 				status = http.StatusNotFound
 			case errors.Is(sentinel, ErrForgotten):
 				status = http.StatusGone
-			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy):
+			case errors.Is(sentinel, ErrTurnClash), errors.Is(sentinel, ErrNoCodeNeeded), errors.Is(sentinel, ErrRemoving), errors.Is(sentinel, ErrBusy), errors.Is(sentinel, ErrIncomplete), errors.Is(sentinel, ErrUnknownAccount), errors.Is(sentinel, ErrStaleBoot), errors.Is(sentinel, cliowner.ErrAuthorityLost), errors.Is(sentinel, cliowner.ErrOtherInstallation), errors.Is(sentinel, cliowner.ErrCensusNeeded):
 				status = http.StatusConflict
 			}
 		}
@@ -279,8 +314,14 @@ func refuse(rw http.ResponseWriter, err error) {
 
 type badRequest struct{ error }
 
+const maxCensus = 32 << 20
+
 func decodeBody(rw http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<20))
+	return decodeBodyLimit(rw, r, v, 1<<20)
+}
+
+func decodeBodyLimit(rw http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(rw, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		refuse(rw, badRequest{fmt.Errorf("invalid body: %w", err)})
@@ -303,7 +344,7 @@ func NewRemote(socket string) *Remote {
 	return &Remote{http: &http.Client{Transport: tr}}
 }
 
-func (c *Remote) do(ctx context.Context, method, path string, in, out any) error {
+func (c *Remote) do(ctx context.Context, a cliowner.Account, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -319,9 +360,18 @@ func (c *Remote) do(ctx context.Context, method, path string, in, out any) error
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if a.Identity != "" {
+		req.Header.Set(identityHeader, a.Identity)
+	}
+	if a.Boot != "" {
+		req.Header.Set(bootHeader, a.Boot)
+	}
+	if a.Installation != "" {
+		req.Header.Set(installationHeader, a.Installation)
+	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("the CLI worker is unreachable: %w", err)
+		return fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 300 {
@@ -334,7 +384,7 @@ func (c *Remote) do(ctx context.Context, method, path string, in, out any) error
 			return sentinel
 		}
 		if res.StatusCode == http.StatusNotFound {
-			return errNotFound
+			return ErrNotFound
 		}
 		return fmt.Errorf("the CLI worker: %s", e.Error)
 	}
@@ -344,39 +394,46 @@ func (c *Remote) do(ctx context.Context, method, path string, in, out any) error
 	return json.NewDecoder(res.Body).Decode(out)
 }
 
-var errNotFound = errors.New("not found")
+var ErrNotFound = errors.New("not found")
 
 func quick() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 30*time.Second)
 }
 
 func (c *Remote) Available(cli CLI) bool {
+	ok, err := c.Availability(cli)
+	if err != nil {
+		slog.Warn("cli worker: unreachable", "err", err)
+	}
+	return ok
+}
+
+var ErrUnreachable = errors.New("the CLI worker is unreachable")
+
+func (c *Remote) Availability(cli CLI) (bool, error) {
 	ctx, cancel := quick()
 	defer cancel()
 	var out map[CLI]bool
-	if err := c.do(ctx, http.MethodGet, "/available", nil, &out); err != nil {
-		slog.Warn("cli worker: unreachable", "err", err)
-		return false
+	if err := c.do(ctx, cliowner.Account{}, http.MethodGet, "/available", nil, &out); err != nil {
+		return false, err
 	}
-	return out[cli]
+	return out[cli], nil
 }
 
-func (c *Remote) StartLogin(user int64, cli CLI, slot Slot) (LoginInfo, error) {
+func (c *Remote) StartLogin(a cliowner.Account, cli CLI, slot Slot) (LoginInfo, error) {
 	ctx, cancel := quick()
 	defer cancel()
 	var info LoginInfo
-	err := c.do(ctx, http.MethodPost, "/logins", map[string]any{"user": user, "cli": cli, "slot": slot}, &info)
+	err := c.do(ctx, a, http.MethodPost, "/logins", map[string]any{"user": a.User, "cli": cli, "slot": slot}, &info)
 	return info, err
 }
 
-func (c *Remote) LoginInfo(user int64, cli CLI, slot Slot) (LoginInfo, bool) {
+func (c *Remote) LoginInfo(a cliowner.Account, cli CLI, slot Slot) (LoginInfo, error) {
 	ctx, cancel := quick()
 	defer cancel()
 	var info LoginInfo
-	if err := c.do(ctx, http.MethodGet, accountPath("/logins/", user, cli, slot, ""), nil, &info); err != nil {
-		return LoginInfo{}, false
-	}
-	return info, true
+	err := c.do(ctx, a, http.MethodGet, accountPath("/logins/", a.User, cli, slot, ""), nil, &info)
+	return info, err
 }
 
 func accountPath(prefix string, user int64, cli CLI, slot Slot, suffix string) string {
@@ -387,36 +444,40 @@ func accountPath(prefix string, user int64, cli CLI, slot Slot, suffix string) s
 	return p
 }
 
-func (c *Remote) SubmitLoginCode(user int64, cli CLI, slot Slot, code string) error {
+func (c *Remote) SubmitLoginCode(a cliowner.Account, cli CLI, slot Slot, code string) error {
 	ctx, cancel := quick()
 	defer cancel()
-	return c.do(ctx, http.MethodPost, accountPath("/logins/", user, cli, slot, "/code"), map[string]string{"code": code}, nil)
+	return c.do(ctx, a, http.MethodPost, accountPath("/logins/", a.User, cli, slot, "/code"), map[string]string{"code": code}, nil)
 }
 
-func (c *Remote) CancelLogin(user int64, cli CLI, slot Slot) {
+func (c *Remote) CancelLogin(a cliowner.Account, cli CLI, slot Slot) error {
 	ctx, cancel := quick()
 	defer cancel()
-	if err := c.do(ctx, http.MethodDelete, accountPath("/logins/", user, cli, slot, ""), nil, nil); err != nil {
-		slog.Warn("cli worker: cancelling a login", "err", err)
-	}
+	return c.do(ctx, a, http.MethodDelete, accountPath("/logins/", a.User, cli, slot, ""), nil, nil)
 }
 
-func (c *Remote) Status(ctx context.Context, user int64, cli CLI, slot Slot) (AuthStatus, error) {
+func (c *Remote) Status(ctx context.Context, a cliowner.Account, cli CLI, slot Slot) (AuthStatus, error) {
 	var st AuthStatus
-	err := c.do(ctx, http.MethodGet, accountPath("/status/", user, cli, slot, ""), nil, &st)
+	err := c.do(ctx, a, http.MethodGet, accountPath("/status/", a.User, cli, slot, ""), nil, &st)
 	return st, err
 }
 
-func (c *Remote) Logout(ctx context.Context, user int64, cli CLI, slot Slot) error {
-	return c.do(ctx, http.MethodPost, "/logout", map[string]any{"user": user, "cli": cli, "slot": slot}, nil)
+func (c *Remote) Logout(ctx context.Context, a cliowner.Account, cli CLI, slot Slot) error {
+	return c.do(ctx, a, http.MethodPost, "/logout", map[string]any{"user": a.User, "cli": cli, "slot": slot}, nil)
 }
 
-func (c *Remote) Forget(ctx context.Context, user int64) error {
-	return c.do(ctx, http.MethodPost, "/forget", map[string]any{"user": user}, nil)
+func (c *Remote) Forget(ctx context.Context, a cliowner.Account) error {
+	return c.do(ctx, a, http.MethodPost, "/forget", map[string]any{"user": a.User}, nil)
 }
 
-func (c *Remote) Reconcile(ctx context.Context, live []int64, next int64, before time.Time) error {
-	return c.do(ctx, http.MethodPost, "/reconcile", map[string]any{"live": live, "next": next, "before": before}, nil)
+func (c *Remote) Reconcile(ctx context.Context, census Census) error {
+	return c.do(ctx, cliowner.Account{}, http.MethodPost, "/reconcile", census, nil)
+}
+
+func (c *Remote) Authority(ctx context.Context) (Authority, error) {
+	var out Authority
+	err := c.do(ctx, cliowner.Account{}, http.MethodGet, "/authority", nil, &out)
+	return out, err
 }
 
 func (c *Remote) StartTurn(spec TurnSpec) (*RemoteTurn, bool, error) {
@@ -425,7 +486,7 @@ func (c *Remote) StartTurn(spec TurnSpec) (*RemoteTurn, bool, error) {
 	var out struct {
 		Attached bool `json:"attached"`
 	}
-	if err := c.do(ctx, http.MethodPost, "/turns", spec, &out); err != nil {
+	if err := c.do(ctx, spec.Account(), http.MethodPost, "/turns", spec, &out); err != nil {
 		return nil, false, err
 	}
 	return &RemoteTurn{c: c, spec: spec}, out.Attached, nil
@@ -436,37 +497,39 @@ type turnInfo struct {
 	Over bool `json:"over"`
 }
 
-func (c *Remote) FindTurn(id string) (*RemoteTurn, bool) {
+func turnPath(a cliowner.Account, id, rest string) string {
+	return "/turns/" + url.PathEscape(id) + rest + "?user=" + strconv.FormatInt(a.User, 10)
+}
+
+func (c *Remote) FindTurn(a cliowner.Account, id string) (*RemoteTurn, error) {
 	ctx, cancel := quick()
 	defer cancel()
 	var info turnInfo
-	if err := c.do(ctx, http.MethodGet, "/turns/"+url.PathEscape(id), nil, &info); err != nil {
-		return nil, false
+	if err := c.do(ctx, a, http.MethodGet, turnPath(a, id, ""), nil, &info); err != nil {
+		return nil, err
 	}
-	return &RemoteTurn{c: c, spec: info.TurnSpec, over: info.Over}, true
+	return &RemoteTurn{c: c, spec: info.TurnSpec, over: info.Over}, nil
 }
 
-func (c *Remote) StopTurn(id string) {
+func (c *Remote) StopTurn(a cliowner.Account, id string) error {
 	ctx, cancel := quick()
 	defer cancel()
-	if err := c.do(ctx, http.MethodPost, "/turns/"+url.PathEscape(id)+"/stop", nil, nil); err != nil {
-		slog.Warn("cli worker: stopping a turn", "err", err)
-	}
+	return c.do(ctx, a, http.MethodPost, turnPath(a, id, "/stop"), nil, nil)
 }
 
-func (c *Remote) Permissions(ctx context.Context, user, conversation int64) ([]PermissionRequest, error) {
+func (c *Remote) Permissions(ctx context.Context, a cliowner.Account, conversation int64) ([]PermissionRequest, error) {
 	var out struct {
 		Requests []PermissionRequest `json:"requests"`
 	}
-	q := url.Values{"user": {strconv.FormatInt(user, 10)}, "conversation": {strconv.FormatInt(conversation, 10)}}
-	if err := c.do(ctx, http.MethodGet, "/permissions?"+q.Encode(), nil, &out); err != nil {
+	q := url.Values{"user": {strconv.FormatInt(a.User, 10)}, "conversation": {strconv.FormatInt(conversation, 10)}}
+	if err := c.do(ctx, a, http.MethodGet, "/permissions?"+q.Encode(), nil, &out); err != nil {
 		return nil, err
 	}
 	return out.Requests, nil
 }
 
-func (c *Remote) Answer(ctx context.Context, user, conversation int64, id string, allow bool) error {
-	return c.do(ctx, http.MethodPost, "/permissions/answer", answerRequest{User: user, Conversation: conversation, ID: id, Allow: allow}, nil)
+func (c *Remote) Answer(ctx context.Context, a cliowner.Account, conversation int64, id string, allow bool) error {
+	return c.do(ctx, a, http.MethodPost, "/permissions/answer", answerRequest{User: a.User, Conversation: conversation, ID: id, Allow: allow}, nil)
 }
 
 type RemoteTurn struct {
@@ -485,7 +548,7 @@ func (t *RemoteTurn) Wait(ctx context.Context, after int) ([]Event, bool, error)
 			Events []Event `json:"events"`
 			Done   bool    `json:"done"`
 		}
-		err := t.c.do(ctx, http.MethodGet, "/turns/"+url.PathEscape(t.spec.ID)+"/events?after="+strconv.Itoa(after), nil, &out)
+		err := t.c.do(ctx, t.spec.Account(), http.MethodGet, turnPath(t.spec.Account(), t.spec.ID, "/events")+"&after="+strconv.Itoa(after), nil, &out)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, false, ctx.Err()

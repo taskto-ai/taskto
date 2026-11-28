@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,7 +23,7 @@ const promptFilePlaceholder = "{prompt-file}"
 type helperRequest struct {
 	Op           string            `json:"op"`
 	LayoutRoot   string            `json:"layout_root"`
-	User         int64             `json:"user"`
+	Home         int64             `json:"home"`
 	CLI          CLI               `json:"cli"`
 	Slot         Slot              `json:"slot,omitempty"`
 	Proxy        *Proxy            `json:"proxy,omitempty"`
@@ -60,25 +59,10 @@ func runHelper(stdin *os.File, stdout io.Writer) error {
 	if err := json.Unmarshal(line, &req); err != nil {
 		return fmt.Errorf("reading the request: %w", err)
 	}
-	if req.User <= 0 || !filepath.IsAbs(req.LayoutRoot) {
+	if req.Home < firstHome || req.Home >= maxHome || !filepath.IsAbs(req.LayoutRoot) {
 		return errors.New("invalid request")
 	}
 	layout := Layout{Root: req.LayoutRoot}
-	if req.Op == "forget" {
-		root := layout.User(req.User).Root
-		entries, err := os.ReadDir(root)
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		for _, e := range entries {
-			if err := os.RemoveAll(filepath.Join(root, e.Name())); err != nil {
-				return err
-			}
-		}
-		_ = os.Remove(root)
-		_, err = io.WriteString(stdout, "{}\n")
-		return err
-	}
 	if strings.HasPrefix(req.Op, "browser") {
 		return runBrowserOp(req, layout, stdout)
 	}
@@ -87,17 +71,17 @@ func runHelper(stdin *os.File, stdout io.Writer) error {
 	}
 	switch req.Op {
 	case "limits":
-		dirs := layout.User(req.User)
+		dirs := layout.Home(req.Home)
 		return json.NewEncoder(stdout).Encode(codexLimits(dirs.ConfigOf(Codex, req.Slot), req.Thread))
 	case "authfile":
-		dirs := layout.User(req.User)
+		dirs := layout.Home(req.Home)
 		info, err := os.Stat(filepath.Join(dirs.ConfigOf(req.CLI, req.Slot), credentials(req.CLI)))
 		return json.NewEncoder(stdout).Encode(map[string]bool{"exists": err == nil && info.Mode().IsRegular() && info.Size() > 0})
 	case "reset":
-		if err := os.RemoveAll(layout.User(req.User).ConfigOf(req.CLI, req.Slot)); err != nil {
+		if err := os.RemoveAll(layout.Home(req.Home).ConfigOf(req.CLI, req.Slot)); err != nil {
 			return err
 		}
-		_, err := layout.Ensure(req.User)
+		_, err := layout.Ensure(req.Home)
 		if err == nil {
 			_, err = io.WriteString(stdout, "{}\n")
 		}
@@ -110,7 +94,7 @@ func runHelper(stdin *os.File, stdout io.Writer) error {
 	if err := unprivileged(req); err != nil {
 		return err
 	}
-	dirs, err := layout.EnsureSlot(req.User, req.CLI, req.Slot)
+	dirs, err := layout.EnsureSlot(req.Home, req.CLI, req.Slot)
 	if err != nil {
 		return err
 	}
@@ -206,12 +190,18 @@ func credentials(cli CLI) string {
 	return "auth.json"
 }
 
-func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte, error) {
+func (w *Worker) helperCommand(acct account, req helperRequest) (*exec.Cmd, []byte, error) {
 	w.helperLaunches.Add(1)
-	if req.Op != "forget" && w.isForgotten(user) {
-		return nil, nil, ErrForgotten
+	if req.Op != "browser-purge" {
+		w.mu.Lock()
+		err := w.admissible(acct, "", "")
+		w.mu.Unlock()
+		if err != nil {
+			return nil, nil, err
+		}
 	}
-	req.LayoutRoot, req.User = w.cfg.Layout.Root, user
+	w.helpersBuilt.Add(1)
+	req.LayoutRoot, req.Home = w.cfg.Layout.Root, acct.home
 	if req.Path == "" {
 		req.Path = w.cfg.Path
 	}
@@ -229,7 +219,7 @@ func (w *Worker) helperCommand(user int64, req helperRequest) (*exec.Cmd, []byte
 	cmd.Dir = "/"
 	cmd.Env = []string{"PATH=" + w.cfg.Path}
 	newGroup(cmd)
-	if err := w.asUser(cmd, user); err != nil {
+	if err := w.asUser(cmd, acct.home); err != nil {
 		return nil, nil, err
 	}
 	return cmd, append(header, '\n'), nil

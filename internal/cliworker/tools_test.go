@@ -178,7 +178,7 @@ func TestTaskToToolsPermissions(t *testing.T) {
 				if q.Tool != wantTool || !strings.Contains(q.Input, "notes.md") {
 					t.Errorf("question = %+v", q)
 				}
-				if err := h.w.Answer(1, 7, q.ID, allow); err != nil {
+				if err := h.w.Answer(acct(1), 7, q.ID, allow); err != nil {
 					t.Fatal(err)
 				}
 				done := last(waitDone(t, turn, 20*time.Second))
@@ -236,7 +236,7 @@ func TestTaskToToolsPerUser(t *testing.T) {
 		if got := mcpOutcome(done.Text, "list_spaces"); got != "ok list_spaces for Bearer "+token {
 			t.Errorf("user %d: %s", turn.Spec().User, got)
 		}
-		config := h.layout.User(turn.Spec().User).Config(cliworker.Claude)
+		config := h.home(turn.Spec().User).Config(cliworker.Claude)
 		calls := clitest.Calls(t, config)
 		env := strings.Join(calls[len(calls)-1].Env, "\n")
 		if !strings.Contains(env, token) || strings.Contains(env, other) {
@@ -265,14 +265,15 @@ func TestTaskToToolsChecked(t *testing.T) {
 
 func TestRemoteHidesTheToolsToken(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	r := serve(t, h)
 	s := spec("remote-tools", 1, cliworker.Grok, "hello")
 	s.Tools = &cliworker.Tools{URL: "http://127.0.0.1:8081/cli-mcp", Token: tokenA, ReadOnly: []string{"list_spaces"}}
 	if _, _, err := r.StartTurn(s); err != nil {
 		t.Fatal(err)
 	}
-	found, ok := r.FindTurn(s.ID)
-	if !ok {
+	found, err := r.FindTurn(acct(s.User), s.ID)
+	if err != nil {
 		t.Fatal("turn not found")
 	}
 	if tools := found.Spec().Tools; tools == nil || tools.Token != "" || tools.URL != s.Tools.URL {

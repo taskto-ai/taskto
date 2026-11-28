@@ -38,6 +38,7 @@ export type Download = Scope & {
   key: string
   user: number
   name: string
+  icon?: string
   release: number
   definition: OfflineApp['definition']
   messages: unknown[]
@@ -262,21 +263,91 @@ export class OfflineStore {
     return `taskto-offline-${user}`
   }
 
-  static open(user: number): Promise<OfflineStore> {
-    return withLock(user, () => OfflineStore.openNow(user))
+  static open(
+    user: number,
+    { still = () => true, existing = false }: { still?: () => boolean; existing?: boolean } = {},
+  ): Promise<OfflineStore> {
+    return withLock(user, (expired, locked, onExpire) =>
+      OfflineStore.openNow(user, expired, locked, onExpire, still, existing),
+    )
   }
 
-  private static async openNow(user: number): Promise<OfflineStore> {
+  private static async openNow(
+    user: number,
+    expired: () => boolean,
+    locked: boolean,
+    onExpire: (fn: () => void) => void,
+    still: () => boolean,
+    existing: boolean,
+  ): Promise<OfflineStore> {
     const name = OfflineStore.databaseName(user)
-    const db = await openDatabase(name, SCHEMA_VERSION, MIGRATIONS)
+    if (!still()) throw new Superseded()
+    let made = false
+    let refused: 'existing' | 'expired' | null = null
+    let upgrading: IDBTransaction | null = null
+    onExpire(() => {
+      if (!upgrading) return
+      refused = 'expired'
+      try {
+        upgrading.abort()
+      } catch {}
+    })
+    const steps: Record<number, Migration> = {}
+    for (const [key, step] of Object.entries(MIGRATIONS)) {
+      const version = Number(key)
+      steps[version] = (d, tx) => {
+        upgrading = tx
+        if (version === 1) made = true
+        if ((version === 1 && existing) || expired()) {
+          refused = version === 1 && existing ? 'existing' : 'expired'
+          tx.abort()
+          return 'stop'
+        }
+        return step(d, tx)
+      }
+    }
+    const open = async () => {
+      made = false
+      refused = null
+      upgrading = null
+      try {
+        return await openDatabase(name, SCHEMA_VERSION, steps)
+      } catch (e) {
+        if (refused === 'existing') throw new NotOnDevice()
+        if (refused === 'expired') throw new StorageUnavailable('the offline database took too long')
+        throw e
+      } finally {
+        upgrading = null
+      }
+    }
+    const giveUp = async (db: IDBDatabase, error: Error): Promise<never> => {
+      db.close()
+      if (made && locked && !expired()) await deleteDatabase(name).catch(() => {})
+      throw error
+    }
+    const db = await open()
     let retired = false
     try {
       retired = (await runTx(db, [META], 'readonly', (tx) => tx.store(META).get(RETIRED))) !== undefined
     } catch {}
+    if (expired()) {
+      db.close()
+      throw new StorageUnavailable('the offline database took too long')
+    }
+    if (!still()) return giveUp(db, new Superseded())
     if (!retired) return new OfflineStore(user, db)
     db.close()
+    if (existing) throw new StorageUnavailable('a retired offline database is still here')
     await deleteDatabase(name)
-    return new OfflineStore(user, await openDatabase(name, SCHEMA_VERSION, MIGRATIONS))
+    if (expired()) throw new StorageUnavailable('the offline database took too long')
+    if (!still()) throw new Superseded()
+    const fresh = await open()
+    if (expired()) {
+      fresh.close()
+      throw new StorageUnavailable('the offline database took too long')
+    }
+    if (!still()) return giveUp(fresh, new Superseded())
+    return new OfflineStore(user, fresh)
   }
 
   subscribe(fn: Listener): () => void {
@@ -692,15 +763,21 @@ export class OfflineStore {
 
   static deleteRetired(
     user: number,
-    { force = false, still = () => true }: { force?: boolean; still?: () => boolean } = {},
+    {
+      force = false,
+      still = () => true,
+      removed = () => {},
+    }: { force?: boolean; still?: () => boolean; removed?: () => void } = {},
   ): Promise<'removed' | 'newer' | 'stopped'> {
-    return withLock(user, async () => {
+    return withLock(user, async (expired) => {
       if (!still()) return 'stopped'
       if (typeof indexedDB === 'undefined') return 'removed'
       const name = OfflineStore.databaseName(user)
       if (!force && !(await retiredOrNew(name))) return 'newer'
       if (!still()) return 'stopped'
+      if (expired()) throw new StorageUnavailable('the offline database took too long')
       await deleteDatabase(name)
+      if (!expired()) removed()
       return 'removed'
     })
   }
@@ -758,6 +835,13 @@ export const lockTimes = {
   },
 }
 
+export class NotOnDevice extends Error {
+  constructor() {
+    super('no offline database of the account here')
+    this.name = 'NotOnDevice'
+  }
+}
+
 export class Superseded extends Error {
   constructor() {
     super('a newer login of the account started')
@@ -765,14 +849,37 @@ export class Superseded extends Error {
   }
 }
 
-function withLock<T>(user: number, work: () => Promise<T>): Promise<T> {
+function withLock<T>(
+  user: number,
+  work: (expired: () => boolean, locked: boolean, onExpire: (fn: () => void) => void) => Promise<T>,
+): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-  if (!locks?.request) return work()
+  if (!locks?.request)
+    return work(
+      () => false,
+      false,
+      () => {},
+    )
   let granted = false
   const signal = lockTimes.waitOver(lockTimes.wait)
   const held = () => {
     granted = true
-    return withinTime(work(), lockTimes.hold)
+    let over = false
+    const hooks: (() => void)[] = []
+    return withinTime(
+      work(
+        () => over,
+        true,
+        (fn) => {
+          hooks.push(fn)
+        },
+      ),
+      lockTimes.hold,
+      () => {
+        over = true
+        for (const fn of hooks) fn()
+      },
+    )
   }
   return (locks.request(`taskto-offline-db:${user}`, signal ? { signal } : {}, held) as Promise<T>).catch((e) => {
     if (!granted && signal?.aborted) throw new StorageUnavailable('the offline database is busy in another tab')
@@ -780,9 +887,12 @@ function withLock<T>(user: number, work: () => Promise<T>): Promise<T> {
   })
 }
 
-function withinTime<T>(work: Promise<T>, ms: number): Promise<T> {
+function withinTime<T>(work: Promise<T>, ms: number, timedOut: () => void = () => {}): Promise<T> {
   return new Promise((resolve, reject) => {
-    const cancel = lockTimes.holdOver(ms, () => reject(new StorageUnavailable('the offline database took too long')))
+    const cancel = lockTimes.holdOver(ms, () => {
+      timedOut()
+      reject(new StorageUnavailable('the offline database took too long'))
+    })
     work.then(
       (v) => {
         cancel()
@@ -797,16 +907,22 @@ function withinTime<T>(work: Promise<T>, ms: number): Promise<T> {
 }
 
 async function retiredOrNew(name: string): Promise<boolean> {
-  let made = false
-  const db = await openDatabase(name, SCHEMA_VERSION, {
-    ...MIGRATIONS,
-    1: (d, tx) => {
-      made = true
-      MIGRATIONS[1]?.(d, tx)
-    },
-  })
+  let absent = false
+  let db: IDBDatabase
   try {
-    if (made) return true
+    db = await openDatabase(name, SCHEMA_VERSION, {
+      ...MIGRATIONS,
+      1: (_d, tx) => {
+        absent = true
+        tx.abort()
+        return 'stop'
+      },
+    })
+  } catch (e) {
+    if (absent) return true
+    throw e
+  }
+  try {
     return (await runTx(db, [META], 'readonly', (tx) => tx.store(META).get(RETIRED))) !== undefined
   } catch {
     return false

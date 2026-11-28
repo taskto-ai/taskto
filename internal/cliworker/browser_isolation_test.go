@@ -99,6 +99,7 @@ func tcpListeners(t *testing.T, min int) []string {
 
 func TestIsolationBrowser(t *testing.T) {
 	h := newIsolated(t)
+	h.introduce(t, 1, 2)
 	bins := browserBins(t)
 	m := browser.NewManager(browser.Config{Host: h.w.BrowserHost(bins), NoSandbox: true, StartTimeout: 60 * time.Second})
 	t.Cleanup(m.Close)
@@ -110,7 +111,7 @@ func TestIsolationBrowser(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	res, err := m.Do(ctx, 1, browser.Action{Op: browser.OpOpen, Browser: browser.Personal, URL: site.URL})
+	res, err := m.Do(ctx, acct(1), browser.Action{Op: browser.OpOpen, Browser: browser.Personal, URL: site.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +128,7 @@ func TestIsolationBrowser(t *testing.T) {
 		switch p.comm {
 		case "Xvfb", "x11vnc", "chromium":
 			found[p.comm] = true
-			if p.uid != isoBase+1 {
+			if p.uid != h.uid(1) {
 				t.Errorf("%s (pid %d) runs as uid %d", p.comm, p.pid, p.uid)
 			}
 			if p.comm == "chromium" && chromium == 0 {
@@ -146,15 +147,15 @@ func TestIsolationBrowser(t *testing.T) {
 		t.Errorf("a browser listens on TCP: %v", l)
 	}
 
-	p := h.layout.BrowserPaths(1)
+	p := h.layout.BrowserPaths(h.w.HomeForTest(acct(1)))
 	for _, dir := range []string{p.Root, p.Profile(), p.Run()} {
 		var st syscall.Stat_t
-		if err := syscall.Lstat(dir, &st); err != nil || int(st.Uid) != isoBase+1 || st.Mode&0o777 != 0o700 {
+		if err := syscall.Lstat(dir, &st); err != nil || int(st.Uid) != h.uid(1) || st.Mode&0o777 != 0o700 {
 			t.Errorf("%s: uid %d mode %o (%v)", dir, st.Uid, st.Mode&0o777, err)
 		}
 	}
 
-	live, err := m.OpenLive(ctx, 1)
+	live, err := m.OpenLive(ctx, acct(1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,20 +200,21 @@ func TestIsolationBrowser(t *testing.T) {
 		}
 	}
 
-	res, err = m.Do(ctx, 2, browser.Action{Op: browser.OpOpen, Browser: browser.Testing, URL: "about:blank"})
+	res, err = m.Do(ctx, acct(2), browser.Action{Op: browser.OpOpen, Browser: browser.Testing, URL: "about:blank"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap, err := m.Do(ctx, 2, browser.Action{Op: browser.OpSnapshot, Browser: browser.Testing, Tab: res.Tab.ID})
+	snap, err := m.Do(ctx, acct(2), browser.Action{Op: browser.OpSnapshot, Browser: browser.Testing, Tab: res.Tab.ID})
 	if err != nil || strings.Contains(snap.Snapshot, "user-1-session") {
 		t.Fatalf("user 2's browser: %v %q", err, snap.Snapshot)
 	}
 	for _, pr := range procs(t) {
-		if pr.comm == "chromium" && strings.Contains(pr.cmdline, h.layout.Root) && pr.uid != isoBase+1 && pr.uid != isoBase+2 {
+		if pr.comm == "chromium" && strings.Contains(pr.cmdline, h.layout.Root) && pr.uid != h.uid(1) && pr.uid != h.uid(2) {
 			t.Errorf("a chromium (pid %d) runs as uid %d", pr.pid, pr.uid)
 		}
 	}
 
+	h.w.CrashForTest()
 	second, err := cliworker.New(h.cfg)
 	if err != nil {
 		t.Fatal(err)

@@ -10,6 +10,9 @@ taskto.ai combines three things that feed each other:
 
 On top of these, users build **personal apps** by asking the agent.
 
+Conversation entries keep the model's messages and TaskTo input metadata together; person-sent
+inputs identify their author, while server-started turns omit one.
+
 ## Principles
 
 - **The same binary works for one person or a company.** The data model has workspaces and
@@ -49,6 +52,13 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   naming their conversation with a capability the server issued for it; the server acts
   for the conversation's owner, checking their access on every call
   ([agent-tools.md](agent-tools.md)).
+- **Agent usage:** `internal/usage` records each person's daily input and output token totals by
+  workspace, source and engine. CLI turns are recorded by the Go turn handler; sidecar turns are
+  read from the assistant message usage stored in Pi Durable. Each turn and each durable entry is
+  counted once: a CLI turn's ID is claimed in the same transaction as its totals, so a replayed or
+  overlapping request adds nothing, and a conversation keeps the last entry counted
+  (`usage_mark`), advanced in the transaction that records the entries after it. Rows contain no
+  conversation text or cost and are kept for 400 days.
 - **Spaces and access:** a workspace contains spaces: a private one per member, and shared
   ones with editors and viewers. Everything people store lives in a space, and one
   package, `internal/access`, decides who may read and write each, for the API and for
@@ -128,6 +138,12 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   [api.md](api.md#access-tokens)). The routes that read an app and its rows, and `POST …/actions`, take a token too,
   with a budget of actions; building, publishing, roles, the offline download and uploads stay
   behind a session.
+- **Conversation notes:** a person can add a note to a conversation that stays in its history
+  for the people who read it but is never part of the model's context. A note is a passive
+  `taskto.note` entry the sidecar writes (`kind` and `data` only, no `model`), so Pi Durable
+  appends it at once, even in the middle of a run; the messages view, the CLI hand-off and the
+  conversation search, which read the model's context, never contain it
+  ([api.md](api.md#post-apiworkspacesworkspaceconversationsconversationnotes)).
 - **CLI workers:** a conversation can run on the official Claude Code, Codex or Grok Build
   CLI, signed in with the user's own subscription. Go runs the CLIs: in a worker container
   where each user is a Unix user of their own, or, on a one-user install, in the server
@@ -242,6 +258,14 @@ no extra process); it has no feature of its own.
   costs nothing (`EXPLAIN QUERY PLAN` is checked in a test). The worker runs bounded batches, so
   cleanup gets a turn however long the queue is, and fails a row whose time can't be read instead
   of stopping on it.
+- **Wall-clock calendars.** `schedule.Calendar` describes a local time or an interval of at least
+  an hour, an optional set of weekdays, and an IANA time zone. `Next` returns the next UTC
+  occurrence: a time in a spring-forward gap runs at the first instant after the gap, and a time
+  in a fall-back overlap runs once at its first instant. A feature stores the calendar with its own
+  settings, schedules a one-off job at `Calendar.Next`, and reschedules the following occurrence
+  in the handler's transaction after confirming the job is still current, as
+  `notifications.digestNext` does. The database job remains a single due time, so retries retain
+  the same occurrence and idempotency key.
 - **First user: due-date reminders.** A card with a due date and a person as its assignee has two
   jobs for that person, `card.due-reminder` and `card.overdue`, keyed by the card. They are made,
   moved and cancelled in the transaction of the card change that needs them, and their handlers

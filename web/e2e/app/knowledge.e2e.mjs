@@ -39,6 +39,16 @@ scenario('a document is created, edited, shown in its history and restored', asy
   assert.equal(await versions.count(), 3)
   assert.match(await versions.first().textContent(), /Owner/)
 
+  await versions.filter({ hasText: 'second draft' }).getByRole('button', { name: 'Changes' }).click()
+  const diff = history.getByRole('region', { name: /^Changes on/ })
+  await diff.locator('ins', { hasText: 'Second' }).waitFor()
+  await diff.locator('del', { hasText: 'First' }).waitFor()
+
+  await versions.filter({ hasText: 'first draft' }).getByRole('button', { name: 'Compare with current' }).click()
+  const compared = history.getByRole('region', { name: /compared with the current version$/ })
+  await compared.locator('ins', { hasText: 'Second' }).waitFor()
+  await compared.getByRole('button', { name: 'Restore this version' }).waitFor()
+
   await versions.filter({ hasText: 'first draft' }).getByRole('button', { name: 'Restore this version' }).click()
   await page
     .getByRole('alertdialog', { name: 'Restore this version?' })

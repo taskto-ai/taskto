@@ -30,8 +30,8 @@ func (d Dirs) Conversation(id int64) string {
 	return filepath.Join(d.Work, "c"+strconv.FormatInt(id, 10))
 }
 
-func (l Layout) User(user int64) Dirs {
-	root := filepath.Join(l.Root, "u"+strconv.FormatInt(user, 10))
+func (l Layout) Home(home int64) Dirs {
+	root := filepath.Join(l.Root, "h"+strconv.FormatInt(home, 10))
 	return Dirs{
 		Root: root,
 		Home: filepath.Join(root, "home"),
@@ -40,11 +40,17 @@ func (l Layout) User(user int64) Dirs {
 	}
 }
 
-func (l Layout) Ensure(user int64) (Dirs, error) { return l.EnsureSlot(user, "", "") }
+const provisionPrefix = ".new-h"
 
-func (l Layout) EnsureSlot(user int64, cli CLI, slot Slot) (Dirs, error) {
-	if user <= 0 {
-		return Dirs{}, fmt.Errorf("invalid user %d", user)
+func (l Layout) legacy(user int64) string {
+	return filepath.Join(l.Root, "u"+strconv.FormatInt(user, 10))
+}
+
+func (l Layout) Ensure(home int64) (Dirs, error) { return l.EnsureSlot(home, "", "") }
+
+func (l Layout) EnsureSlot(home int64, cli CLI, slot Slot) (Dirs, error) {
+	if home < firstHome || home >= maxHome {
+		return Dirs{}, fmt.Errorf("invalid home %d", home)
 	}
 	if !slot.Valid() {
 		return Dirs{}, fmt.Errorf("invalid account slot")
@@ -52,7 +58,7 @@ func (l Layout) EnsureSlot(user int64, cli CLI, slot Slot) (Dirs, error) {
 	if err := os.MkdirAll(l.Root, 0o700); err != nil {
 		return Dirs{}, err
 	}
-	d := l.User(user)
+	d := l.Home(home)
 	dirs := []string{d.Root, d.Home, d.Tmp, d.Work, d.Config(Claude), d.Config(Codex), d.Config(Grok)}
 	if cli.Valid() && slot != "" {
 		dirs = append(dirs, d.ConfigOf(cli, slot))

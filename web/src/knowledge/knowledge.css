@@ -311,6 +311,107 @@
     border-block-start: var(--line-thin) solid var(--color-border);
   }
 
+  .kb-diff-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    margin: 0;
+    font: var(--type-small);
+  }
+
+  .kb-diff-count-add {
+    color: var(--color-diff-add-text);
+    background: var(--color-diff-add-soft);
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-sm);
+  }
+
+  .kb-diff-count-del {
+    color: var(--color-diff-del-text);
+    background: var(--color-diff-del-soft);
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-sm);
+  }
+
+  .kb-diff-scroll {
+    overflow-x: auto;
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-sm);
+  }
+
+  .kb-diff-table {
+    inline-size: 100%;
+    border-collapse: collapse;
+    font: var(--type-code);
+  }
+
+  .kb-diff-num {
+    inline-size: 1%;
+    min-inline-size: calc(var(--space-8) + var(--space-2));
+    padding-inline: var(--space-2);
+    text-align: end;
+    color: var(--color-text-muted);
+    user-select: none;
+    white-space: nowrap;
+    vertical-align: top;
+  }
+
+  .kb-diff-code {
+    padding-inline: var(--space-3);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--color-text);
+  }
+
+  .kb-diff-add,
+  .kb-diff-add .kb-diff-num {
+    background: var(--color-diff-add-soft);
+  }
+
+  .kb-diff-del,
+  .kb-diff-del .kb-diff-num {
+    background: var(--color-diff-del-soft);
+  }
+
+  .kb-diff-add .kb-diff-code,
+  .kb-diff-add .kb-diff-num {
+    color: var(--color-diff-add-text);
+  }
+
+  .kb-diff-del .kb-diff-code,
+  .kb-diff-del .kb-diff-num {
+    color: var(--color-diff-del-text);
+  }
+
+  .kb-diff-code ins,
+  .kb-diff-code del {
+    color: inherit;
+  }
+
+  .kb-diff-add .kb-diff-code ins {
+    background: var(--color-diff-add);
+    text-decoration: none;
+    border-radius: var(--radius-sm);
+  }
+
+  .kb-diff-del .kb-diff-code del {
+    background: var(--color-diff-del);
+    text-decoration: line-through;
+    border-radius: var(--radius-sm);
+  }
+
+  .kb-diff-eol {
+    display: block;
+    color: var(--color-text-muted);
+    font: var(--type-caption);
+  }
+
+  .kb-diff-fold td {
+    padding: var(--space-1) var(--space-2);
+    background: var(--color-bg-sunken);
+    border-block: var(--line-thin) solid var(--color-border);
+  }
+
   .kb-form,
   .kb-dialog-text {
     display: grid;
