@@ -100,6 +100,7 @@ type Checker struct {
 	auth         *auth.Service
 	archiveHooks []ArchiveHook
 	memberHooks  []MemberHook
+	grantHooks   []AppHook
 	removedHooks []func(spaceID, userID int64)
 }
 
@@ -110,6 +111,10 @@ func (c *Checker) OnArchiveChange(h ArchiveHook) { c.archiveHooks = append(c.arc
 type MemberHook func(ctx context.Context, tx *sql.Tx, spaceID, userID int64) error
 
 func (c *Checker) OnMemberAdded(h MemberHook) { c.memberHooks = append(c.memberHooks, h) }
+
+type AppHook func(ctx context.Context, tx *sql.Tx, spaceID, appID int64) error
+
+func (c *Checker) OnAppGrantsChanged(h AppHook) { c.grantHooks = append(c.grantHooks, h) }
 
 func (c *Checker) OnMemberRemoved(h func(spaceID, userID int64)) {
 	c.removedHooks = append(c.removedHooks, h)

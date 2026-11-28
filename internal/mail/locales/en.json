@@ -72,6 +72,15 @@
       ],
       "action": "Open the notification"
     },
+    "notification_app_reminder": {
+      "subject": "A reminder from one of your apps",
+      "title": "A reminder from one of your apps",
+      "paragraphs": [
+        "Open taskto.ai to see it.",
+        "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
+      ],
+      "action": "Open the notification"
+    },
     "verify_email": {
       "subject": "Confirm your email address for taskto.ai notifications",
       "title": "Confirm your email address",

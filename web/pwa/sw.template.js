@@ -62,6 +62,7 @@ const KINDS = [
   'card_due',
   'card_overdue',
   'app_effect_failed',
+  'app_reminder',
   'changed',
 ]
 const STRINGS_CACHE = 'taskto-push-strings'

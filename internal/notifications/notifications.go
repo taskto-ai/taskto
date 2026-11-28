@@ -24,6 +24,7 @@ const (
 	KindCardComment      = "card_comment"
 	KindCardMention      = "card_mention"
 	KindAppEffectFailed  = "app_effect_failed"
+	KindAppReminder      = "app_reminder"
 	KindCardDue          = "card_due"
 	KindCardOverdue      = "card_overdue"
 	KindIntegrationEvent = "integration_event"
@@ -47,6 +48,8 @@ type Ref struct {
 	Card        int64  `json:"card,omitempty"`
 	App         int64  `json:"app,omitempty"`
 	Effect      int64  `json:"effect,omitempty"`
+	Record      int64  `json:"record,omitempty"`
+	Reminder    string `json:"reminder,omitempty"`
 	Integration int64  `json:"integration,omitempty"`
 	Event       int64  `json:"event,omitempty"`
 	Due         string `json:"due,omitempty"`
@@ -63,7 +66,7 @@ var errUnknownKind = errors.New("notifications: unknown kind")
 
 func Add(ctx context.Context, tx *sql.Tx, n Notice) error {
 	switch n.Kind {
-	case KindCardAssigned, KindCardComment, KindCardMention, KindAppEffectFailed, KindCardDue, KindCardOverdue, KindIntegrationEvent:
+	case KindCardAssigned, KindCardComment, KindCardMention, KindAppEffectFailed, KindAppReminder, KindCardDue, KindCardOverdue, KindIntegrationEvent:
 	default:
 		return errUnknownKind
 	}
@@ -129,6 +132,7 @@ type Service struct {
 	mail         *mail.Service
 	publicURL    string
 	sched        *schedule.Service
+	reminders    ReminderSource
 	tidyEvery    time.Duration
 	afterReserve func()
 	betweenReads func(*sql.Tx)
@@ -181,4 +185,18 @@ func (s *Service) write(ctx context.Context, fn func(*sql.Tx) error) (err error)
 		return err
 	}
 	return tx.Commit()
+}
+
+type ReminderText struct {
+	App   string
+	Title string
+}
+
+type ReminderSource interface {
+	ReminderText(ctx context.Context, c *access.Checker, userID, workspaceID int64, ref Ref) (ReminderText, bool, error)
+}
+
+func (s *Service) WithReminderSource(src ReminderSource) *Service {
+	s.reminders = src
+	return s
 }

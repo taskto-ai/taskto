@@ -243,6 +243,9 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	integrationSvc := integrations.New(integrationStore, integrations.Options{PublicURL: cfg.PublicURL, Egress: integrationEgress(cfg)})
 	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb, Payments: integrationSvc}).WithDeletedRetention(cfg.AppDeletedRetention())
 	integrationSvc.UseRecords(appSvc)
+	if err := appSvc.EnableReminders(scheduler); err != nil {
+		return err
+	}
 	stopEffects := appSvc.StartOutbox(ctx)
 	defer stopEffects()
 	notifier, err := notifications.New(ctx, sqlDB, spaces, notifications.Options{Key: key, Contact: cfg.PushContact, Mail: mailer, PublicURL: cfg.PublicURL})

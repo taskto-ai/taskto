@@ -8,6 +8,7 @@ export function pushStrings(t: T): Record<string, string> {
     card_comment: t('notifications.push.card_comment'),
     card_mention: t('notifications.push.card_mention'),
     app_effect_failed: t('notifications.push.app_effect_failed'),
+    app_reminder: t('notifications.push.app_reminder'),
     integration_event: t('notifications.push.integration_event'),
     changed: t('notifications.push.changed'),
   }

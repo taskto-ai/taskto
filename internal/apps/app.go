@@ -39,6 +39,7 @@ type Definition struct {
 	Series            map[string]Series          `json:"series,omitempty"`
 	Contributions     *Contributions             `json:"contributions,omitempty"`
 	Integrations      map[string]IntegrationSlot `json:"integrations,omitempty"`
+	Reminders         []Reminder                 `json:"reminders,omitempty"`
 }
 
 type Collection struct {
@@ -418,6 +419,13 @@ func (d Definition) Check() (Definition, error) {
 	if err != nil {
 		return Definition{}, err
 	}
+	usesReminders, err := d.checkReminders(out.Collection)
+	if err != nil {
+		return Definition{}, err
+	}
+	if usesReminders {
+		effects = mergeSorted(effects, []string{RemindersCapability})
+	}
 	out.Requires = mergeSorted(requires, effects)
 	if slices.Contains(requires, ComponentCapability("Show")) {
 		uses2 = append(uses2, "the Show component")
@@ -433,6 +441,10 @@ func (d Definition) Check() (Definition, error) {
 	if usesIntegrations && d.DefinitionVersion < integrationsVersion {
 		return Definition{}, invalidf("definition_version %d can't use integrations: they are for version %d (leave definition_version out for the current one)",
 			d.DefinitionVersion, integrationsVersion)
+	}
+	if usesReminders && d.DefinitionVersion < remindersVersion {
+		return Definition{}, invalidf("definition_version %d can't use reminders: they are for version %d (leave definition_version out for the current one)",
+			d.DefinitionVersion, remindersVersion)
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {

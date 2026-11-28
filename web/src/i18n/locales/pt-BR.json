@@ -3310,6 +3310,7 @@
       "card_comment": "Um cartão seu tem um novo comentário: {title}",
       "card_mention": "Você foi mencionado em um comentário em um cartão: {title}",
       "app_effect_failed": "Uma ação em {app} não terminou e precisa que você tente de novo",
+      "app_reminder": "Lembrete de {app}: {title}",
       "integration_event": "Um pagamento de {integration} não foi aplicado e precisa de um administrador",
       "changed": "Algo mudou. Abra para ver o que você ainda pode ver."
     },
@@ -3320,6 +3321,7 @@
       "card_comment": "Um cartão seu tem um novo comentário",
       "card_mention": "Você foi mencionado em um comentário",
       "app_effect_failed": "Uma ação de um app precisa da sua atenção",
+      "app_reminder": "Um lembrete de um dos seus apps",
       "integration_event": "Um pagamento precisa de um administrador",
       "changed": "Algo mudou"
     },
@@ -3354,7 +3356,8 @@
         "card_mention": "Você foi mencionado em um comentário",
         "card_due": "Um cartão seu vence",
         "card_overdue": "Um cartão seu está atrasado",
-        "app_effect_failed": "Uma ação de app precisa da sua atenção"
+        "app_effect_failed": "Uma ação de app precisa da sua atenção",
+        "app_reminder": "Um lembrete de um dos seus apps"
       },
       "emailOff": "Não me enviar e-mail",
       "emailInstant": "Enviar e-mail logo depois",

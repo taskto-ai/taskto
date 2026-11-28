@@ -116,6 +116,16 @@ func (r *reader) describe(ctx context.Context, n stored) (params map[string]stri
 			return nil, Target{}, false, err
 		}
 		return map[string]string{"integration": name}, Target{Section: "settings"}, true, nil
+	case KindAppReminder:
+		if r.s.reminders == nil {
+			return nil, Target{}, false, nil
+		}
+		text, shown, err := r.s.reminders.ReminderText(ctx, r.access, r.userID, n.workspaceID, n.ref)
+		if err != nil || !shown {
+			return nil, Target{}, false, err
+		}
+		return map[string]string{"app": text.App, "title": text.Title},
+			Target{Section: "apps", Item: strconv.FormatInt(n.ref.Space, 10) + "-" + strconv.FormatInt(n.ref.App, 10)}, true, nil
 	case KindAppEffectFailed:
 		sp, acc, name, err := r.access.AppNamed(ctx, r.userID, n.ref.Space, n.ref.App)
 		if errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound) {

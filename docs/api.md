@@ -2585,6 +2585,11 @@ workspace's home as its target, and a push for it says the same. Notifications a
   mentioned in a comment is told of the mention only. No notification holds the comment's text;
 - `app_effect_failed`: an effect of an app you acted in failed for good and waits for you to retry
   it (`params.app`; target: the app). One per failure, so a retry that fails again is a new one;
+- `app_reminder`: a record you created has a [reminder](#reminders-of-records) that is due
+  (`params.app`, `params.title`: the reminder's title filled from the record when the notification
+  is read, and the app's name when that comes out empty; target: the app). One per reminder, record
+  and time. It is shown only while you may still read the record and the reminder still applies to
+  it; otherwise it is `changed`. A push for it says only that an app has a reminder;
 - `integration_event`: for the admins of a workspace only: a payment event of an integration wasn't
   applied to a record (it failed, was a second payment, or left a record the app's rule refused;
   `params.integration` is its name; target: Settings). No notification holds the payment or the
@@ -2689,9 +2694,10 @@ for the workspace's members, about the caller only.
 
 `{"available": true, "address": {"email": "ana@example.com", "state": "verified"}, "kinds":
 {"card_assigned": "off", "card_comment": "instant", "card_mention": "instant", "card_due": "off",
-"card_overdue": "off", "app_effect_failed": "digest"}, "digest": {"hour": 8, "timezone": "UTC"}}`.
-There is a choice for each of the six kinds a notification can have (`card_assigned`, `card_comment`,
-`card_mention`, `card_due`, `card_overdue`, `app_effect_failed`), every one `off` until chosen.
+"card_overdue": "off", "app_effect_failed": "digest", "app_reminder": "off"}, "digest": {"hour": 8, "timezone": "UTC"}}`.
+There is a choice for each of the seven kinds a notification can have that can be mailed
+(`card_assigned`, `card_comment`, `card_mention`, `card_due`, `card_overdue`, `app_effect_failed`,
+`app_reminder`), every one `off` until chosen.
 `available` is false when the server has no SMTP server or no public URL (nothing can be turned on
 then, and everything can still be turned off). `address.state` is `unverified` (no link waits),
 `pending` (a link was sent and may still be opened) or `verified`; nothing is sent unless it is
@@ -3089,8 +3095,8 @@ saying what is wrong) unless:
   use anything of version 2 (`400`), which is everything in [Screens](#screens-and-navigation),
   [time and choice fields](#fields-and-rules), [rules](#fields-and-rules), series, and
   contributions. **Version 3** adds
-  [integrations](#integrations-of-an-app): a definition that says `1` or `2` can't declare them or use
-  the `create_payment_link` effect (`400`).
+  [integrations](#integrations-of-an-app) and [reminders](#reminders-of-records): a definition that
+  says `1` or `2` can't declare them or use the `create_payment_link` effect (`400`).
 - **series** declares up to 10 count, sum or average aggregates grouped by a choice, boolean, text or
   date field. A date group needs a `day`, `week` or `month` bucket; it keeps the latest 12 buckets by
   default, or 1–90 when `last` is set. A series can filter rows with `where` and split into one line
@@ -3427,6 +3433,44 @@ Callers who may design the app. `{"version", "space_id", "board_id"}`: gives eve
 draft that has no board chosen the board, which the caller must be able to write (`400
 app_effect_target`; `400` if no effect waits for one). `200` with the app, as a change of the
 draft is (`409 app_changed` with the current app if it moved).
+
+### Reminders of records
+
+An app may remind **the person who created a record** at a date, and optionally a time, the record
+holds: a "Pay rent" record dated the 5th at 09:00 arrives in their inbox, as a push and, if they
+chose, by email ([notifications](#notifications)). A definition of version 3 declares at most 3 in
+the top-level `reminders` list, strictly checked when saved (an unknown key, a field that isn't of
+the right type or a hole that isn't a field refuses the definition, `400`), and its release
+requires the capability `app.reminders`:
+
+```json
+"reminders": [{"name": "due", "date": "due_on", "time": "due_at", "at": "09:00",
+               "title": "Pay {{title}}", "where": {"field": "status", "op": "ne", "value": "done"}}]
+```
+
+- `name` is unique in the app. `date` names a date field and `time`, optionally, a time field; `at`
+  is the time of day, `HH:MM`, used when there is no `time` field or a record leaves it empty
+  (`09:00` when left out). The time is on the wall clock of the creator's own time zone
+  ([time zone](#get-apime)).
+- `title` is a template, like an effect's: `{{field}}` is a field of the collection and `{{id}}`
+  the record's number, and nothing more. It is filled when the notification is read, never when it
+  is made, so an edit of the record is what the person sees.
+- `where` is a rule over the record: it is reminded only while it holds.
+
+The server schedules one job for each record and reminder on the live release, in the transaction
+of every change that matters: an insert, an update, a delete, a restore, an integration's write, a
+new release or rollback, an app archived or restored or moved to another space, a member added back
+to a space, and a change of the creator's time zone. A past time, a record that was deleted, a
+`where` that no longer holds, a creator who may no longer read the record or an archived app has no
+job. The job holds only IDs (the app, the record and the reminder's name), and the handler checks
+everything again when it runs: the creator's access to the space and the app (a creator who may no
+longer read records is not told, and the job ends), the live release (a reminder it no longer has
+does nothing), the record and its `where`, and the time (a job that is early for a changed time
+moves itself). A reminder is made once for each time, however often the job is tried.
+
+Only the creator is reminded, never someone else the record is about, and a push, an email and the
+inbox never carry the record's text beyond what the inbox shows its own recipient when they read
+it. A reminder doesn't repeat.
 
 ### Integrations of an app
 

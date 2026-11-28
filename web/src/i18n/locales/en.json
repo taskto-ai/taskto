@@ -3281,6 +3281,7 @@
       "card_comment": "A card of yours has a new comment: {title}",
       "card_mention": "You were mentioned in a comment on a card: {title}",
       "app_effect_failed": "An action in {app} didn't finish and needs you to retry it",
+      "app_reminder": "Reminder from {app}: {title}",
       "integration_event": "A payment from {integration} wasn't applied and needs an admin",
       "changed": "Something changed. Open it to see what you can still see."
     },
@@ -3291,6 +3292,7 @@
       "card_comment": "A card of yours has a new comment",
       "card_mention": "You were mentioned in a comment",
       "app_effect_failed": "An app action needs your attention",
+      "app_reminder": "A reminder from one of your apps",
       "integration_event": "A payment needs an admin",
       "changed": "Something changed"
     },
@@ -3325,7 +3327,8 @@
         "card_mention": "You were mentioned in a comment",
         "card_due": "A card of yours is due",
         "card_overdue": "A card of yours is overdue",
-        "app_effect_failed": "An app action needs your attention"
+        "app_effect_failed": "An app action needs your attention",
+        "app_reminder": "A reminder from one of your apps"
       },
       "emailOff": "Don't email me",
       "emailInstant": "Email me soon after",

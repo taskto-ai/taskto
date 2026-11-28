@@ -194,6 +194,9 @@ func (s *Service) systemWriteTx(ctx context.Context, tx *sql.Tx, w SystemWrite, 
 		w.AppID, w.RecordID, revision+1, opUpdate, string(raw), at, actor, w.Action); err != nil {
 		return SystemResult{}, err
 	}
+	if err := s.syncRecordReminders(ctx, tx, w.AppID, w.RecordID); err != nil {
+		return SystemResult{}, err
+	}
 	return SystemResult{Revision: revision + 1, Changed: true}, nil
 }
 
