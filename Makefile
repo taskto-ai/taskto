@@ -34,6 +34,7 @@ fmt:
 agent-it:
 	$(PNPM) --filter @taskto/agent build
 	TASKTO_AGENT_IT=1 go test -count=1 ./internal/agentrt/ ./internal/providers/ ./cmd/taskto/
+	TASKTO_AGENT_IT=1 go test -count=1 -run '^TestRealAgent' ./internal/conversations/
 
 # The web app's end to end tests (web/e2e/app/, docs/web-e2e.md): Playwright's Chromium against
 # the built server on a fresh data directory, for each scenario. No agent, no model, no network

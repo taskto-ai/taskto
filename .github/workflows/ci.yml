@@ -229,6 +229,7 @@ jobs:
           its=$(grep -ho '^func Test[A-Za-z0-9_]*' cmd/taskto/*_it_test.go | sed 's/^func //' | paste -sd'|' -)
           export TASKTO_AGENT_IT=1
           go test -timeout 8m -count=1 -v ./internal/agentrt/ ./internal/providers/
+          go test -timeout 8m -count=1 -v -run '^TestRealAgent' ./internal/conversations/
           go test -timeout 8m -count=1 -v -run "^($its)\$" ./cmd/taskto/
 
   cli-isolation:
