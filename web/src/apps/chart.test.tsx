@@ -297,7 +297,7 @@ describe('what is drawn from other people’s numbers', () => {
   test('the chart schema takes no prop that could point outside the app', () => {
     const base = { data: { path: '/by_stage' }, label: 'x' }
     expect(ChartApi.schema.safeParse(base).success).toBe(true)
-    for (const extra of [{ href: 'https://x' }, { style: 'x' }, { colors: ['#000'] }, { src: 'x' }, { variant: 'pie' }])
+    for (const extra of [{ href: 'https://x' }, { style: 'x' }, { colors: ['black'] }, { src: 'x' }, { variant: 'pie' }])
       expect(ChartApi.schema.safeParse({ ...base, ...extra }).success).toBe(false)
   })
 })
