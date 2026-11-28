@@ -122,6 +122,25 @@ export type Me = {
   session?: string
 }
 
+export type SubmissionReply = { submission_id: number; model: { provider: string; model_id: string } }
+
+export type ContinueChoice = {
+  provider: string
+  name: string
+  scope: string
+  account?: number
+  models: { id: string; name: string }[] | null
+}
+
+export type ContinueModels = { providers: ContinueChoice[] | null }
+
+export type ContinueRequest = { model: { provider: string; model_id: string }; after_entry: number }
+
+export const continueConversation = (base: string, body: ContinueRequest) =>
+  api<SubmissionReply>(`${base}/continue`, { method: 'POST', body })
+
+export const continueModels = (base: string) => api<ContinueModels>(`${base}/continue-models`)
+
 export type Conversation = {
   id: number
   workspace_id: number

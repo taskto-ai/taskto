@@ -542,6 +542,10 @@ export type Comment = {
   mentions: BoardsMentionedPerson[]
 }
 
+export type ContinueModels = {
+  providers: ProvidersChoice[] | null
+}
+
 export type Conversation = {
   id: number
   workspace_id: number
@@ -550,6 +554,11 @@ export type Conversation = {
   created_at: string
   updated_at: string
   cli_permissions: string
+}
+
+export type ConversationsModelRef = {
+  provider: string
+  model_id: string
 }
 
 export type DeletionReply = {
@@ -794,6 +803,19 @@ export type Pin = {
   screen?: string
 }
 
+export type ProvidersChoice = {
+  provider: string
+  name: string
+  scope: string
+  account?: number
+  models: ProvidersModelChoice[] | null
+}
+
+export type ProvidersModelChoice = {
+  id: string
+  name: string
+}
+
 export type RecordVersion = {
   revision: number
   operation: string
@@ -903,6 +925,11 @@ export type SpaceIntegration = {
   display_name: string
   kind: string
   status: string
+}
+
+export type SubmissionReply = {
+  submission_id: number
+  model: ConversationsModelRef
 }
 
 export type Token = {
