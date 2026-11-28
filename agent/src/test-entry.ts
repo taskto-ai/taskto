@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import type { ToolSpec } from './taskto-tools.js'
 import { testHooks } from './test-hooks.js'
 
@@ -22,6 +23,14 @@ if (modelPauseMs > 0) {
   testHooks.beforeModelWrite = () => {
     console.error('test: the model write is waiting before its commit')
     return new Promise((resolve) => setTimeout(resolve, modelPauseMs))
+  }
+}
+
+const modelReleaseFile = process.env.TASKTO_AGENT_TEST_MODEL_RELEASE_FILE
+if (modelReleaseFile) {
+  testHooks.beforeModelWrite = async () => {
+    console.error('test: the model write is waiting before its commit')
+    while (!existsSync(modelReleaseFile)) await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }
 

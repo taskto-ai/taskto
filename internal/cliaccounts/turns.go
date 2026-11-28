@@ -159,7 +159,7 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 			fail(cliworker.StatusFailed, "this turn belongs to another conversation")
 			return
 		}
-		s.chain(r.Context(), out, p, req, id, t)
+		s.chain(r.Context(), out, p, req, id, t, true)
 		return
 	}
 
@@ -203,7 +203,7 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 		s.switchModel(r.Context(), p, req.CLI, c.cli())
 		out.write(cliworker.Event{Type: cliworker.EventNotice, Text: notice})
 	}
-	s.chain(r.Context(), out, p, req, id, t)
+	s.chain(r.Context(), out, p, req, id, t, false)
 }
 
 func (s *Service) start(ctx context.Context, p conversations.Principal, req turnRequest, id string, c choice, note string) (Turn, error) {
@@ -318,7 +318,7 @@ func chainID(id string, n int) string {
 	return id + "-s" + strconv.Itoa(n)
 }
 
-func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.Principal, req turnRequest, id string, t Turn) {
+func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.Principal, req turnRequest, id string, t Turn, reattach bool) {
 	tried := map[string]bool{}
 	offset := 0
 	for n := 0; ; n++ {
@@ -333,11 +333,7 @@ func (s *Service) chain(ctx context.Context, out *eventWriter, p conversations.P
 		next, found, _ := s.worker.FindTurn(p.User, nextID)
 		notice := s.switchNotice(nextID)
 		if !found && !req.Pinned {
-			if hop, decided := s.awaitHop(ctx, t.Spec().ID); decided {
-				res.hop = hop
-			} else {
-				next, notice = s.switchAfter(ctx, out, p, req, t, &res, id, nextID, tried, n < maxSwitches)
-			}
+			next, notice = s.switchAfter(ctx, out, p, req, t, &res, id, nextID, tried, n < maxSwitches, !reattach)
 			if res.hop != nil && s.isStopped(id) {
 				res.hop = nil
 			}
@@ -474,7 +470,7 @@ func (s *Service) stopped(ctx context.Context, p conversations.Principal, t Turn
 	return ""
 }
 
-func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversations.Principal, req turnRequest, t Turn, res *passed, id, nextID string, tried map[string]bool, canSwitch bool) (Turn, string) {
+func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversations.Principal, req turnRequest, t Turn, res *passed, id, nextID string, tried map[string]bool, canSwitch, mayHop bool) (Turn, string) {
 	why := s.stopped(ctx, p, t, *res)
 	if why == "" || s.isStopped(id) || !s.stillActive(ctx, p) {
 		return nil, ""
@@ -502,6 +498,9 @@ func (s *Service) switchAfter(ctx context.Context, out *eventWriter, p conversat
 		}
 	}
 	if !ok {
+		if !mayHop {
+			return nil, ""
+		}
 		res.hop = s.hopOnce(ctx, p, t.Spec().ID, from+" "+why, note)
 		return nil, ""
 	}

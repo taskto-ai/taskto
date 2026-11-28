@@ -362,7 +362,8 @@ func TestAContinuedRunKeepsItsModelWhileItIsRunning(t *testing.T) {
 }
 
 func TestAModelWriteAdmittedBeforeAContinueDoesNotLandAfterTheContinuedRunEnds(t *testing.T) {
-	s := startSidecar(t, append(twoScriptModels(t), "TASKTO_AGENT_TEST_MODEL_PAUSE_MS=1500")...)
+	release := filepath.Join(t.TempDir(), "release")
+	s := startSidecar(t, append(twoScriptModels(t), "TASKTO_AGENT_TEST_MODEL_RELEASE_FILE="+release)...)
 	ctx := ctxFor(t)
 	conv := failedConversation(t, s)
 	held := make(chan error, 1)
@@ -374,6 +375,9 @@ func TestAModelWriteAdmittedBeforeAContinueDoesNotLandAfterTheContinuedRunEnds(t
 	}
 	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
 		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-held; conflictReason(err) != "busy" {
 		t.Fatalf("a model write that was admitted before the continue, landing after its run ended: err = %v, want a 409 with reason busy", err)

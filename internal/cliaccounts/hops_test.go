@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -73,31 +74,6 @@ func holdWrites(e *turnEnv, models *modelCalls, only string) *heldWrites {
 		return models.set(ctx, agent, provider, model)
 	})
 	return h
-}
-
-func TestAReattachDuringTheModelWriteTakesTheDecisionOfTheFirstRequest(t *testing.T) {
-	e, conv, models := limitedClaudeEnv(t, true)
-	e.provide(mine(e, "api"), "big")
-	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
-	held := holdWrites(e, models, "")
-	results := make(chan []cliworker.Event, 2)
-	go func() { results <- e.turn(conv, limitedBody) }()
-	<-held.entered
-	e.owner.setSwitching(map[string]any{"enabled": false, "queue": []map[string]any{}})
-	go func() { results <- e.turn(conv, limitedBody) }()
-	select {
-	case got := <-results:
-		t.Fatalf("a reattach ended while the first request's model write was still going: %+v", lastDone(got))
-	case <-time.After(300 * time.Millisecond):
-	}
-	held.free()
-	first, second := lastDone(<-results), lastDone(<-results)
-	if !first.Continue || !second.Continue || first.Seq != second.Seq || first.Note != second.Note {
-		t.Fatalf("first %+v, reattach %+v", first, second)
-	}
-	if len(models.refs) != 1 {
-		t.Fatalf("model changes = %v", models.refs)
-	}
 }
 
 func TestEveryModelWriteChecksTheOwnerAndTheCatalogAgain(t *testing.T) {
@@ -168,110 +144,6 @@ func TestAHopOfOneUserDoesNotWaitForAnotherUsersModelWrite(t *testing.T) {
 	}
 	held.free()
 	<-blocked
-}
-
-func TestAWaitingReattachLeavesWhenItsCallerDoes(t *testing.T) {
-	e, conv, models := limitedClaudeEnv(t, true)
-	e.provide(mine(e, "api"), "big")
-	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
-	held := holdWrites(e, models, "")
-	first := make(chan struct{})
-	go func() {
-		defer close(first)
-		e.turn(conv, limitedBody)
-	}()
-	<-held.entered
-	ctx, cancel := context.WithCancel(context.Background())
-	left := make(chan struct{})
-	go func() {
-		defer close(left)
-		e.turnWith(ctx, conv, limitedBody)
-	}()
-	time.Sleep(200 * time.Millisecond)
-	cancel()
-	select {
-	case <-left:
-	case <-time.After(5 * time.Second):
-		t.Fatal("a reattach whose caller was gone kept waiting for another request's model write")
-	}
-	held.free()
-	<-first
-	if len(models.refs) != 1 {
-		t.Fatalf("model changes = %v", models.refs)
-	}
-}
-
-func TestAHopThatEndedBeforeAnyWriteIsNoDecisionForTheNextRequest(t *testing.T) {
-	e, conv, models := limitedClaudeEnv(t, true)
-	e.provide(mine(e, "api"), "big")
-	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
-	var writes atomic.Int32
-	e.svc.SetModelSetter(func(ctx context.Context, agent int64, provider, model string) error {
-		writes.Add(1)
-		return models.set(ctx, agent, provider, model)
-	})
-	p, err := conversations.PrincipalOf(context.Background(), e.db, conv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gone, cancel := context.WithCancel(context.Background())
-	cancel()
-	if hop := e.svc.hopOnce(gone, p, "turn-x", "stopped", "note"); hop != nil || writes.Load() != 0 {
-		t.Fatalf("a hop whose caller was gone wrote %d models and returned %+v", writes.Load(), hop)
-	}
-	if hop := e.svc.hopOnce(context.Background(), p, "turn-x", "stopped", "note"); hop == nil || len(models.refs) != 1 {
-		t.Fatalf("the next request got %+v, model changes %v", hop, models.refs)
-	}
-}
-
-func TestAReconnectAnnouncesNoModelWhileAnEarlierWriteMayStillLand(t *testing.T) {
-	e, conv, models := limitedClaudeEnv(t, true)
-	first, second := mine(e, "first"), mine(e, "second")
-	e.provide(first, "a")
-	e.provide(second, "b")
-	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(first, "a"), modelEntry(second, "b")}})
-	reached, land := make(chan struct{}), make(chan struct{})
-	landed := make(chan struct{})
-	var calls atomic.Int32
-	e.svc.SetModelSetter(func(ctx context.Context, agent int64, provider, model string) error {
-		if calls.Add(1) > 1 {
-			return models.set(ctx, agent, provider, model)
-		}
-		close(reached)
-		<-ctx.Done()
-		go func() {
-			defer close(landed)
-			<-land
-			_ = models.set(context.WithoutCancel(ctx), agent, provider, model)
-		}()
-		return ctx.Err()
-	})
-	e.svc.SetModelReader(func(context.Context, int64) (string, string, error) { return "cli-claude", "default", nil })
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	left := make(chan struct{})
-	go func() {
-		defer close(left)
-		e.turnWith(ctx, conv, limitedBody)
-	}()
-	<-reached
-	cancel()
-	<-left
-	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(second, "b")}})
-	events := e.turn(conv, limitedBody)
-	close(land)
-	<-landed
-	if d := lastDone(events); d.Continue || d.Note != "" {
-		t.Fatalf("the reconnect announced %+v while the first write could still land", d)
-	}
-	for _, ev := range events {
-		if ev.Type == cliworker.EventNotice {
-			t.Fatalf("the reconnect announced a model: %+v", ev)
-		}
-	}
-	if len(models.refs) != 1 || models.refs[0] != first+"/a" {
-		t.Fatalf("model changes = %v, want only the first write that landed late", models.refs)
-	}
 }
 
 func TestAModelWriteEndsWithItsCallerAndIsBounded(t *testing.T) {
@@ -438,5 +310,163 @@ func TestAPinnedTurnIsNotMovedToAQueuedModelByALimit(t *testing.T) {
 	unpinned.Turn = "t2"
 	if !lastDone(e.turn(conv, unpinned)).Continue {
 		t.Fatal("the same limit without the pin no longer hops: the test shows nothing")
+	}
+}
+
+func TestAReattachNeverWritesOrAnnouncesAModel(t *testing.T) {
+	asReattached := func(t *testing.T, events []cliworker.Event) {
+		t.Helper()
+		if d := lastDone(events); d.Continue || d.Note != "" || d.Status != cliworker.StatusFailed {
+			t.Fatalf("the reattach announced %+v", d)
+		}
+		for _, ev := range events {
+			if ev.Type == cliworker.EventNotice && strings.Contains(ev.Text, "continuing on") {
+				t.Fatalf("the reattach announced a model: %+v", ev)
+			}
+		}
+	}
+	t.Run("while the first request's write is still going", func(t *testing.T) {
+		e, conv, models := limitedClaudeEnv(t, true)
+		e.provide(mine(e, "api"), "big")
+		e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
+		held := holdWrites(e, models, "")
+		first := make(chan []cliworker.Event, 1)
+		go func() { first <- e.turn(conv, limitedBody) }()
+		<-held.entered
+		second := make(chan []cliworker.Event, 1)
+		go func() { second <- e.turn(conv, limitedBody) }()
+		select {
+		case got := <-second:
+			asReattached(t, got)
+		case <-time.After(5 * time.Second):
+			t.Fatal("a reattach waited for the first request's model write")
+		}
+		held.free()
+		if d := lastDone(<-first); !d.Continue {
+			t.Fatalf("the first request = %+v", d)
+		}
+		if len(models.refs) != 1 {
+			t.Fatalf("model changes = %v", models.refs)
+		}
+	})
+	t.Run("after the hop, whatever changed since", func(t *testing.T) {
+		e, conv, models := limitedClaudeEnv(t, true)
+		e.provide(mine(e, "api"), "big")
+		e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
+		if !lastDone(e.turn(conv, limitedBody)).Continue {
+			t.Fatal("the first request did not hop: the test shows nothing")
+		}
+		asReattached(t, e.turn(conv, limitedBody))
+		if len(models.refs) != 1 {
+			t.Fatalf("model changes = %v", models.refs)
+		}
+	})
+}
+
+func TestAReattachAfterACancellationRacingAnAnswerSendsNoWrite(t *testing.T) {
+	answers := map[string]error{
+		"the runtime says busy":     fmt.Errorf("conflict: %w", ErrModelBusy),
+		"the runtime says no":       errors.New("unknown model"),
+		"the runtime never answers": context.Canceled,
+	}
+	for name, answer := range answers {
+		t.Run(name, func(t *testing.T) {
+			e, conv, models := limitedClaudeEnv(t, true)
+			first, second := mine(e, "first"), mine(e, "second")
+			e.provide(first, "a")
+			e.provide(second, "b")
+			e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(first, "a"), modelEntry(second, "b")}})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var writes atomic.Int32
+			e.svc.SetModelSetter(func(ctx context.Context, agent int64, provider, model string) error {
+				if writes.Add(1) == 1 {
+					cancel()
+					if errors.Is(answer, context.Canceled) {
+						<-ctx.Done()
+					}
+					return answer
+				}
+				return models.set(ctx, agent, provider, model)
+			})
+			e.svc.SetModelReader(func(context.Context, int64) (string, string, error) { return "cli-claude", "default", nil })
+			left := make(chan struct{})
+			go func() {
+				defer close(left)
+				e.turnWith(ctx, conv, limitedBody)
+			}()
+			<-left
+			e.svc.mu.Lock()
+			clear(e.svc.hops)
+			e.svc.mu.Unlock()
+			e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(second, "b")}})
+			events := e.turn(conv, limitedBody)
+			if got := writes.Load(); got != 1 || len(models.refs) != 0 {
+				t.Fatalf("model writes = %d, applied %v: the reattach wrote a model", got, models.refs)
+			}
+			if d := lastDone(events); d.Continue || d.Note != "" {
+				t.Fatalf("the reattach announced %+v", d)
+			}
+			for _, ev := range events {
+				if ev.Type == cliworker.EventNotice && strings.Contains(ev.Text, "continuing on") {
+					t.Fatalf("the reattach announced a model: %+v", ev)
+				}
+			}
+		})
+	}
+}
+
+func TestTwoRequestsForOneNewTurnHopOnce(t *testing.T) {
+	e, conv, models := limitedClaudeEnv(t, true)
+	e.provide(mine(e, "api"), "big")
+	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
+	held := holdWrites(e, models, "")
+	p, err := conversations.PrincipalOf(context.Background(), e.db, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hops := make(chan *modelHop, 2)
+	go func() { hops <- e.svc.hopOnce(context.Background(), p, "turn-x", "stopped", "note") }()
+	<-held.entered
+	go func() { hops <- e.svc.hopOnce(context.Background(), p, "turn-x", "stopped", "note") }()
+	select {
+	case <-held.entered:
+		t.Fatal("a second request wrote the model while the first was still doing it")
+	case <-time.After(300 * time.Millisecond):
+	}
+	held.free()
+	a, b := <-hops, <-hops
+	if a == nil || a != b || len(models.refs) != 1 {
+		t.Fatalf("hops %+v and %+v, model changes %v", a, b, models.refs)
+	}
+}
+
+func TestAWaitingRequestLeavesWhenItsCallerDoes(t *testing.T) {
+	e, conv, models := limitedClaudeEnv(t, true)
+	e.provide(mine(e, "api"), "big")
+	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
+	held := holdWrites(e, models, "")
+	p, err := conversations.PrincipalOf(context.Background(), e.db, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := make(chan *modelHop, 1)
+	go func() { first <- e.svc.hopOnce(context.Background(), p, "turn-x", "stopped", "note") }()
+	<-held.entered
+	ctx, cancel := context.WithCancel(context.Background())
+	left := make(chan *modelHop, 1)
+	go func() { left <- e.svc.hopOnce(ctx, p, "turn-x", "stopped", "note") }()
+	cancel()
+	select {
+	case hop := <-left:
+		if hop != nil {
+			t.Fatalf("a request whose caller was gone got %+v", hop)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a request whose caller was gone kept waiting for another request's model write")
+	}
+	held.free()
+	if <-first == nil || len(models.refs) != 1 {
+		t.Fatalf("model changes = %v", models.refs)
 	}
 }

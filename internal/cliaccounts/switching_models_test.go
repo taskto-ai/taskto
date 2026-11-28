@@ -61,10 +61,6 @@ func TestALimitedTurnEndsWithAContinueOnTheQueuedModel(t *testing.T) {
 	if got := models.refs; len(got) != 1 || got[0] != mine(e, "api")+"/big" {
 		t.Errorf("model changes = %v", got)
 	}
-	again := e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it", History: history})
-	if !done(again).Continue || done(again).Note != d.Note || done(again).Seq != d.Seq {
-		t.Errorf("re-attached = %+v, first time %+v", done(again), d)
-	}
 }
 
 func TestNoContinueOnAModelWhenSwitchingIsOff(t *testing.T) {

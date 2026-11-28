@@ -736,3 +736,89 @@ test('automatic switching: two providers with the same display name are told apa
   expect(within(panel).getByRole('option', { name: 'Model: Big model (Gateway · ws1-team)' })).toBeTruthy()
   expect(within(panel).queryByRole('option', { name: 'Model: Big model (Gateway)' })).toBeNull()
 })
+
+test('automatic switching: entries that would read the same are told apart by the provider id, whatever the names are', async () => {
+  fakeFetch({
+    'GET /api/me/cli-accounts': list(account('claude', 'Claude Code', { state: 'connected' })),
+    'GET /api/workspaces/1/cli-accounts': {
+      body: { enabled: true, mode: 'own_else_shared', default_mode: 'own_else_shared', accounts: [] },
+    },
+    'GET /api/workspaces/1/models': {
+      body: {
+        providers: [
+          { provider: 'ws1-team', name: 'Gateway', scope: 'workspace', models: [{ id: 'big', name: 'Big model' }] },
+          { provider: 'u2-mine', name: 'Gateway', scope: 'user', models: [{ id: 'big', name: 'Big model' }] },
+          {
+            provider: 'u2-third',
+            name: 'Gateway · u2-mine',
+            scope: 'user',
+            models: [{ id: 'big', name: 'Big model' }],
+          },
+        ],
+      },
+    },
+    'GET /api/me/cli-switching': {
+      body: {
+        enabled: true,
+        queue: [{ kind: 'model', id: 'u2-mine', model_id: 'big', cli: '', title: 'big', limited: false }],
+        available: [],
+      },
+    },
+  })
+  render(<CliAccountsTab workspace={1} />)
+  const panel = await screen.findByRole('region', { name: 'Automatic switching' })
+  await within(panel).findByText(/^1\. Model: /)
+  const shown = [
+    ...within(panel)
+      .getAllByRole('listitem')
+      .map((li) => li.getAttribute('aria-label')),
+    ...within(panel)
+      .getAllByRole('option')
+      .map((o) => o.textContent)
+      .filter((text) => text?.startsWith('Model:')),
+  ]
+  expect(shown).toHaveLength(3)
+  expect(new Set(shown).size).toBe(3)
+  expect(shown[0]).toContain('u2-mine')
+})
+
+test('automatic switching: two models of one provider with the same name are still told apart', async () => {
+  fakeFetch({
+    'GET /api/me/cli-accounts': list(account('claude', 'Claude Code', { state: 'connected' })),
+    'GET /api/workspaces/1/cli-accounts': {
+      body: { enabled: true, mode: 'own_else_shared', default_mode: 'own_else_shared', accounts: [] },
+    },
+    'GET /api/workspaces/1/models': {
+      body: {
+        providers: [
+          {
+            provider: 'ws1-team',
+            name: 'Team',
+            scope: 'workspace',
+            models: [
+              { id: 'big-1', name: 'Big model' },
+              { id: 'big-2', name: 'Big model' },
+            ],
+          },
+        ],
+      },
+    },
+    'GET /api/me/cli-switching': {
+      body: {
+        enabled: true,
+        queue: [{ kind: 'model', id: 'ws1-team', model_id: 'big-1', cli: '', title: 'big-1', limited: false }],
+        available: [],
+      },
+    },
+  })
+  render(<CliAccountsTab workspace={1} />)
+  const panel = await screen.findByRole('region', { name: 'Automatic switching' })
+  await within(panel).findByText(/^1\. Model: /)
+  const queued = within(panel).getAllByRole('listitem')[0].getAttribute('aria-label')
+  const offered = within(panel)
+    .getAllByRole('option')
+    .map((o) => o.textContent)
+    .filter((text) => text?.startsWith('Model:'))
+  expect(offered).toHaveLength(1)
+  expect(queued).not.toBe(offered[0])
+})

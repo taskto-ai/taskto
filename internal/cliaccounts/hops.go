@@ -48,7 +48,6 @@ type modelHop struct {
 type hopClaim struct {
 	ready chan struct{}
 	hop   *modelHop
-	retry bool
 	at    time.Time
 }
 
@@ -82,60 +81,33 @@ func (s *Service) claimHop(turn string) (*hopClaim, bool) {
 	return c, true
 }
 
-func (s *Service) settleHop(turn string, c *hopClaim, hop *modelHop, retry bool) {
+func (s *Service) settleHop(c *hopClaim, hop *modelHop) {
 	s.mu.Lock()
-	c.hop, c.retry, c.at = hop, retry, time.Now()
-	if retry {
-		delete(s.hops, turn)
-	}
+	c.hop, c.at = hop, time.Now()
 	s.mu.Unlock()
 	close(c.ready)
 }
 
-func (s *Service) awaitHop(ctx context.Context, turn string) (*modelHop, bool) {
-	for {
-		s.mu.Lock()
-		c, ok := s.hops[turn]
-		s.mu.Unlock()
-		if !ok {
-			return nil, false
-		}
+func (s *Service) hopOnce(ctx context.Context, p conversations.Principal, turn, stopped, note string) *modelHop {
+	c, owner := s.claimHop(turn)
+	if !owner {
 		select {
 		case <-c.ready:
-		case <-ctx.Done():
-			return nil, true
-		}
-		if !c.retry {
-			return c.hop, true
-		}
-	}
-}
-
-func (s *Service) hopOnce(ctx context.Context, p conversations.Principal, turn, stopped, note string) *modelHop {
-	for {
-		c, owner := s.claimHop(turn)
-		if !owner {
-			select {
-			case <-c.ready:
-			case <-ctx.Done():
-				return nil
-			}
-			if c.retry {
-				continue
-			}
 			return c.hop
+		case <-ctx.Done():
+			return nil
 		}
-		hop, unsure := s.hopToModel(ctx, p, stopped, note)
-		s.settleHop(turn, c, hop, hop == nil && !unsure && ctx.Err() != nil)
-		return hop
 	}
+	hop := s.hopToModel(ctx, p, stopped, note)
+	s.settleHop(c, hop)
+	return hop
 }
 
-func (s *Service) hopToModel(ctx context.Context, p conversations.Principal, stopped, note string) (*modelHop, bool) {
+func (s *Service) hopToModel(ctx context.Context, p conversations.Principal, stopped, note string) *modelHop {
 	q, err := s.queue(ctx, p.User)
 	if err != nil {
 		slog.ErrorContext(ctx, "cli turn: choosing the next model", "conversation", p.Conversation, "err", err)
-		return nil, false
+		return nil
 	}
 	for _, e := range q {
 		if !e.isModel() {
@@ -143,14 +115,12 @@ func (s *Service) hopToModel(ctx context.Context, p conversations.Principal, sto
 		}
 		switch s.writeModel(ctx, p, e) {
 		case hopWritten:
-			return &modelHop{notice: fmt.Sprintf("%s: continuing on %s", stopped, e.model), note: note}, false
-		case hopAbandoned:
-			return nil, false
-		case hopUnsure:
-			return nil, true
+			return &modelHop{notice: fmt.Sprintf("%s: continuing on %s", stopped, e.model), note: note}
+		case hopAbandoned, hopUnsure:
+			return nil
 		}
 	}
-	return nil, false
+	return nil
 }
 
 func (s *Service) writeModel(ctx context.Context, p conversations.Principal, e queueEntry) hopStep {

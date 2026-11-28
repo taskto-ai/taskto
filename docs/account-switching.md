@@ -219,13 +219,15 @@ turns on. The turn ends with the limit's message, as before.
   provider no longer lists is skipped, and so is one the agent runtime refuses; the owner losing
   access, or switching going off, ends the hop with no further write.
 - **One decision per turn.** The hop is a claim of the stopped worker turn, not a lock of the
-  service: the first request that reaches the end of the chain makes the decision (a model was set,
-  or none could be) and records it for an hour, and a request that re-attaches to the same turn,
-  also while the first is still writing, waits for that decision (it leaves when its own caller
-  does) and answers with the same notice and final event at the same sequence numbers, whatever
-  was changed meanwhile, and the model is not set a second time. A hop whose caller left before
-  any write was sent is no decision: the next request makes it. Requests for other turns, of the same
-  or another person, never wait for it.
+  service: of two requests that both start the same new turn, the first to reach the end of the
+  chain makes the decision (a model was set, or none could be), and the other waits for it (it
+  leaves when its own caller does) and answers with the same notice and final event, so the model
+  is not set twice. Requests for other turns, of the same or another person, never wait for it.
+- **A re-attach never sets or announces a model.** A request for a turn that already exists (the
+  sidecar reconnecting) ends with the turn's recorded outcome, as it would without a model in the
+  queue: no notice, no `continue`, and no write to the agent runtime, whatever the queue or the
+  setting is by then. A reconnect after the hop therefore ends with the limit's message. A re-attach
+  may still move a turn to the next account, as before.
 - **The write is bounded by its caller.** The server's request to the agent runtime ends when the
   caller of the turn is gone and after 15 seconds. That bounds how long the server waits; it does
   not take the write back, because the agent runtime commits a write it has already admitted
@@ -235,10 +237,6 @@ turns on. The turn ends with the limit's message, as before.
   caller). If the model read is the entry's, the write landed and is the hop. If it is another
   model, or the read fails, the hop ends with no more tries, so a second model is never written
   beside a first that may still land, and the turn ends as it would without a model in the queue.
-  That decision stays for the turn even when the caller is gone: a reconnect to the same turn
-  (whatever the queue or the setting is by then) announces no model and ends the turn as it would
-  without one, since the earlier write may still be committed and would replace a second model.
-  Only a hop that ended before any write was sent is no decision, and the next request makes it.
   Only an answer that says no (an unknown model, a retired conversation) skips the entry for the
   next one.
 - **A continued reply keeps the model the person chose.** When the agent runtime answers that the
@@ -249,7 +247,7 @@ turns on. The turn ends with the limit's message, as before.
   turn (`pinned`) never takes a hop, nor an account switch.
 - **A stop wins.** A stop that lands while the model is looked up or written leaves the model as
   it is (the write is not taken back) and the turn ends as the failure the person stopped, with no
-  continuation, also for a request that re-attaches to the same turn.
+  continuation.
 - **What the person sees.** The server sets the conversation's model, then
   ends the CLI turn with a notice ("Claude Code reached its usage limit: continuing on Big
   model") and a final event with `continue: true` and the same hand-off note the next account
@@ -258,7 +256,9 @@ turns on. The turn ends with the limit's message, as before.
   the next request of the same run goes to the model, with the whole conversation so far (the
   CLI's answers are already in its context) and the note, and the model's tools are the
   conversation's usual ones. A submission to continue is not used: the runtime refuses one while
-  the conversation is running, which it is during the CLI's turn.
+  the conversation is running, which it is during the CLI's turn. The chat shows the notice; the
+  model picker of an open conversation is not refreshed at that moment and shows the new model on
+  its next normal read (the next turn, or a reload).
 - **Nothing left**: if no other entry can run, the turn ends as it would without switching (the
   limit's message, or the Reconnect wait).
 - `/cli/wait` answers once the account the conversation would use is connected, so the

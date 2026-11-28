@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -65,35 +64,6 @@ func TestAModelThatLeftTheCatalogIsSkippedAtTheHopWhileTheRuntimeStillHasIt(t *t
 				t.Fatalf("done = %+v, model changes %v", d, models.refs)
 			}
 		})
-	}
-}
-
-func TestAReattachAfterTheModelHopKeepsItsSequenceWhateverChangedSince(t *testing.T) {
-	e, conv, models := limitedClaudeEnv(t, true)
-	e.provide(mine(e, "api"), "big")
-	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
-	body := turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it", History: history}
-	first := e.turn(conv, body)
-	e.owner.setSwitching(map[string]any{"enabled": false, "queue": []map[string]any{}})
-	again := e.turn(conv, body)
-	last := func(events []cliworker.Event) (notice, terminal cliworker.Event) {
-		for _, ev := range events {
-			if ev.Type == cliworker.EventNotice && strings.Contains(ev.Text, "continuing on") {
-				notice = ev
-			}
-		}
-		return notice, done(events)
-	}
-	n1, d1 := last(first)
-	n2, d2 := last(again)
-	if n1.Seq == 0 || d1.Seq != n1.Seq+1 || !d1.Continue {
-		t.Fatalf("first run: notice %+v, terminal %+v", n1, d1)
-	}
-	if n2.Seq != n1.Seq || d2.Seq != d1.Seq || !d2.Continue || d2.Note != d1.Note {
-		t.Fatalf("reattach: notice %+v, terminal %+v; first notice %+v, terminal %+v", n2, d2, n1, d1)
-	}
-	if len(models.refs) != 1 {
-		t.Fatalf("the reattach set the model again: %v", models.refs)
 	}
 }
 
@@ -169,35 +139,5 @@ func TestStaleModelEntriesDoNotStopTheQueueFromBeingSaved(t *testing.T) {
 	var rows int
 	if err := e.db.QueryRow(`SELECT count(*) FROM cli_switch_queue WHERE user_id = ?`, owner.id).Scan(&rows); err != nil || rows != 2 {
 		t.Fatalf("stored entries = %d %v", rows, err)
-	}
-}
-
-func TestTwoReattachesToOneTurnHopOnce(t *testing.T) {
-	e, conv, models := limitedClaudeEnv(t, true)
-	e.provide(mine(e, "api"), "big")
-	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
-	entered, release := make(chan struct{}, 4), make(chan struct{})
-	e.svc.SetModelSetter(func(ctx context.Context, agent int64, provider, model string) error {
-		entered <- struct{}{}
-		<-release
-		return models.set(ctx, agent, provider, model)
-	})
-	body := turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it"}
-	results := make(chan []cliworker.Event, 2)
-	go func() { results <- e.turn(conv, body) }()
-	<-entered
-	go func() { results <- e.turn(conv, body) }()
-	select {
-	case <-entered:
-		t.Fatal("a second request set the model while the first was still doing it")
-	case <-time.After(300 * time.Millisecond):
-	}
-	close(release)
-	first, second := <-results, <-results
-	if len(models.refs) != 1 {
-		t.Fatalf("model changes = %v", models.refs)
-	}
-	if a, b := done(first), done(second); !a.Continue || !b.Continue || a.Seq != b.Seq || a.Note != b.Note {
-		t.Fatalf("the two requests ended differently: %+v and %+v", a, b)
 	}
 }

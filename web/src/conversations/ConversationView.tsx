@@ -102,9 +102,7 @@ export function ConversationView({
     () => api<{ providers: ModelProvider[] }>(`${ws(workspace)}/models`).then((r) => r.providers),
     [workspace],
   )
-  const order = useRef(0)
-  const newestRead = useRef(0)
-  const pickedAt = useRef(0)
+  const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
   const [picked, setPicked] = useState<ModelRef | null>(null)
   const choices = useRef(0)
   const readModel = () => {
@@ -117,34 +115,15 @@ export function ConversationView({
   }
   const [continuing, setContinuing] = useState(false)
   const modelWrites = useRef(0)
-  if (useChanged(base)) {
-    modelWrites.current++
-    if (picked) setPicked(null)
-  }
-  const loadedModel = useLoad(() => {
-    const at = ++order.current
-    newestRead.current = at
-    return api<ModelRef>(`${base}/model`).then((m) => {
-      if (at === newestRead.current && at > pickedAt.current) setPicked(null)
-      return m
-    })
-  }, [base])
   const claimModel = () => {
     const mine = ++modelWrites.current
     return (m: ModelRef) => {
       if (mine !== modelWrites.current) return
       choices.current++
-      pickedAt.current = ++order.current
       setPicked(m)
     }
   }
   const model = picked ?? loadedModel.data
-  const turnKey = view ? (running ? 'running' : `idle:${messages.at(-1)?.key ?? ''}`) : undefined
-  const [seenTurn, setSeenTurn] = useState(turnKey)
-  if (seenTurn !== turnKey) {
-    setSeenTurn(turnKey)
-    if (seenTurn !== undefined && !running) loadedModel.reload()
-  }
   const agents = useMemo(
     () =>
       agentChoices(providers.data ?? [], (provider, model) => t('conversations.model.cliOption', { provider, model })),
