@@ -110,6 +110,7 @@ func (f *fakeRuntime) CreateConversationOn(_ context.Context, model agentrt.Mode
 	}
 	f.next++
 	f.models[f.next] = model
+	f.revs[f.next] = 5
 	return f.next, nil
 }
 

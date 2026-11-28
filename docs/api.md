@@ -5755,23 +5755,34 @@ nobody else can send to one and so nobody else can switch its model this way.
 
 While such a message is being sent it holds the conversation's model. `PUT …/model` waits for
 that hold for a few seconds only, then answers `409 conversation_busy` and changes nothing; the
-owner may try again. The send itself runs under a deadline (twenty seconds) covering the read
-and switch of the model and the submission, so a runtime that stops answering ends the send
-with `503`, the model put back, and the hold released. A continue takes the same hold: while a
+owner may try again. A continue takes the same hold: while a
 message that names an agent is between its switch and its submission, `POST …/continue` waits for
 the hold a few seconds, then answers `409 conversation_busy` and starts nothing, and a message
 that names an agent waits for a continue that is being admitted. The two never interleave, so a
 message is never submitted under the model of a continue that came between its switch and its send.
-Holding the model orders the requests of one server, but correctness does not depend on it: every
-change of a conversation's model and every submission or continue the server sends to the agent
-runtime carries the model the server expects the conversation to be on, read just before, and the
-runtime checks it in the same transaction that applies the change or admits the turn. When the
-conversation is on another model, the runtime refuses and the request answers `409
-conversation_busy` with nothing changed (a mention that fails after its switch puts the model back
-only if it is still the one the mention switched to). So a continue that got no answer in time
-(`503`, the hold released) and commits later is refused when a mention has switched the model
-meanwhile, and a mention is never submitted on a model another request changed. Nothing is retried
-in the background: a request that got no answer admits nothing afterwards.
+
+Holding the model orders the requests of one server, but correctness does not depend on it. The
+agent runtime keeps a revision for each conversation's model, which every write of the model
+raises, in the transaction of the write, even when the model written is the one already in use.
+It answers the revision with the model. Every change of the model, and every submission or continue
+the server sends, carries the revision the server read just before (a model change and a continue
+must: the runtime refuses one without it), and the runtime compares it in the transaction that
+applies the change or admits the turn. When the revision moved, the runtime refuses and the
+request answers `409 conversation_busy` with nothing changed: read the model and try again. A
+mention is submitted on the revision its own switch made, so it is never submitted on a model
+another request changed (one that fails after its switch puts the model back only if no one has
+written it since). The CLI account switch, which writes the model when a usage limit moves a turn
+to another account, writes it on the revision its turn started on, so a mention that changed the
+model meanwhile ends the turn instead of being overwritten by the switch.
+
+Every submission and continue also carries the time it must be admitted by, twenty seconds after
+the server began to handle it. The runtime refuses to admit it after that time, in the same
+transaction in which it would admit it, using the clock of the host both run on. The server
+answers `503` for a request whose outcome it doesn't know (the runtime did not answer) only after
+that time and a short margin have passed, and holds the conversation's admission lock and model
+hold until then. So once a client has seen the `503`, the turn can no longer be admitted, and an
+archive that follows it cannot be overtaken by a turn that was dispatched but not yet admitted.
+Nothing is retried in the background: a request that got no answer admits nothing afterwards.
 
 Each person-sent message is stored as a `taskto.input` entry. Its `data` includes version `1`
 and the sender's user ID; optional `text` and `attached` fields preserve the original text and
