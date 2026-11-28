@@ -19,6 +19,7 @@ import (
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/auth"
+	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/live"
 )
 
@@ -27,6 +28,8 @@ type liveStack struct {
 	checker *access.Checker
 	hub     *live.Hub
 	base    string
+	sqlDB   *sql.DB
+	kb      *knowledge.Store
 
 	mu       sync.Mutex
 	rechecks []chan time.Time
@@ -37,7 +40,9 @@ type liveStack struct {
 	resume chan struct{}
 }
 
-func newLiveStack(t *testing.T) *liveStack {
+func newLiveStack(t *testing.T) *liveStack { return newLiveStackWith(t, nil) }
+
+func newLiveStackWith(t *testing.T, mod func(*liveStack, *Options)) *liveStack {
 	t.Helper()
 	l := &liveStack{paused: make(chan struct{}), resume: make(chan struct{})}
 	var release sync.Once
@@ -95,6 +100,10 @@ func newLiveStack(t *testing.T) *liveStack {
 		sqlDB = db
 		o.Live = l.hub
 		o.AccountsReady = func(a *auth.Service) { accounts = a }
+		l.sqlDB, l.kb = db, o.Search.Knowledge()
+		if mod != nil {
+			mod(l, o)
+		}
 	}, mount)
 	l.base = strings.TrimSuffix(l.mcpURL, "/mcp")
 	return l

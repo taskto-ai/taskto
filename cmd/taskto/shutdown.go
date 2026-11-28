@@ -15,11 +15,12 @@ const (
 	defaultShutdownGrace = 10 * time.Second
 	defaultHandlerWait   = 5 * time.Second
 	emailWait            = 10 * time.Second
+	whiteboardWait       = 10 * time.Second
 	proxyGrace           = 5 * time.Second
 	schedulerWait        = 10 * time.Second
 	sidecarStopWait      = 20 * time.Second
 
-	shutdownBudget = defaultShutdownGrace + defaultHandlerWait + emailWait +
+	shutdownBudget = defaultShutdownGrace + defaultHandlerWait + emailWait + whiteboardWait +
 		proxyGrace + defaultHandlerWait + schedulerWait + sidecarStopWait
 )
 

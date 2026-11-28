@@ -34,6 +34,7 @@ import (
 	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/webui"
+	"taskto.ai/taskto/internal/whiteboard"
 )
 
 type Options struct {
@@ -46,6 +47,8 @@ type Options struct {
 	Search           *search.Index
 	Conversations    *conversations.Service
 	Live             *live.Hub
+	Whiteboard       whiteboard.Options
+	WhiteboardsReady func(*whiteboard.Service)
 	Tools            *agenttools.Service
 	CLIAccounts      *cliaccounts.Service
 	Dictation        *dictation.Service
@@ -113,6 +116,13 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	} else if opts.DataDir != "" {
 		kb = knowledge.New(opts.DataDir, opts.Knowledge)
 		kb.Routes(mux, spaces)
+	}
+	if kb != nil && opts.Live != nil {
+		whiteboards := whiteboard.New(sqlDB, kb, opts.Live, spaces, opts.Whiteboard)
+		whiteboards.Routes(mux, spaces)
+		if opts.WhiteboardsReady != nil {
+			opts.WhiteboardsReady(whiteboards)
+		}
 	}
 	platform := apps.Platform{Boards: boardSvc, ProviderKinds: providerKinds}
 	if opts.Integrations != nil {

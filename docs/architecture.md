@@ -223,6 +223,8 @@ definition has no place for a URL, a header or a key. The guide for admins and a
 - **Caps and shutdown.** A person has at most 16 live streams across topics (`too_many_streams`, counted apart from the conversations' own). On shutdown `Hub.EndStreams` ends every stream and refuses new ones (`live_closed`), so the drain finishes.
 - **An event** is a type, no more than 64 characters and never `ready` or `resync`, and JSON data of at most 64 KiB. Anything else is refused by `Publish`, which copies the data it validated, so a caller may reuse its bytes.
 
+A whiteboard ([whiteboard.md](whiteboard.md)) is the first feature to use it: its stream's `recheck` is `live.RecheckSpace` plus a check that the board's row still exists, so a board that was dropped ends its streams, and a drop calls `Hub.Revoke` for the board's topic.
+
 ## Scheduled work
 
 Timed work for people (a card's due-date reminder, an app's scheduled

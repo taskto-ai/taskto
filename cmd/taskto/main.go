@@ -48,6 +48,7 @@ import (
 	"taskto.ai/taskto/internal/server"
 	"taskto.ai/taskto/internal/serverkey"
 	"taskto.ai/taskto/internal/webui"
+	"taskto.ai/taskto/internal/whiteboard"
 )
 
 var version = "dev"
@@ -355,6 +356,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	stopIntegrationPolling := integrationSvc.StartPolling(ctx)
 	defer stopIntegrationPolling()
 	var accounts *auth.Service
+	var whiteboards *whiteboard.Service
 	handler, err := server.New(version, sqlDB, server.Options{
 		AccountsReady: func(svc *auth.Service) {
 			accounts = svc
@@ -379,6 +381,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		UpdateRequestDir: cfg.UpdateRequestDir,
 		Quota:            quotas,
 		Mail:             mailer,
+		WhiteboardsReady: func(svc *whiteboard.Service) { whiteboards = svc },
 		AppsReady: func(svc *apps.Service) {
 			deletions.SetApps(svc)
 			maintaining.Add(1)
@@ -436,6 +439,11 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		}
 	}
 	stuck.note("the server's requests", err)
+	if whiteboards != nil {
+		saveCtx, stopSave := context.WithTimeout(context.Background(), whiteboardWait)
+		whiteboards.Close(saveCtx)
+		stopSave()
+	}
 	idleCtx, stopIdle := context.WithTimeout(context.Background(), emailWait)
 	defer stopIdle()
 	if err := accounts.Shutdown(idleCtx); err != nil {

@@ -332,6 +332,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `agent_not_ready` | 503 | The agent runtime is starting or restarting; `Retry-After` says when to try again. |
 | `model_unknown` | 400 | The caller may not use that model, or it isn't configured. |
 | `too_many_streams` | 429 | The caller has `max` event streams open (conversations and live resources count separately): close one first. |
+| `whiteboard_invalid` | 400 | The content or an operation isn't a valid whiteboard (a wrong version, an unknown shape type or colour, a property that can't be changed, a malformed shape). |
+| `whiteboard_limit` | 413 | A whiteboard would go over its limits: 2000 shapes, 64 KiB of text in all, 1 MiB as a file. |
+| `whiteboard_rate_limited` | 429 | One person sent more than 120 batches of operations in 10 seconds. |
 | `live_closed` | 503 | A live stream was asked for while the server is shutting down. |
 | `cli_permission_not_found` | 404 | The CLI's question isn't waiting: answered already, timed out, or its turn is over. |
 | `browser_off` | 409 | The agent browser is off: the server runs without `-browser`. |
@@ -1965,6 +1968,35 @@ for the agent, through `knowledge.Store` with the user it acts for (after
 `access.Checker` allows it) and the agent's name in `knowledge.Author.Agent`, as the
 agent's tools do ([agent-tools.md](agent-tools.md)). Files
 written into the directory any other way aren't committed and aren't seen by the API.
+
+## Whiteboards
+
+A whiteboard is a document of the space: a file whose name ends `.whiteboard.json`, with the
+space's access, history, export and backups ([whiteboard.md](whiteboard.md) has the format, the
+operations and how the live state is saved). It is created and replaced through the documents
+routes, as a file other than Markdown (`content_base64`); a write of anything that isn't a valid
+whiteboard to such a name is refused with `400 whiteboard_invalid`. The routes below take the
+path after `/whiteboards/`, are session only, and a space the caller can't read is `404`.
+
+### `GET /api/workspaces/{workspace}/spaces/{space}/whiteboards/{path}`
+
+Read access. `{"version":1,"shapes":[…],"seq":N}`: the board as it is now, including changes not
+yet saved to the document, and the number of the last batch of operations in it.
+
+### `POST /api/workspaces/{workspace}/spaces/{space}/whiteboards/{path}/ops`
+
+Write access (`403` for a viewer). `{"ops":[…]}`, 1 to 100 operations in at most 48 KiB; replies
+`{"seq":N}`. The batch is all or nothing: if any operation is refused (`400 whiteboard_invalid`,
+`413 whiteboard_limit`) nothing is applied, kept or announced. Write access is checked again when
+the batch is applied, so a person removed while their request waited writes nothing.
+
+### `GET /api/workspaces/{workspace}/spaces/{space}/whiteboards/{path}/live`
+
+Read access. A [live stream](architecture.md#live-updates) of the board: an `ops` event
+`{"seq":N,"ops":[…]}` for each accepted batch, in `seq` order. Open it first, and when `ready`
+arrives read the snapshot; apply the events whose `seq` is above the snapshot's. When the stream
+ends (access lost, the document replaced or removed, a shutdown), open it again and read the
+snapshot again.
 
 ## Search
 
