@@ -126,19 +126,14 @@ func (x *Index) handlePalette(c *access.Checker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u, _ := auth.UserFrom(r.Context())
 		m, _ := auth.MembershipFrom(r.Context())
-		q := Query{Text: r.URL.Query().Get("q"), Limit: 5}
+		q := Query{Text: r.URL.Query().Get("q"), Limit: PaletteDefaultLimit}
 		if raw := r.URL.Query().Get("limit"); raw != "" {
 			n, err := strconv.Atoi(raw)
-			if err != nil || n < 0 || n > 10 {
-				apierr.Write(w, http.StatusBadRequest, apierr.CodeBadRequest, "limit must be a number from 1 to 10")
+			if err != nil {
+				apierr.Write(w, http.StatusBadRequest, apierr.CodeBadRequest, paletteLimitMessage)
 				return
 			}
-			if n > 0 {
-				q.Limit = n
-			}
-		}
-		if _, err := checkQuery(&q); searchFailed(w, r, err) {
-			return
+			q.Limit = n
 		}
 		spaces, err := c.Readable(r.Context(), u.ID, m.WorkspaceID)
 		if err != nil {

@@ -2195,7 +2195,8 @@ Both routes also take an access token.
 ### `GET /api/workspaces/{workspace}/search/palette`
 
 Any workspace member with a session. Access tokens are not accepted. Query: required `q`
-(up to 500 bytes) and optional `limit` (5 by default, at most 10). Returns matching spaces,
+(up to 500 bytes) and optional `limit` (5 by default; 1 to 10, anything else is refused
+with `400 bad_request`). Returns matching spaces,
 apps, boards, documents, cards, records and the caller's own conversations in one reply.
 Name matches ignore case and accents, rank names that start with the query first, then
 shorter names. Private space labels are supplied by the web app and are not searched here.
@@ -2218,7 +2219,9 @@ still catching up.
 }
 ```
 
-Each kind is limited independently by `limit`; document, card, record and conversation
+Each kind is limited independently by `limit`. A place is counted only if the caller still
+reads it when the reply is made: the spaces and app roles are read again in one snapshot
+before the cut, so a page is full whenever enough readable places match. Document, card, record and conversation
 results use the same access checks as their individual search routes.
 
 ### Searching conversations

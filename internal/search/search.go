@@ -39,6 +39,7 @@ type Index struct {
 	afterEndpoint, beforeStore, afterQueryEndpoint                         func()
 	afterEmbedRequest, afterQueryEmbedded, beforeRelease, afterConsentBody func()
 	afterCardSync                                                          func()
+	afterPlacesRead, betweenPlaceChecks                                    func()
 	afterRecordSync                                                        func()
 	recordSyncLimit                                                        int
 	conversationSyncLimit                                                  int
