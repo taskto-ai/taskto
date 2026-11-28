@@ -54,6 +54,12 @@ type fakeRuntime struct {
 	onEntries     func()
 	onContinue    func()
 	stallContinue bool
+
+	lateContinue  bool
+	continueCalls int
+	consumed      int64
+	landing       func()
+	confirm       chan struct{}
 }
 
 var setupToken = auth.NewSetupToken()
@@ -118,13 +124,59 @@ func (f *fakeRuntime) Continue(ctx context.Context, conv int64, model agentrt.Mo
 		return 0, agentrt.ModelRef{}, ctx.Err()
 	}
 	f.mu.Lock()
+	late := f.lateContinue
+	f.continueCalls++
+	first := f.continueCalls == 1
+	if late && first {
+		f.landing = func() {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.landContinue(conv, model, after)
+		}
+	}
+	f.mu.Unlock()
+	if late && first {
+		<-ctx.Done()
+		return 0, agentrt.ModelRef{}, ctx.Err()
+	}
+	if late {
+		select {
+		case <-f.confirm:
+		case <-ctx.Done():
+			return 0, agentrt.ModelRef{}, ctx.Err()
+		}
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return 0, agentrt.ModelRef{}, f.err
 	}
+	if late && !f.landContinue(conv, model, after) {
+		return 0, agentrt.ModelRef{}, &agentrt.StatusError{Code: http.StatusConflict, Message: "the conversation moved on", Reason: "moved"}
+	}
+	if !late {
+		f.resumed = append(f.resumed, continueCall{model, after})
+		f.resumes[conv]++
+	}
+	return int64(3000 + f.resumes[conv]), model, nil
+}
+
+func (f *fakeRuntime) landContinue(conv int64, model agentrt.ModelRef, after int64) bool {
+	if after <= f.consumed {
+		return false
+	}
+	f.consumed = after
+	f.models[conv] = model
 	f.resumed = append(f.resumed, continueCall{model, after})
 	f.resumes[conv]++
-	return int64(3000 + f.resumes[conv]), model, nil
+	return true
+}
+
+func (f *fakeRuntime) landLate() {
+	f.mu.Lock()
+	land := f.landing
+	f.mu.Unlock()
+	land()
 }
 
 func (f *fakeRuntime) Note(_ context.Context, conv int64, n agentrt.NoteInput) (int64, error) {

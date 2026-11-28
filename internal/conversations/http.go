@@ -499,7 +499,12 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	defer done()
+	holding := true
+	defer func() {
+		if holding {
+			done()
+		}
+	}()
 	ctx, cancel := context.WithTimeout(r.Context(), s.holdLimit)
 	defer cancel()
 	unlock, ok := s.lock(ctx, c.ID)
@@ -515,6 +520,11 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	}
 	sub, admitted, err := rt.Continue(ctx, c.agentID, model, req.AfterEntry)
 	if err != nil {
+		var answered *agentrt.StatusError
+		if !errors.As(err, &answered) {
+			holding = false
+			go s.settleContinue(rt, c.agentID, model, req.AfterEntry, done)
+		}
 		conversationError(w, r, c, err)
 		return
 	}
@@ -524,6 +534,28 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	s.markWhenSettled(rt, p, admitted.Provider, sub)
 	slog.InfoContext(r.Context(), "conversation continued", "conversation", c.ID, "provider", admitted.Provider, "by", p.User)
 	writeJSON(w, http.StatusAccepted, SubmissionReply{SubmissionID: sub, Model: modelRef{Provider: admitted.Provider, ModelID: admitted.ModelID}})
+}
+
+func (s *Service) settleContinue(rt Runtime, agentID int64, model agentrt.ModelRef, afterEntry int64, done func()) {
+	defer done()
+	limit := time.NewTimer(s.settleLimit)
+	defer limit.Stop()
+	for {
+		ctx, cancel := context.WithTimeout(s.closing, s.holdLimit)
+		_, _, err := rt.Continue(ctx, agentID, model, afterEntry)
+		cancel()
+		var answered *agentrt.StatusError
+		if err == nil || errors.As(err, &answered) {
+			return
+		}
+		select {
+		case <-limit.C:
+			return
+		case <-s.closing.Done():
+			return
+		case <-time.After(settlePause):
+		}
+	}
 }
 
 func (s *Service) handleMessages(w http.ResponseWriter, r *http.Request) {

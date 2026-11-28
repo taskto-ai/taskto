@@ -5762,6 +5762,10 @@ message that names an agent is between its switch and its submission, `POST …/
 the hold a few seconds, then answers `409 conversation_busy` and starts nothing, and a message
 that names an agent waits for a continue that is being admitted. The two never interleave, so a
 message is never submitted under the model of a continue that came between its switch and its send.
+A continue whose call to the agent runtime got no answer in time answers `503`, but the runtime may
+still commit it, so the server keeps the hold, asking the runtime again for the same continue, until
+the runtime answers (it is then either admitted or refused as moved) or about a minute passes; a
+message that names an agent waits for that hold like for any other.
 
 Each person-sent message is stored as a `taskto.input` entry. Its `data` includes version `1`
 and the sender's user ID; optional `text` and `attached` fields preserve the original text and

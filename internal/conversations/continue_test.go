@@ -502,6 +502,7 @@ func TestAMentionWaitsForAContinueBeingAdmitted(t *testing.T) {
 func TestAStalledContinueEndsAtItsDeadlineAndFreesTheHold(t *testing.T) {
 	e := newEnv(t, false)
 	e.svc.holdLimit = 50 * time.Millisecond
+	e.svc.settleLimit = 50 * time.Millisecond
 	owner, ws := e.setup()
 	c := owner.create(ws, nil)
 	e.rt.stallContinue = true
@@ -518,6 +519,9 @@ func TestAStalledContinueEndsAtItsDeadlineAndFreesTheHold(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the stalled continue never ended")
 	}
+	for end := time.Now().Add(2 * time.Second); e.holdsOnModel(c.ID, 1) && time.Now().Before(end); {
+		runtime.Gosched()
+	}
 	e.svc.mu.Lock()
 	holds := len(e.svc.modelHolds)
 	e.svc.mu.Unlock()
@@ -525,4 +529,56 @@ func TestAStalledContinueEndsAtItsDeadlineAndFreesTheHold(t *testing.T) {
 		t.Fatalf("%d model holds are left after the stalled continue ended", holds)
 	}
 	owner.expect(http.StatusOK, http.MethodPut, path(ws, fmt.Sprintf("/%d/model", c.ID)), map[string]any{"provider": "backup", "model_id": "b-1"})
+}
+
+func TestAContinueThatTimedOutKeepsTheHoldUntilTheRuntimeAnswersAgain(t *testing.T) {
+	e := newEnv(t, false)
+	e.svc.holdLimit = 50 * time.Millisecond
+	e.svc.modelWait = 5 * time.Second
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	mentioned := agentrt.ModelRef{Provider: "cli-codex", ModelID: "default"}
+	e.rt.mu.Lock()
+	e.rt.lateContinue = true
+	e.rt.confirm = make(chan struct{})
+	e.rt.mu.Unlock()
+
+	rec := owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("the stalled continue answered %d, want 503", rec.Code)
+	}
+
+	submitting, release := make(chan struct{}), make(chan struct{})
+	e.rt.mu.Lock()
+	e.rt.onSubmit = func() {
+		close(submitting)
+		<-release
+	}
+	e.rt.mu.Unlock()
+	sent := make(chan int, 1)
+	go func() {
+		sent <- owner.do(http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), mention(mentioned.Provider, mentioned.ModelID, "hello")).Code
+	}()
+	for waiting := false; !waiting; {
+		select {
+		case <-submitting:
+			waiting = true
+		default:
+			waiting = e.holdsOnModel(c.ID, 2)
+			runtime.Gosched()
+		}
+	}
+	e.rt.landLate()
+	close(e.rt.confirm)
+	close(release)
+	if code := <-sent; code != http.StatusAccepted {
+		t.Fatalf("the mention answered %d, want 202", code)
+	}
+	e.rt.mu.Lock()
+	got := e.rt.models[agent]
+	e.rt.mu.Unlock()
+	if got != mentioned {
+		t.Fatalf("the model is %+v after the mention, want %+v: a continue that timed out landed after the mention's switch", got, mentioned)
+	}
 }
