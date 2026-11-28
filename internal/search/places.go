@@ -2,8 +2,10 @@ package search
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -76,7 +78,19 @@ func sortPlaces[T any](items []T, name func(T) string, needle string, limit int)
 	return items
 }
 
+const (
+	PaletteDefaultLimit = 5
+	PaletteMaxLimit     = 10
+)
+
+const paletteLimitMessage = "limit must be a number from 1 to 10"
+
+var errPaletteLimit = fmt.Errorf("%w: %s", ErrInvalid, paletteLimitMessage)
+
 func (x *Index) SearchPlaces(ctx context.Context, checker *access.Checker, userID, workspaceID int64, spaces []access.Space, text string, limit int) (PlaceResults, error) {
+	if limit < 1 || limit > PaletteMaxLimit {
+		return PlaceResults{}, errPaletteLimit
+	}
 	if _, err := checkQuery(&Query{Text: text, Limit: limit}); err != nil {
 		return PlaceResults{}, err
 	}
@@ -164,34 +178,55 @@ func (x *Index) SearchPlaces(ctx context.Context, checker *access.Checker, userI
 			return PlaceResults{}, err
 		}
 	}
+	if x.afterPlacesRead != nil {
+		x.afterPlacesRead()
+	}
+	readable, err := x.readablePlaces(ctx, checker, userID, workspaceID, spaces)
+	if err != nil {
+		return PlaceResults{}, err
+	}
+	res.Spaces = slices.DeleteFunc(res.Spaces, func(p PlaceSpace) bool { return !readable.spaces[p.ID] })
+	res.Apps = slices.DeleteFunc(res.Apps, func(p PlaceApp) bool { return !readable.spaces[p.SpaceID] || !readable.apps[p.AppID] })
+	res.Boards = slices.DeleteFunc(res.Boards, func(p PlaceBoard) bool { return !readable.spaces[p.SpaceID] })
 	res.Spaces = sortPlaces(res.Spaces, func(p PlaceSpace) string { return p.Name }, needle, limit)
 	res.Apps = sortPlaces(res.Apps, func(p PlaceApp) string { return p.Name }, needle, limit)
 	res.Boards = sortPlaces(res.Boards, func(p PlaceBoard) string { return p.Name }, needle, limit)
-	readable := map[int64]bool{}
-	appReadable := map[int64]bool{}
-	for _, was := range spaces {
-		cur, err := checker.Check(ctx, userID, was.ID)
-		switch {
-		case errors.Is(err, access.ErrNotFound):
-			readable[was.ID] = false
-		case err != nil:
-			return PlaceResults{}, err
-		default:
-			readable[was.ID] = cur.WorkspaceID == workspaceID && cur.Access.Allows(access.Read) && cur.ArchivedAt == nil &&
-				(was.Generation == 0 || cur.Generation == was.Generation)
-			if readable[was.ID] {
-				apps, err := checker.AppsIn(ctx, userID, cur)
-				if err != nil {
-					return PlaceResults{}, err
-				}
-				for id, appAccess := range apps {
-					appReadable[id] = appAccess.View || appAccess.Design
-				}
+	return res, nil
+}
+
+type readablePlaces struct {
+	spaces map[int64]bool
+	apps   map[int64]bool
+}
+
+func (x *Index) readablePlaces(ctx context.Context, checker *access.Checker, userID, workspaceID int64, spaces []access.Space) (readablePlaces, error) {
+	out := readablePlaces{spaces: map[int64]bool{}, apps: map[int64]bool{}}
+	err := checker.Snapshot(ctx, func(snap *access.Checker, _ *sql.Tx) error {
+		for _, was := range spaces {
+			cur, err := snap.Check(ctx, userID, was.ID)
+			switch {
+			case errors.Is(err, access.ErrNotFound):
+				continue
+			case err != nil:
+				return err
+			}
+			if cur.WorkspaceID != workspaceID || !cur.Access.Allows(access.Read) || cur.ArchivedAt != nil ||
+				(was.Generation != 0 && cur.Generation != was.Generation) {
+				continue
+			}
+			out.spaces[was.ID] = true
+			if x.betweenPlaceChecks != nil {
+				x.betweenPlaceChecks()
+			}
+			apps, err := snap.AppsIn(ctx, userID, cur)
+			if err != nil {
+				return err
+			}
+			for id, appAccess := range apps {
+				out.apps[id] = appAccess.View || appAccess.Design
 			}
 		}
-	}
-	res.Spaces = slices.DeleteFunc(res.Spaces, func(p PlaceSpace) bool { return !readable[p.ID] })
-	res.Apps = slices.DeleteFunc(res.Apps, func(p PlaceApp) bool { return !readable[p.SpaceID] || !appReadable[p.AppID] })
-	res.Boards = slices.DeleteFunc(res.Boards, func(p PlaceBoard) bool { return !readable[p.SpaceID] })
-	return res, nil
+		return nil
+	})
+	return out, err
 }

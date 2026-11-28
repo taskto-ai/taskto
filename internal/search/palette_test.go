@@ -2,6 +2,7 @@ package search
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -108,9 +109,14 @@ func TestPaletteQueryValidation(t *testing.T) {
 	w := newWorld(t)
 	base := fmt.Sprintf("/api/workspaces/%d/search/palette", w.ws)
 	expectCode(t, w.alice.do(http.MethodGet, base, nil), http.StatusBadRequest, "search_query_required", nil)
-	for _, limit := range []string{"11", "-1", "many"} {
-		expectCode(t, w.alice.do(http.MethodGet, base+"?q=orchard&limit="+limit, nil), http.StatusBadRequest, "bad_request", nil)
+	for _, limit := range []string{"0", "11", "-1", "many"} {
+		rec := w.alice.do(http.MethodGet, base+"?q=orchard&limit="+limit, nil)
+		expectCode(t, rec, http.StatusBadRequest, "bad_request", nil)
+		if !strings.Contains(rec.Body.String(), "limit must be a number from 1 to 10") {
+			t.Fatalf("limit %s: %s", limit, rec.Body)
+		}
 	}
+	expect(t, w.alice.do(http.MethodGet, base+"?q=orchard&limit=1", nil), http.StatusOK)
 	expect(t, w.alice.do(http.MethodGet, base+"?q=orchard&limit=10", nil), http.StatusOK)
 }
 
@@ -308,7 +314,7 @@ func TestPaletteGivesFiveOfEachKindByDefaultAndWhatLimitAsksFor(t *testing.T) {
 	for _, c := range []struct {
 		query string
 		want  int
-	}{{"orchard", 5}, {"orchard&limit=2", 2}, {"orchard&limit=10", 10}, {"orchard&limit=0", 5}} {
+	}{{"orchard", 5}, {"orchard&limit=2", 2}, {"orchard&limit=10", 10}} {
 		rec := w.alice.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/palette?q=%s", w.ws, c.query), nil)
 		expect(t, rec, http.StatusOK)
 		if got := decode[paletteReply](t, rec); len(got.Places.Apps) != c.want || len(got.Places.Boards) != c.want {
@@ -378,4 +384,125 @@ func TestPaletteRefusesAQueryOverTheLengthTheDocsName(t *testing.T) {
 	expect(t, w.alice.do(http.MethodGet, base+strings.Repeat("a", MaxQueryLen), nil), http.StatusOK)
 	expectCode(t, w.alice.do(http.MethodGet, base+strings.Repeat("a", MaxQueryLen+1), nil), http.StatusBadRequest, "search_query_too_long", map[string]any{"max": float64(MaxQueryLen)})
 	expectCode(t, w.alice.do(http.MethodGet, base+"%20%20", nil), http.StatusBadRequest, "search_query_required", nil)
+}
+
+func (w *world) restrictApp(a appJSON, users ...*user) {
+	w.e.t.Helper()
+	w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'builder')`, a.ID, w.owner.id)
+	for _, u := range users {
+		w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'user')`, a.ID, u.id)
+	}
+}
+
+func placeNames[T any](items []T, name func(T) string) []string {
+	out := []string{}
+	for _, item := range items {
+		out = append(out, name(item))
+	}
+	return out
+}
+
+func TestPaletteFillsItsPageFromAppsTheCallerStillReadsAfterALoss(t *testing.T) {
+	w := newWorld(t)
+	first := w.newApp(w.alice, w.team, "Café a", false)
+	w.newApp(w.alice, w.team, "Café b", false)
+	w.newApp(w.alice, w.team, "Café c", false)
+	w.restrictApp(first, w.alice, w.bob)
+	spaces := w.readableSpaces(w.alice)
+	appNames := func(p PlaceResults) []string { return placeNames(p.Apps, func(a PlaceApp) string { return a.Name }) }
+
+	w.e.idx.afterPlacesRead = func() {
+		w.e.idx.afterPlacesRead = nil
+		w.exec(`DELETE FROM app_roles WHERE app_id = ? AND user_id = ?`, first.ID, w.alice.id)
+	}
+	got, err := w.e.idx.SearchPlaces(ctx, w.e.spaces, w.alice.id, w.ws, spaces, "cafe", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := appNames(got); !slices.Equal(names, []string{"Café b", "Café c"}) {
+		t.Fatalf("alice lost the best match while the page was made; apps = %v", names)
+	}
+
+	gotBob, err := w.e.idx.SearchPlaces(ctx, w.e.spaces, w.bob.id, w.ws, w.readableSpaces(w.bob), "cafe", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := appNames(gotBob); !slices.Equal(names, []string{"Café a", "Café b"}) {
+		t.Fatalf("bob keeps his role in the app alice lost; apps = %v", names)
+	}
+}
+
+func TestPaletteFillsItsPageFromSpacesAndBoardsTheCallerStillReadsAfterALoss(t *testing.T) {
+	w := newWorld(t)
+	near := w.createShared("Café a")
+	far := w.createShared("Café bb")
+	for _, sp := range []access.Space{near, far} {
+		w.addMember(sp, w.alice, access.RoleViewer)
+		w.addMember(sp, w.bob, access.RoleViewer)
+	}
+	w.teamBoard(w.owner, near, "Café a")
+	w.teamBoard(w.owner, far, "Café bb")
+	spaces := w.readableSpaces(w.alice)
+
+	w.e.idx.afterPlacesRead = func() {
+		w.e.idx.afterPlacesRead = nil
+		w.removeMember(near, w.alice)
+	}
+	got, err := w.e.idx.SearchPlaces(ctx, w.e.spaces, w.alice.id, w.ws, spaces, "cafe", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Spaces) != 1 || got.Spaces[0].ID != far.ID || len(got.Boards) != 1 || got.Boards[0].SpaceID != far.ID {
+		t.Fatalf("alice lost the nearer space while the page was made; places = %+v", got)
+	}
+
+	gotBob, err := w.e.idx.SearchPlaces(ctx, w.e.spaces, w.bob.id, w.ws, w.readableSpaces(w.bob), "cafe", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotBob.Spaces) != 1 || gotBob.Spaces[0].ID != near.ID || len(gotBob.Boards) != 1 || gotBob.Boards[0].SpaceID != near.ID {
+		t.Fatalf("bob is still in the nearer space; places = %+v", gotBob)
+	}
+}
+
+func TestPalettePlacesAreCheckedAgainInOneSnapshot(t *testing.T) {
+	w := newWorld(t)
+	app := w.newApp(w.alice, w.team, "Café a", false)
+	w.restrictApp(app, w.alice, w.bob)
+	spaces := w.readableSpaces(w.alice)
+
+	w.e.idx.betweenPlaceChecks = func() {
+		w.e.idx.betweenPlaceChecks = nil
+		w.exec(`DELETE FROM app_roles WHERE app_id = ? AND user_id = ?`, app.ID, w.alice.id)
+	}
+	got, err := w.e.idx.SearchPlaces(ctx, w.e.spaces, w.alice.id, w.ws, spaces, "cafe", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Apps) != 1 {
+		t.Fatalf("the space and its apps were not read as of the same moment: %+v", got.Apps)
+	}
+
+	if after := w.placesIn(w.alice, spaces, "cafe"); len(after.Apps) != 0 {
+		t.Fatalf("the next page still names an app alice no longer reads: %+v", after.Apps)
+	}
+	if bob := w.placesIn(w.bob, w.readableSpaces(w.bob), "cafe"); len(bob.Apps) != 1 {
+		t.Fatalf("bob's role in the app was touched: %+v", bob.Apps)
+	}
+}
+
+func TestSearchPlacesRefusesALimitOutsideOneToTen(t *testing.T) {
+	w := newWorld(t)
+	spaces := w.readableSpaces(w.alice)
+	for _, limit := range []int{0, -1, 11, 1000} {
+		if _, err := w.e.idx.SearchPlaces(ctx, w.e.spaces, w.alice.id, w.ws, spaces, "cafe", limit); !errors.Is(err, ErrInvalid) ||
+			!strings.Contains(err.Error(), "limit must be a number from 1 to 10") {
+			t.Errorf("limit %d: err = %v", limit, err)
+		}
+	}
+	for _, limit := range []int{1, 10} {
+		if _, err := w.e.idx.SearchPlaces(ctx, w.e.spaces, w.alice.id, w.ws, spaces, "cafe", limit); err != nil {
+			t.Errorf("limit %d: %v", limit, err)
+		}
+	}
 }
