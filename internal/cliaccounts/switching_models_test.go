@@ -18,7 +18,7 @@ func limitedClaudeEnv(t *testing.T, enabled bool, queue ...map[string]any) (*tur
 	models := &modelCalls{}
 	e.svc.SetModelSetter(models.set)
 	e.owner.connect(cliworker.Claude)
-	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Fail: "You've hit your usage limit · resets 3pm"})
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Fail: "You've hit your usage limit · resets 3pm"})
 	e.owner.setSwitching(map[string]any{"enabled": enabled, "queue": append([]map[string]any{{"account": "claude"}}, queue...)})
 	return e, e.conversation(e.owner), models
 }
@@ -204,7 +204,7 @@ func TestSwitchingAPIKeepsModelsApartFromAccounts(t *testing.T) {
 func TestAnExpiredLoginContinuesOnTheQueuedModel(t *testing.T) {
 	e, conv, models := limitedClaudeEnv(t, true)
 	e.provide(mine(e, "api"), "big")
-	clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Expired: true})
+	clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Expired: true})
 	e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
 	d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "default", Prompt: "do it"}))
 	if !d.Continue || d.Status != cliworker.StatusLoginRequired || !strings.Contains(d.Note, "needs you to sign in again") {

@@ -27,7 +27,7 @@ func TestNoModelHopForAConversationThatStoppedBeingTheOwners(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e, conv, models := limitedClaudeEnv(t, true)
 			e.provide(mine(e, "api"), "big")
-			clitest.WriteScenario(t, e.layout.User(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Fail: "You've hit your usage limit · resets 3pm", SleepMS: 600})
+			clitest.WriteScenario(t, e.dirs(e.owner.id).Config(cliworker.Claude), clitest.Scenario{Fail: "You've hit your usage limit · resets 3pm", SleepMS: 600})
 			e.owner.setSwitching(map[string]any{"queue": []map[string]any{{"account": "claude"}, modelEntry(mine(e, "api"), "big")}})
 			go func() {
 				time.Sleep(200 * time.Millisecond)
@@ -133,7 +133,7 @@ func TestTheModelIsTriedWhenTheLastAllowedSwitchExhaustsTheAccounts(t *testing.T
 		handle := refOf(cliworker.Claude, n).handle()
 		e.owner.connectAccount(handle)
 		a, _ := parseHandle(handle)
-		clitest.WriteScenario(t, e.layout.User(e.owner.id).ConfigOf(a.cli, a.slot), clitest.Scenario{Fail: "You've hit your usage limit · resets 3pm"})
+		clitest.WriteScenario(t, e.dirs(e.owner.id).ConfigOf(a.cli, a.slot), clitest.Scenario{Fail: "You've hit your usage limit · resets 3pm"})
 		queue = append(queue, map[string]any{"account": handle})
 	}
 	e.owner.setSwitching(map[string]any{"enabled": true, "queue": append(queue, modelEntry(mine(e, "api"), "big"))})
