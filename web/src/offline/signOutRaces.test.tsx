@@ -119,6 +119,45 @@ const queued = (id = 'item-1'): Omit<OutboxItem, 'seq' | 'version'> => ({
 const databases = async () => (await indexedDB.databases()).map((d) => d.name)
 const LAST = 'taskto:offline-last'
 
+function watchRequests() {
+  const pending: Promise<void>[] = []
+  const track = (target: IDBRequest | IDBTransaction, events: string[]) =>
+    pending.push(
+      new Promise<void>((done) => {
+        for (const event of events) target.addEventListener(event, () => done())
+      }),
+    )
+  for (const method of ['open', 'deleteDatabase'] as const) {
+    const current = indexedDB[method] as (this: IDBFactory, ...args: never[]) => IDBOpenDBRequest
+    Object.defineProperty(indexedDB, method, {
+      configurable: true,
+      writable: true,
+      value(this: IDBFactory, ...args: never[]) {
+        const request = current.apply(this, args)
+        track(request, ['success', 'error'])
+        return request
+      },
+    })
+  }
+  const transaction = IDBDatabase.prototype.transaction
+  vi.spyOn(IDBDatabase.prototype, 'transaction').mockImplementation(function (
+    this: IDBDatabase,
+    ...args: Parameters<typeof transaction>
+  ) {
+    const tx = transaction.apply(this, args)
+    track(tx, ['complete', 'abort', 'error'])
+    return tx
+  })
+  return async () => {
+    for (let seen = -1; seen !== pending.length; ) {
+      seen = pending.length
+      await act(async () => {
+        await Promise.all(pending)
+      })
+    }
+  }
+}
+
 function fakeLocks() {
   const names: string[] = []
   const tails = new Map<string, Promise<unknown>>()
@@ -475,6 +514,7 @@ test('a start whose answer comes late never takes a newer login of the account b
 })
 
 test('a start answered 401 leaves a sign-out another tab recorded after it asked to that tab', async () => {
+  const settled = watchRequests()
   let answer: (() => void) | undefined
   fakeFetch({
     ...signedIn,
@@ -491,7 +531,7 @@ test('a start answered 401 leaves a sign-out another tab recorded after it asked
   recordSignOut(7, 's2', false, new Map())
   await act(async () => answer?.())
   await screen.findByRole('heading', { name: 'Log in' })
-  await new Promise((r) => setTimeout(r, 50))
+  await settled()
   expect(pendingSignOutOf(7)).toMatchObject({ session: 's2' })
   expect(lastUser()).toEqual({ id: 7, name: 'Pat' })
   expect(await databases()).toContain('taskto-offline-7')
@@ -903,6 +943,7 @@ test('a start that takes a sign-out up goes on signing in when another tab went 
 })
 
 test("a database open that outlasted the account's lock never deletes what another tab made of it since", async () => {
+  const settled = watchRequests()
   const store = await OfflineStore.open(7)
   await store.retireOrKeepUnsent()
   store.close()
@@ -912,8 +953,7 @@ test("a database open that outlasted the account's lock never deletes what anoth
     return () => {}
   }
   await expect(OfflineStore.open(7)).rejects.toThrow()
-  await new Promise((r) => setTimeout(r, 0))
-  await new Promise((r) => setTimeout(r, 0))
+  await settled()
   const raw = await new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open('taskto-offline-7')
     request.onsuccess = () => resolve(request.result)
@@ -940,6 +980,7 @@ test("a start whose login another tab replaces while it opens the account's data
 })
 
 test("a sign-out's deletion whose hold on the account's lock ran out deletes nothing", async () => {
+  const settled = watchRequests()
   const store = await OfflineStore.open(7)
   await store.retireOrKeepUnsent()
   store.close()
@@ -949,8 +990,7 @@ test("a sign-out's deletion whose hold on the account's lock ran out deletes not
     return () => {}
   }
   await expect(OfflineStore.deleteRetired(7)).rejects.toThrow()
-  await new Promise((r) => setTimeout(r, 0))
-  await new Promise((r) => setTimeout(r, 0))
+  await settled()
   expect(await databases()).toContain('taskto-offline-7')
 })
 
@@ -1085,9 +1125,9 @@ test('a database open whose lock ran out while it deleted a retired database nev
     for (const over of overs.splice(0)) over()
     return real.call(this, name)
   })
+  const settled = watchRequests()
   await expect(OfflineStore.open(7)).rejects.toThrow()
-  await new Promise((r) => setTimeout(r, 0))
-  await new Promise((r) => setTimeout(r, 0))
+  await settled()
   vi.restoreAllMocks()
   expect(await databases()).not.toContain('taskto-offline-7')
 })
@@ -1510,8 +1550,9 @@ test("a start whose open outlasts the account's lock leaves no database made", a
       })
     return real.call(this, name, version)
   })
+  const settled = watchRequests()
   await expect(OfflineStore.open(7)).rejects.toThrow()
-  await new Promise((done) => setTimeout(done, 50))
+  await settled()
   vi.restoreAllMocks()
   expect(await databases()).not.toContain('taskto-offline-7')
 })
@@ -1669,9 +1710,10 @@ test("a start whose open outlasts the account's lock during the upgrade's later 
       for (const over of overs.splice(0)) over()
     }
   }
+  const settled = watchRequests()
   try {
     await expect(OfflineStore.open(7)).rejects.toThrow()
-    await new Promise((done) => setTimeout(done, 50))
+    await settled()
   } finally {
     MIGRATIONS[2] = original as NonNullable<typeof original>
   }
@@ -1679,6 +1721,7 @@ test("a start whose open outlasts the account's lock during the upgrade's later 
 })
 
 test('a check of a database that is not there stops its upgrade at once: no later step runs on the aborted transaction', async () => {
+  const settled = watchRequests()
   const later = vi.fn()
   const thrown: unknown[] = []
   const original = MIGRATIONS[2]
@@ -1693,7 +1736,7 @@ test('a check of a database that is not there stops its upgrade at once: no late
   }
   try {
     expect(await unsentState(7, new Map(), { still: () => true })).toEqual({ left: [], unreadable: false })
-    await new Promise((done) => setTimeout(done, 20))
+    await settled()
   } finally {
     MIGRATIONS[2] = original as NonNullable<typeof original>
   }
@@ -1716,8 +1759,9 @@ test("a discard whose check of a database another tab already deleted outlasts t
     })
     return open(name, version)
   })
+  const settled = watchRequests()
   await expect(OfflineStore.deleteRetired(7)).rejects.toThrow()
-  await new Promise((done) => setTimeout(done, 50))
+  await settled()
   expect(await databases()).not.toContain('taskto-offline-7')
 })
 
@@ -1745,7 +1789,8 @@ test("a start whose upgrade committed before the account's lock ran out, with th
     })
     return request
   })
+  const settled = watchRequests()
   await expect(OfflineStore.open(7)).rejects.toThrow(StorageUnavailable)
-  await new Promise((done) => setTimeout(done, 50))
+  await settled()
   expect(await databases()).toContain('taskto-offline-7')
 })
