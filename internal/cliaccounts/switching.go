@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/conversations"
@@ -18,7 +19,7 @@ import (
 
 type ModelSetter func(ctx context.Context, agentConversation int64, cli cliworker.CLI, revision int64) (int64, error)
 
-var ErrModelChanged = errors.New("the conversation's model was changed while the turn ran")
+var ErrModelChanged = agentrt.ErrModelChanged
 
 const modelChangedText = "the conversation's model was changed while this reply ran, so it was not switched to another account: send your message again"
 

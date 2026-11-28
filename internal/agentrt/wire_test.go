@@ -3,6 +3,8 @@ package agentrt
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -93,5 +95,20 @@ func TestEverySubmissionAndContinueCarriesTheDeadlineOfItsContextAsTheAdmitByTim
 	}
 	if _, ok := w.last()["admitBy"]; ok {
 		t.Fatalf("a submission whose context has no deadline sent %v, want no admitBy", w.last())
+	}
+}
+
+func TestARefusalBecauseTheModelChangedIsErrModelChanged(t *testing.T) {
+	refused := fmt.Errorf("switching: %w", &StatusError{Code: http.StatusConflict, Reason: "model_changed"})
+	if !errors.Is(refused, ErrModelChanged) {
+		t.Fatal("a 409 with reason model_changed is not ErrModelChanged")
+	}
+	for name, other := range map[string]*StatusError{
+		"another reason": {Code: http.StatusConflict, Reason: "busy"},
+		"another status": {Code: http.StatusBadRequest, Reason: "model_changed"},
+	} {
+		if errors.Is(other, ErrModelChanged) {
+			t.Errorf("%s is ErrModelChanged", name)
+		}
 	}
 }

@@ -87,6 +87,12 @@ type StatusError struct {
 
 func (e *StatusError) Error() string { return fmt.Sprintf("agentrt: %s: %s", e.Status, e.Message) }
 
+var ErrModelChanged = errors.New("the conversation's model was changed since the caller read it")
+
+func (e *StatusError) Is(target error) bool {
+	return target == ErrModelChanged && e.Code == http.StatusConflict && e.Reason == "model_changed"
+}
+
 type Event struct {
 	Type  string          `json:"type"`
 	Value json.RawMessage `json:"value,omitempty"`
