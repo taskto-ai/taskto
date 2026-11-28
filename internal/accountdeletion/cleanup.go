@@ -17,6 +17,8 @@ import (
 
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/cliaccounts"
+	"taskto.ai/taskto/internal/cliowner"
+	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/providers"
 )
@@ -89,8 +91,9 @@ func (s *Service) SetProviders(sync func(ctx context.Context) error) {
 func providersTarget(userID int64) string { return "feed:" + strconv.FormatInt(userID, 10) }
 
 func (s *Service) record(ctx context.Context, q execer, userID int64, kind, target string) error {
-	_, err := q.ExecContext(ctx, `INSERT INTO purge_cleanups (user_id, kind, target, created_at) VALUES (?, ?, ?, ?)
-		ON CONFLICT (kind, target) DO NOTHING`, userID, kind, target, s.o.Clock().UTC().Format("2006-01-02T15:04:05.000Z"))
+	_, err := q.ExecContext(ctx, `INSERT INTO purge_cleanups (user_id, kind, target, created_at, cli_identity)
+		VALUES (?, ?, ?, ?, CASE WHEN ? IN ('browser', 'cli_home') THEN (SELECT cli_identity FROM users WHERE id = ?) END)
+		ON CONFLICT (kind, target) DO NOTHING`, userID, kind, target, s.o.Clock().UTC().Format("2006-01-02T15:04:05.000Z"), kind, userID)
 	return err
 }
 
@@ -102,10 +105,11 @@ type cleanup struct {
 	id           int64
 	user         int64
 	kind, target string
+	identity     string
 }
 
 func (s *Service) pending(ctx context.Context, userID int64) ([]cleanup, error) {
-	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, user_id, kind, target FROM purge_cleanups
+	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, user_id, kind, target, coalesce(cli_identity, '') FROM purge_cleanups
 		WHERE ? = 0 OR user_id = ? ORDER BY kind <> ?, id`, userID, userID, cleanBrowser)
 	if err != nil {
 		return nil, err
@@ -114,7 +118,7 @@ func (s *Service) pending(ctx context.Context, userID int64) ([]cleanup, error) 
 	var out []cleanup
 	for rows.Next() {
 		var c cleanup
-		if err := rows.Scan(&c.id, &c.user, &c.kind, &c.target); err != nil {
+		if err := rows.Scan(&c.id, &c.user, &c.kind, &c.target, &c.identity); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -199,7 +203,7 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 		if err != nil || user <= 0 {
 			return failed(failBadTarget, nil)
 		}
-		return s.forgetBrowser(ctx, user)
+		return s.forgetBrowser(cliowner.With(ctx, c.identity), user)
 	case cleanCLIHome:
 		kind, id, _ := strings.Cut(c.target, ":")
 		user, err := strconv.ParseInt(id, 10, 64)
@@ -208,7 +212,7 @@ func (s *Service) runCleanup(ctx context.Context, c cleanup) error {
 		}
 		cctx, cancel := context.WithTimeout(ctx, cliForgetTimeout)
 		defer cancel()
-		return s.forgetCLI(cctx, kind, user)
+		return s.forgetCLI(cliowner.With(cctx, c.identity), kind, user)
 	case cleanProviders:
 		return s.syncProviders(ctx)
 	}
@@ -311,7 +315,8 @@ func (s *Service) forgetCLI(ctx context.Context, kind string, user int64) error 
 		return errWaiting
 	}
 	if kind == cliLocal && s.o.DataDir != "" {
-		if err := os.RemoveAll(filepath.Join(s.o.DataDir, "cli", "u"+strconv.FormatInt(user, 10))); err != nil {
+		identity, _ := cliowner.From(ctx)
+		if err := cliworker.ForgetLocal(cliworker.Layout{Root: filepath.Join(s.o.DataDir, "cli")}, identity, user); err != nil {
 			return failed(failFileRemove, err)
 		}
 	}

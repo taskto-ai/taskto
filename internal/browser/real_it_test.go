@@ -10,10 +10,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 func realHost(t *testing.T, needDisplay bool) *LocalHost {
@@ -25,7 +29,11 @@ func realHost(t *testing.T, needDisplay bool) *LocalHost {
 	if bins[Chromium] == "" || (needDisplay && (bins[Xvfb] == "" || bins[X11vnc] == "")) {
 		t.Fatalf("TASKTO_BROWSER_IT=1 but the programs aren't all installed: %v", bins)
 	}
-	return &LocalHost{Root: t.TempDir(), Bins: bins, Path: os.Getenv("PATH")}
+	root := t.TempDir()
+	home := func(a cliowner.Account) (string, error) {
+		return filepath.Join(root, "h"+strconv.FormatInt(1<<30+a.User, 10)), nil
+	}
+	return &LocalHost{Root: root, Home: home, Bins: bins, Path: os.Getenv("PATH")}
 }
 
 func newRealManager(t *testing.T, h *LocalHost, cfg Config) *Manager {
@@ -99,7 +107,7 @@ func do(t *testing.T, m *Manager, user int64, a Action) Result {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := m.Do(ctx, user, a)
+	res, err := m.Do(ctx, acct(user), a)
 	if err != nil {
 		t.Fatalf("%s: %v", a.Op, err)
 	}
@@ -108,7 +116,7 @@ func do(t *testing.T, m *Manager, user int64, a Action) Result {
 
 func status(t *testing.T, m *Manager, user int64) map[Kind]State {
 	t.Helper()
-	st, err := m.Status(context.Background(), user)
+	st, err := m.Status(context.Background(), acct(user))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,16 +180,16 @@ func TestRealTestingBrowser(t *testing.T) {
 		t.Fatalf("after the link: %+v", res.Tab)
 	}
 	ctx := context.Background()
-	if _, err := m.Do(ctx, 1, Action{Op: OpClick, Browser: Testing, Tab: tab.ID, Ref: "e1"}); !errors.Is(err, ErrStaleRef) {
+	if _, err := m.Do(ctx, acct(1), Action{Op: OpClick, Browser: Testing, Tab: tab.ID, Ref: "e1"}); !errors.Is(err, ErrStaleRef) {
 		t.Errorf("a ref from the page before: %v", err)
 	}
-	if _, err := m.Do(ctx, 1, Action{Op: OpSnapshot, Browser: Testing, Tab: "NOSUCHTAB"}); !errors.Is(err, ErrNoTab) {
+	if _, err := m.Do(ctx, acct(1), Action{Op: OpSnapshot, Browser: Testing, Tab: "NOSUCHTAB"}); !errors.Is(err, ErrNoTab) {
 		t.Errorf("an unknown tab: %v", err)
 	}
 
 	signIn(t, m, 1, Testing, site.URL)
 
-	s, err := m.session(ctx, 1, Testing, false)
+	s, err := m.session(ctx, acct(1), Testing, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +199,7 @@ func TestRealTestingBrowser(t *testing.T) {
 	if err := s.inst.cdp.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank"}, &mine); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Do(ctx, 1, Action{Op: OpClose, Browser: Testing, Tab: mine.TargetID}); !errors.Is(err, ErrNotAgentTab) {
+	if _, err := m.Do(ctx, acct(1), Action{Op: OpClose, Browser: Testing, Tab: mine.TargetID}); !errors.Is(err, ErrNotAgentTab) {
 		t.Errorf("closing the user's tab: %v", err)
 	}
 	do(t, m, 1, Action{Op: OpClose, Browser: Testing, Tab: tab.ID})
@@ -201,10 +209,11 @@ func TestRealTestingBrowser(t *testing.T) {
 		}
 	}
 
-	if err := m.Stop(context.Background(), 1, Testing); err != nil {
+	if err := m.Stop(context.Background(), acct(1), Testing); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(h.Paths(1).Testing()); !errors.Is(err, os.ErrNotExist) {
+	p, _ := h.Paths(acct(1))
+	if _, err := os.Stat(p.Testing()); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the testing profile is still there: %v", err)
 	}
 	again := do(t, m, 1, Action{Op: OpOpen, Browser: Testing, URL: site.URL + "/account"}).Tab
@@ -219,12 +228,12 @@ func TestRealPersonalBrowser(t *testing.T) {
 	m := newRealManager(t, h, Config{Idle: 2 * time.Second, Tick: 100 * time.Millisecond})
 	ctx := context.Background()
 
-	if _, err := m.OpenLive(ctx, 1); !errors.Is(err, ErrNotRunning) {
+	if _, err := m.OpenLive(ctx, acct(1)); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("a live view of no browser: %v", err)
 	}
 	signIn(t, m, 1, Personal, site.URL)
 
-	live, err := m.OpenLive(ctx, 1)
+	live, err := m.OpenLive(ctx, acct(1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +261,7 @@ func TestRealPersonalBrowser(t *testing.T) {
 	for _, open := range do(t, m, 1, Action{Op: OpTabs, Browser: Personal}).Tabs {
 		if open.Agent {
 			do(t, m, 1, Action{Op: OpClose, Browser: Personal, Tab: open.ID})
-		} else if _, err := m.Do(ctx, 1, Action{Op: OpClose, Browser: Personal, Tab: open.ID}); !errors.Is(err, ErrNotAgentTab) {
+		} else if _, err := m.Do(ctx, acct(1), Action{Op: OpClose, Browser: Personal, Tab: open.ID}); !errors.Is(err, ErrNotAgentTab) {
 			t.Errorf("closing the first tab, which the browser opened: %v", err)
 		}
 	}
@@ -265,10 +274,10 @@ func TestRealCap(t *testing.T) {
 	h := realHost(t, false)
 	m := newRealManager(t, h, Config{Max: 1})
 	ctx := context.Background()
-	if err := m.Start(ctx, 1, Testing); err != nil {
+	if err := m.Start(ctx, acct(1), Testing); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Start(ctx, 2, Testing); err != nil {
+	if err := m.Start(ctx, acct(2), Testing); err != nil {
 		t.Fatal(err)
 	}
 	if status(t, m, 1)[Testing].Running || !status(t, m, 2)[Testing].Running {

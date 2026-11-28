@@ -41,6 +41,10 @@ export function installScriptModel(models: ReturnType<typeof createModels>, prov
       for (const m of context.messages) if (m.role === 'system') Object.assign(sections, m.sections)
       return fauxAssistantMessage(fauxText(`system: ${Object.values(sections).join('\n')}`))
     }
+    if (text.trim() === 'context') {
+      const seen = context.messages.filter((m) => m.role !== 'system').map((m) => `${m.role}=${textOf(m.content)}`)
+      return fauxAssistantMessage(fauxText(`context: ${seen.join(' | ')}`))
+    }
     const call = /^tool:(?<name>[a-z_]+):(?<ms>\d+)$/.exec(text.trim())?.groups
     if (call?.name && call.ms) {
       return fauxAssistantMessage(fauxToolCall(call.name, { ms: Number(call.ms) }), { stopReason: 'toolUse' })

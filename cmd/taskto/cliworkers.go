@@ -67,6 +67,8 @@ func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key 
 		Layout:           cliworker.Layout{Root: filepath.Join(cfg.DataDir, "cli")},
 		Bins:             bins,
 		Path:             os.Getenv("PATH"),
+		AdoptLegacy:      true,
+		OneServer:        true,
 		UnsafePrivileged: cfg.UnsafePrivilegedAgents,
 	})
 	if err != nil {

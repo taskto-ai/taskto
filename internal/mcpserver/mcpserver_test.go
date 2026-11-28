@@ -17,6 +17,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/agenttools"
+	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
@@ -583,5 +584,36 @@ func TestAnAccessTokenGivesAnAppAnIconOnlyInItsOwnWorkspace(t *testing.T) {
 	}
 	if _, _, text := callTool(t, f.endpoint, tokenA, "show_app", map[string]any{"space_id": f.spaceA, "app_id": app.ID}); !strings.Contains(text, "🇧🇷") {
 		t.Fatalf("show_app = %q", text)
+	}
+}
+
+type notReadyBrowser struct{}
+
+func (notReadyBrowser) Call(context.Context, int64, int64, string, json.RawMessage) (any, error) {
+	return nil, &agenttools.Refusal{Status: http.StatusServiceUnavailable, Code: apierr.CodeCLIWorkerNotReady, Message: "the CLI worker isn't ready yet: try again in a moment"}
+}
+
+func TestForTurnsKeepsARefusalsCode(t *testing.T) {
+	f := newFixture(t)
+	tools := agenttools.New(agenttools.Options{DB: f.db, Browser: notReadyBrowser{}})
+	h := ForTurns("test", f.callerA, tools, true)
+	_, isError, text := callTool(t, h, "any-turn-token", "browser_tabs", map[string]any{})
+	if !isError || !strings.Contains(text, string(apierr.CodeCLIWorkerNotReady)) {
+		t.Errorf("browser_tabs = %v %q, want an error with the code %s", isError, text, apierr.CodeCLIWorkerNotReady)
+	}
+}
+
+func TestForTurnsKeepsATokenRefusalsCode(t *testing.T) {
+	f := newFixture(t)
+	h := f.forTurns(false, func(*http.Request) (agenttools.Caller, error) {
+		return agenttools.Caller{}, &agenttools.Refusal{Status: http.StatusServiceUnavailable, Code: apierr.CodeCLIWorkerNotReady, Message: "not ready"}
+	})
+	rec := rpc(t, h, "any-turn-token", "tools/list", map[string]any{})
+	var body struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != http.StatusServiceUnavailable || body.Code != string(apierr.CodeCLIWorkerNotReady) {
+		t.Errorf("a refused token = %d %s, want 503 with %s", rec.Code, rec.Body, apierr.CodeCLIWorkerNotReady)
 	}
 }

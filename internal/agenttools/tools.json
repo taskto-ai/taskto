@@ -1541,6 +1541,49 @@
                 "additionalProperties": false
               }
             },
+            "series": {
+              "type": "object",
+              "description": "up to 10 grouped aggregates; each /<name> value is {x:[{key,label}],series:[{key,label,values}]}; empty averages are null",
+              "maxProperties": 10,
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["count", "sum", "avg"]
+                  },
+                  "field": {
+                    "type": "string",
+                    "description": "required for sum and avg; a number field"
+                  },
+                  "group_by": {
+                    "type": "string",
+                    "description": "a choice, boolean, text or date field"
+                  },
+                  "bucket": {
+                    "type": "string",
+                    "enum": ["day", "week", "month"],
+                    "description": "required for date grouping"
+                  },
+                  "last": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 90,
+                    "description": "date buckets ending at the current bucket; defaults to 12"
+                  },
+                  "split_by": {
+                    "type": "string",
+                    "description": "optional choice or boolean field"
+                  },
+                  "where": {
+                    "type": "object",
+                    "description": "optional row rule"
+                  }
+                },
+                "required": ["kind", "group_by"],
+                "additionalProperties": false
+              }
+            },
             "integrations": {
               "type": "object",
               "description": "the outside services the app uses (version 3 of the format), by slot name (a lowercase letter, then lowercase letters, digits or _; at most 4 slots). A slot names a KIND of service, never a provider, an address, a key or an integration: an admin binds it to an account when approving the app. The server works out the slot's contract (what the app sends out and which fields the service may write back) and an admin approves its hash; a draft with an unapproved contract can't be published, and any change to what is sent or written is a new contract. You can't ask for approval, approve or read anything about accounts",
@@ -2033,6 +2076,49 @@
                   }
                 },
                 "required": ["kind"],
+                "additionalProperties": false
+              }
+            },
+            "series": {
+              "type": "object",
+              "description": "up to 10 grouped aggregates; each /<name> value is {x:[{key,label}],series:[{key,label,values}]}; empty averages are null",
+              "maxProperties": 10,
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["count", "sum", "avg"]
+                  },
+                  "field": {
+                    "type": "string",
+                    "description": "required for sum and avg; a number field"
+                  },
+                  "group_by": {
+                    "type": "string",
+                    "description": "a choice, boolean, text or date field"
+                  },
+                  "bucket": {
+                    "type": "string",
+                    "enum": ["day", "week", "month"],
+                    "description": "required for date grouping"
+                  },
+                  "last": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 90,
+                    "description": "date buckets ending at the current bucket; defaults to 12"
+                  },
+                  "split_by": {
+                    "type": "string",
+                    "description": "optional choice or boolean field"
+                  },
+                  "where": {
+                    "type": "object",
+                    "description": "optional row rule"
+                  }
+                },
+                "required": ["kind", "group_by"],
                 "additionalProperties": false
               }
             },

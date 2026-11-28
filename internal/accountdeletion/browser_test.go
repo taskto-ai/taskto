@@ -1,6 +1,8 @@
 package accountdeletion
 
 import (
+	"taskto.ai/taskto/internal/cliowner"
+
 	"context"
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ type fakeBrowsers struct {
 	running map[int64]bool
 	calls   []int64
 	fail    error
+	named   string
 }
 
 func newFakeBrowsers(dir string) *fakeBrowsers {
@@ -52,10 +55,11 @@ func (f *fakeBrowsers) profileExists(user int64) bool {
 	return err == nil
 }
 
-func (f *fakeBrowsers) Forget(_ context.Context, user int64) error {
+func (f *fakeBrowsers) Forget(ctx context.Context, user int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, user)
+	f.named, _ = cliowner.From(ctx)
 	if f.fail != nil {
 		return f.fail
 	}
@@ -73,9 +77,11 @@ type orderedCLI struct {
 	fakeCLI
 	browsers *fakeBrowsers
 	ranWith  []int64
+	named    string
 }
 
 func (c *orderedCLI) Forget(ctx context.Context, user int64) error {
+	c.named, _ = cliowner.From(ctx)
 	if c.browsers.isRunning(user) {
 		c.ranWith = append(c.ranWith, user)
 	}
@@ -214,5 +220,21 @@ func TestPurgeWithoutAgentBrowsers(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM purge_cleanups`); n != 0 {
 		t.Errorf("%d steps remain", n)
+	}
+}
+
+func TestPurgeNamesTheAccountWhoseFilesGo(t *testing.T) {
+	ctx := context.Background()
+	w, b, cli := browserWorld(t)
+	var identity string
+	if err := w.db.QueryRow(`SELECT cli_identity FROM users WHERE id = ?`, w.leaver).Scan(&identity); err != nil || identity == "" {
+		t.Fatalf("identity = %q %v", identity, err)
+	}
+	w.deleteAccount()
+	if err := w.svc.Purge(ctx, w.leaver); err != nil {
+		t.Fatal(err)
+	}
+	if b.named != identity || cli.named != identity {
+		t.Errorf("the steps named %q (browsers) and %q (CLI worker), want the account's %q", b.named, cli.named, identity)
 	}
 }

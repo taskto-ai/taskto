@@ -107,6 +107,10 @@ linters:
         linters: [gosec]
         text: 'G122'
         source: 'if b, err := os\.ReadFile\(path\); err == nil && strings\.Contains\(string\(b\), key\) \{'
+      - path: '^internal/cliworker/reconcile_test\.go$'
+        linters: [gosec]
+        text: 'G122'
+        source: 'if b, err := os\.ReadFile\(p\); err == nil && strings\.Contains\(string\(b\), id\) \{'
       # Secure is off only with the operator's insecure_cookies, or in a test client.
       - path: '^cmd/taskto/install_test\.go$'
         linters: [gosec]
@@ -207,7 +211,7 @@ linters:
       - path: '^internal/browser/procs\.go$'
         linters: [gosec]
         text: 'G302'
-        source: 'return os\.Chmod\(dir, 0o700\)'
+        source: 'return os\.Chmod\(dir, 0o700\)|if err := os\.Chmod\(path, 0o700\); err != nil \{'
       - path: '^internal/cliworker/approve\.go$'
         linters: [gosec]
         text: 'G302'
@@ -216,6 +220,10 @@ linters:
         linters: [gosec]
         text: 'G302'
         source: 'if err := os\.Chmod\(dir, 0o700\); err != nil \{'
+      - path: '^internal/cliworker/owner\.go$'
+        linters: [gosec]
+        text: 'G302'
+        source: 'return os\.Chmod\(path, 0o700\)'
       - path: '^internal/providers/feed\.go$'
         linters: [gosec]
         text: 'G302'
@@ -233,6 +241,15 @@ linters:
         linters: [gosec]
         text: 'G304|G703'
         source: 'f, err := os\.OpenFile\(path, os\.O_RDWR\|os\.O_CREATE\|noFollow, 0o600\)'
+      # The worker's own state files and directories, under the volume it owns and locks.
+      - path: '^internal/cliworker/accounts\.go$'
+        linters: [gosec]
+        text: 'G304'
+        source: 'd, err := os\.Open\(path\)'
+      - path: '^internal/cliworker/volume\.go$'
+        linters: [gosec]
+        text: 'G304'
+        source: 'b, err := os\.ReadFile\(path\)'
       # The generated source file is committed and readable like every other source file.
       - path: '^internal/apitypes/generate/main\.go$'
         linters: [gosec]

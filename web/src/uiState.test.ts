@@ -19,6 +19,7 @@ afterEach(() => localStorage.clear())
 test("another account signing in on this browser finds none of the last one's unsent drafts", () => {
   claimDrafts(1)
   writeState('taskto:message:/api/workspaces/1/conversations/5', 'half a thought')
+  writeState('taskto:note:/api/workspaces/1/conversations/5', 'a private remark')
   writeState('taskto:builder-start:1:private', 'an expense tracker')
   writeState('taskto:builder:1:last', '5')
   writeState('taskto:theme', 'dark')
@@ -28,6 +29,7 @@ test("another account signing in on this browser finds none of the last one's un
 
   claimDrafts(2)
   expect(readState('taskto:message:/api/workspaces/1/conversations/5')).toBeNull()
+  expect(readState('taskto:note:/api/workspaces/1/conversations/5')).toBeNull()
   expect(readState('taskto:builder-start:1:private')).toBeNull()
   expect(readState('taskto:builder:1:last')).toBeNull()
   expect(readState('taskto:theme')).toBe('dark')
@@ -168,4 +170,13 @@ test("a claim that changes hands keeps the claiming account's pending submission
   }).catch(() => {})
   expect(again).toBe(first)
   forgetDrafts()
+})
+
+test("forgetting an account's drafts removes its unsent notes too", () => {
+  claimDrafts(1)
+  const key = draftKey('note', 'c1')
+  writeDraft(key, 'a private remark')
+  expect(readState(key as string)).toBe('a private remark')
+  forgetDraftsOf(1)
+  expect(readState(key as string)).toBeNull()
 })

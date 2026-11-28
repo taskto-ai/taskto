@@ -25,7 +25,18 @@ const THEMED_BY: Record<string, string[]> = {
   Text: ['.a2ui-text.a2ui-text-caption'],
   TextField: ['.a2ui-textfield', 'a2ui-basic-textfield > label'],
 }
-const OWN = ['BarcodeInput', 'LocationInput', 'PhotoInput', 'Photos', 'Screens', 'Show', 'SignatureInput', 'Stat']
+const OWN = [
+  'BarcodeInput',
+  'LocationInput',
+  'Markdown',
+  'PhotoInput',
+  'Photos',
+  'Screens',
+  'Show',
+  'SignatureInput',
+  'Stat',
+  'Table',
+]
 
 const CONTROLS = [
   '.a2ui-button',

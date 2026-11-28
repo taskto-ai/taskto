@@ -16,7 +16,8 @@ import (
 
 func TestTurnThroughTheProxy(t *testing.T) {
 	h := newHarness(t, nil)
-	dirs, err := h.layout.Ensure(1)
+	h.introduce(t, 1, 2)
+	dirs, err := h.layout.Ensure(h.w.HomeForTest(acct(1)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,14 +91,15 @@ func TestTurnThroughTheProxy(t *testing.T) {
 
 func TestRemoteHidesTheProxyToken(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	r := serve(t, h)
 	s := spec("remote-proxy", 1, cliworker.Grok, "hello")
 	s.Slot, s.Proxy = "s2", &cliworker.Proxy{URL: "http://taskto:8081", Token: "tt1.payload-for-the-test.signature"}
 	if _, _, err := r.StartTurn(s); err != nil {
 		t.Fatal(err)
 	}
-	found, ok := r.FindTurn(s.ID)
-	if !ok {
+	found, err := r.FindTurn(acct(s.User), s.ID)
+	if err != nil {
 		t.Fatal("turn not found")
 	}
 	if p := found.Spec().Proxy; p == nil || p.Token != "" || p.URL != "http://taskto:8081" {
