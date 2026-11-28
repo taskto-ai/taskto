@@ -2,12 +2,15 @@ package conversations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/apierr"
@@ -269,4 +272,104 @@ func TestAModelChosenWhileAMentionsSendFailsIsKept(t *testing.T) {
 	if got := e.rt.models[agent]; got != chosen {
 		t.Fatalf("the model is %+v after the failed send, want the owner's choice %+v", got, chosen)
 	}
+}
+
+func apiErrorCode(t *testing.T, body []byte) string {
+	t.Helper()
+	var e struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(body, &e); err != nil {
+		t.Fatalf("decode %q: %v", body, err)
+	}
+	return e.Code
+}
+
+func TestTheOwnersModelChangeGivesUpOnAHeldModel(t *testing.T) {
+	e := newEnv(t, false)
+	e.svc.modelWait = 50 * time.Millisecond
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	send := path(ws, fmt.Sprintf("/%d/messages", c.ID))
+	chosen := agentrt.ModelRef{Provider: fmt.Sprintf("ws%d-gateway", ws), ModelID: "m"}
+	agent := c.agentIDForTest(t, e)
+
+	submitting, release := make(chan struct{}), make(chan struct{})
+	e.rt.mu.Lock()
+	e.rt.onSubmit = func() {
+		close(submitting)
+		<-release
+	}
+	e.rt.mu.Unlock()
+
+	sent := make(chan int, 1)
+	go func() { sent <- owner.do(http.MethodPost, send, mention("cli-codex", "default", "hello")).Code }()
+	<-submitting
+	e.rt.mu.Lock()
+	during := e.rt.models[agent]
+	e.rt.mu.Unlock()
+
+	set := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		set <- owner.do(http.MethodPut, path(ws, fmt.Sprintf("/%d/model", c.ID)), map[string]any{"provider": chosen.Provider, "model_id": chosen.ModelID})
+	}()
+	var rec *httptest.ResponseRecorder
+	select {
+	case rec = <-set:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("the model change was still waiting for a held model long after its bound")
+	}
+	if rec.Code != http.StatusConflict || apiErrorCode(t, rec.Body.Bytes()) != string(apierr.CodeConversationBusy) {
+		t.Fatalf("the model change answered %d %s, want 409 conversation_busy", rec.Code, rec.Body.String())
+	}
+	e.rt.mu.Lock()
+	after := e.rt.models[agent]
+	e.rt.mu.Unlock()
+	if after != during {
+		t.Fatalf("the refused model change moved the model from %+v to %+v", during, after)
+	}
+	close(release)
+	if code := <-sent; code != http.StatusAccepted {
+		t.Fatalf("the mention's send answered %d, want 202", code)
+	}
+}
+
+func TestAStalledSendEndsAtItsDeadlineAndFreesTheHold(t *testing.T) {
+	e := newEnv(t, false)
+	e.svc.holdLimit = 50 * time.Millisecond
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	send := path(ws, fmt.Sprintf("/%d/messages", c.ID))
+	chosen := agentrt.ModelRef{Provider: fmt.Sprintf("ws%d-gateway", ws), ModelID: "m"}
+	agent := c.agentIDForTest(t, e)
+
+	e.rt.mu.Lock()
+	e.rt.stallSend = true
+	before := e.rt.models[agent]
+	e.rt.mu.Unlock()
+
+	sent := make(chan int, 1)
+	go func() { sent <- owner.do(http.MethodPost, send, mention("cli-codex", "default", "hello")).Code }()
+	select {
+	case code := <-sent:
+		if code != http.StatusServiceUnavailable {
+			t.Fatalf("the stalled send answered %d, want 503", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stalled send never ended")
+	}
+	e.rt.mu.Lock()
+	got := e.rt.models[agent]
+	e.rt.mu.Unlock()
+	if got != before {
+		t.Fatalf("the model is %+v after the stalled send, want it put back to %+v", got, before)
+	}
+	e.svc.mu.Lock()
+	holds := len(e.svc.modelHolds)
+	e.svc.mu.Unlock()
+	if holds != 0 {
+		t.Fatalf("%d model holds are left after the stalled send ended", holds)
+	}
+	owner.expect(http.StatusOK, http.MethodPut, path(ws, fmt.Sprintf("/%d/model", c.ID)), map[string]any{"provider": chosen.Provider, "model_id": chosen.ModelID})
 }

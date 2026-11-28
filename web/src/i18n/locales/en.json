@@ -1057,6 +1057,7 @@
     "conversation_title_invalid": "A title can have at most {max} characters, and no control characters.",
     "conversation_lost": "The agent no longer has this conversation's content. An operator can find out why in the server's log.",
     "conversation_no_model": "This conversation has no model: choose one.",
+    "conversation_busy": "A message is changing this conversation's model. Try again in a moment.",
     "agent_off": "The agent is off on this server.",
     "agent_not_ready": "The agent is starting: try again in a moment.",
     "model_unknown": "That model isn't available to you.",

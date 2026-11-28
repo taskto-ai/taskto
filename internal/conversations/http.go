@@ -324,19 +324,23 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	user, _ := caller(r)
 	var before agentrt.ModelRef
+	ctx := r.Context()
 	if switchTo != nil {
-		done, err := s.holdModel(r.Context(), c.ID)
+		done, err := s.holdModel(ctx, c.ID)
 		if err != nil {
 			return
 		}
 		defer done()
-		was, err := rt.Model(r.Context(), c.agentID)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.holdLimit)
+		defer cancel()
+		was, err := rt.Model(ctx, c.agentID)
 		if err != nil {
 			conversationError(w, r, c, err)
 			return
 		}
 		before = was
-		if err := rt.SetModel(r.Context(), c.agentID, *switchTo); err != nil {
+		if err := rt.SetModel(ctx, c.agentID, *switchTo); err != nil {
 			conversationError(w, r, c, err)
 			return
 		}
@@ -360,15 +364,17 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	if s.capability != nil {
 		in.Capability = s.capability(c.ID, c.agentID)
 	}
-	model, _ := rt.Model(r.Context(), c.agentID)
-	if err := s.ensureUsageMark(r.Context(), rt, c.ID, c.agentID); err != nil {
+	model, _ := rt.Model(ctx, c.agentID)
+	if err := s.ensureUsageMark(ctx, rt, c.ID, c.agentID); err != nil {
 		conversationError(w, r, c, err)
 		return
 	}
-	sub, err := rt.Submit(r.Context(), c.agentID, in)
+	sub, err := rt.Submit(ctx, c.agentID, in)
 	if err != nil {
 		if switchTo != nil {
-			if back := rt.SetModel(context.WithoutCancel(r.Context()), c.agentID, before); back != nil {
+			backCtx, stop := context.WithTimeout(context.WithoutCancel(r.Context()), putBackLimit)
+			defer stop()
+			if back := rt.SetModel(backCtx, c.agentID, before); back != nil {
 				slog.WarnContext(r.Context(), "conversations: putting back the model after a mention's send failed", "conversation", c.ID, "err", back)
 			}
 		}
@@ -493,8 +499,13 @@ func (s *Service) handleSetModel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	done, err := s.holdModel(r.Context(), c.ID)
+	waitCtx, stopWaiting := context.WithTimeout(r.Context(), s.modelWait)
+	done, err := s.holdModel(waitCtx, c.ID)
+	stopWaiting()
 	if err != nil {
+		if r.Context().Err() == nil {
+			writeError(w, http.StatusConflict, apierr.CodeConversationBusy, "the conversation's model is being changed by a message: try again in a moment")
+		}
 		return
 	}
 	defer done()

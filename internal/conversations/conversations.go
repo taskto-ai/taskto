@@ -60,6 +60,8 @@ type Service struct {
 	modelHolds map[int64]*modelHold
 
 	readyWait     time.Duration
+	modelWait     time.Duration
+	holdLimit     time.Duration
 	exportTimeout time.Duration
 	heartbeat     time.Duration
 	writeTimeout  time.Duration
@@ -72,7 +74,7 @@ func New(sqlDB *sql.DB, agent Agent) *Service {
 	closing, end := context.WithCancel(context.Background())
 	return &Service{
 		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{}, modelHolds: map[int64]*modelHold{},
-		readyWait: 5 * time.Second, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
+		readyWait: 5 * time.Second, modelWait: modelWait, holdLimit: holdLimit, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
 		maxStreams: 16,
 	}
 }
@@ -173,6 +175,12 @@ func (s *Service) touch(ctx context.Context, id, agentID int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND agent_id = ?`, id, agentID)
 	return err
 }
+
+const (
+	modelWait    = 3 * time.Second
+	holdLimit    = 20 * time.Second
+	putBackLimit = 5 * time.Second
+)
 
 type modelHold struct {
 	turn  chan struct{}

@@ -324,6 +324,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `conversation_title_invalid` | 400 | A title must have at most `max` printable characters. |
 | `conversation_lost` | 410 | The agent runtime no longer has the conversation's content. |
 | `conversation_no_model` | 409 | The conversation has no model: choose one. |
+| `conversation_busy` | 409 | A message that names an agent is still changing the conversation's model, so `PUT …/model` gave up waiting for it (a few seconds). Nothing changed. |
 | `agent_off` | 503 | The agent runtime is off: the server runs without `-agent`. |
 | `agent_not_ready` | 503 | The agent runtime is starting or restarting; `Retry-After` says when to try again. |
 | `model_unknown` | 400 | The caller may not use that model, or it isn't configured. |
@@ -5720,6 +5721,12 @@ switched or sent. The reply then also names the model:
 (`model` is absent when the message had no token). Conversations belong to their owner, so
 nobody else can send to one and so nobody else can switch its model this way.
 
+While such a message is being sent it holds the conversation's model. `PUT …/model` waits for
+that hold for a few seconds only, then answers `409 conversation_busy` and changes nothing; the
+owner may try again. The send itself runs under a deadline (twenty seconds) covering the read
+and switch of the model and the submission, so a runtime that stops answering ends the send
+with `503`, the model put back, and the hold released.
+
 Each person-sent message is stored as a `taskto.input` entry. Its `data` includes version `1`
 and the sender's user ID; optional `text` and `attached` fields preserve the original text and
 conversation links separately from the content sent to the model. Exported conversations keep
@@ -5762,7 +5769,8 @@ What the model sees next, simplified to role and text:
 `GET` answers the conversation's model. `PUT` with a model switches to it from the
 conversation's next model request on, also in the middle of a run: `200` with the model;
 `400 unknown model` for one the caller may not use or that isn't configured; `409` for an
-archived conversation.
+archived conversation; `409 conversation_busy` when a message that names an agent is still
+changing the model (the `PUT` waits a few seconds for it, then changes nothing).
 
 ### `POST /api/workspaces/{workspace}/conversations/{conversation}/stop`
 
