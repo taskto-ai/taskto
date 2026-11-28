@@ -49,6 +49,15 @@
     white-space: nowrap;
   }
 
+  .ui-chat-origin {
+    flex: none;
+    padding: 0 var(--space-1);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-muted);
+    font: var(--type-caption);
+  }
+
   .ui-chat-rows .ui-row[data-current] .ui-row-title {
     font: var(--type-ui-strong);
   }
@@ -494,6 +503,37 @@
   .ui-chat-send {
     inline-size: var(--control-md);
     padding-inline: 0;
+  }
+
+  .ui-chat-agents {
+    display: grid;
+    margin: 0;
+    padding: var(--space-1);
+    list-style: none;
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    max-block-size: 12rem;
+    overflow-y: auto;
+  }
+
+  .ui-chat-agent {
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font: var(--type-small);
+    overflow-wrap: anywhere;
+  }
+
+  .ui-chat-agent[data-active] {
+    background: var(--color-hover);
+  }
+
+  .ui-chat-agent-chip {
+    padding-inline: var(--space-1);
+    border-radius: var(--radius-sm);
+    background: var(--color-hover);
+    font-weight: 600;
   }
 
   .ui-chat-model {

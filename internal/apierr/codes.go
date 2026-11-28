@@ -243,6 +243,7 @@ const (
 	CodeAgentNotReady            Code = "agent_not_ready"
 	CodeModelUnknown             Code = "model_unknown"
 	CodeTooManyStreams           Code = "too_many_streams"
+	CodeLiveClosed               Code = "live_closed"
 	CodeCLIPermissionNotFound    Code = "cli_permission_not_found"
 
 	CodeBrowserOff            Code = "browser_off"

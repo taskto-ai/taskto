@@ -325,13 +325,14 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `conversation_title_invalid` | 400 | A title must have at most `max` printable characters. |
 | `conversation_lost` | 410 | The agent runtime no longer has the conversation's content. |
 | `conversation_no_model` | 409 | The conversation has no model: choose one. |
-| `conversation_busy` | 409 | The conversation is working: a continue is only for an idle one. |
+| `conversation_busy` | 409 | The conversation is working: a continue is only for an idle one. Also, a message that names an agent is still changing the conversation's model, so `PUT …/model` gave up waiting for it (a few seconds), and nothing changed. |
 | `conversation_moved` | 409 | The conversation has entries after the one the continue was for: it was already continued, or changed meanwhile. |
 | `model_unavailable` | 409 | The caller can't run that model now: a CLI whose account isn't connected, or that the member's account mode leaves no account for. |
 | `agent_off` | 503 | The agent runtime is off: the server runs without `-agent`. |
 | `agent_not_ready` | 503 | The agent runtime is starting or restarting; `Retry-After` says when to try again. |
 | `model_unknown` | 400 | The caller may not use that model, or it isn't configured. |
-| `too_many_streams` | 429 | The caller has `max` event streams open: close one first. |
+| `too_many_streams` | 429 | The caller has `max` event streams open (conversations and live resources count separately): close one first. |
+| `live_closed` | 503 | A live stream was asked for while the server is shutting down. |
 | `cli_permission_not_found` | 404 | The CLI's question isn't waiting: answered already, timed out, or its turn is over. |
 | `browser_off` | 409 | The agent browser is off: the server runs without `-browser`. |
 | `browser_cli_workers_off` | 409 | The CLI workers the browser runs with are off. |
@@ -4245,7 +4246,7 @@ explorer offers to filter or sort by none of those three, and offers a filter on
 type takes.
 
 A barcode's text is taken as it was read: a line break, a tab or any other control character in it, even around
-it, is `422 app_field_not_barcode` (only spaces are trimmed). A `captured_at` must have a real zone: `Z` or an
+it, is `422 app_field_not_barcode` (only the spaces that are not control characters, such as the space and the no-break space, are trimmed from its ends; a text of nothing but spaces and line breaks, such as a lone tab, is left out like an empty one and is not refused). A `captured_at` must have a real zone: `Z` or an
 offset of at most `23:59` (`+24:60` is no time).
 
 The agent sees these values in `list_app_rows` (a signature as the picture's metadata, never its bytes) and has no
@@ -5655,13 +5656,16 @@ conversation's content`) on those routes. The server logs it, and an operator ca
 A conversation as the API shows it:
 
 ```json
-{"id": 7, "workspace_id": 1, "title": "Plans", "archived_at": null, "created_at": "…", "updated_at": "…", "cli_permissions": "ask"}
+{"id": 7, "workspace_id": 1, "title": "Plans", "archived_at": null, "created_at": "…", "updated_at": "…", "cli_permissions": "ask", "origin": null}
 ```
 
 - `title`: up to 200 printable characters, trimmed; may be empty.
 - `archived_at`: when the owner archived it, or `null`. An archived conversation can be read
   and streamed, but not sent to or switched to another model (`409`) until it is unarchived.
 - `updated_at`: the last rename, archive or message.
+- `origin`: `null` for a conversation someone started themselves; for one the server
+  started, it identifies whether an app or routine started it and the relevant space, app or
+  routine IDs. The deduplication key stays private.
 - `cli_permissions`: on a CLI worker, `ask` (the default: the CLI asks the owner before it
   runs a command, edits a file or fetches a page) or `allow_all` (nothing asks). See
   [Permission questions](#permission-questions) and [agent-safety.md](agent-safety.md).
@@ -5752,6 +5756,24 @@ Sends a message: `{"content": "…", "when_busy": "steer", "request_id": "…", 
 `202 {"submission_id": 12}`; the answer arrives through the events stream. `409` for an
 archived conversation.
 
+A message that starts with an agent token, `@[Codex](agent:<provider>/<model id>)` (the label
+is up to 100 characters with no brackets, backslash or line break; the token is followed by
+whitespace or ends the message), moves the conversation to that model before the message is
+sent, with the hand-off that `PUT …/model` does: the web app's `@` menu inserts one. Only a
+token at the very start counts; one anywhere else is text. The token stays in the message, so
+the agent sees who was addressed. The model is checked as `PUT …/model` checks it: `400
+model_unknown` for one the caller may not use or that isn't configured, and then nothing is
+switched or sent. The reply then also names the model:
+`202 {"submission_id": 12, "model": {"provider": "cli-codex", "model_id": "default"}}`
+(`model` is absent when the message had no token). Conversations belong to their owner, so
+nobody else can send to one and so nobody else can switch its model this way.
+
+While such a message is being sent it holds the conversation's model. `PUT …/model` waits for
+that hold for a few seconds only, then answers `409 conversation_busy` and changes nothing; the
+owner may try again. The send itself runs under a deadline (twenty seconds) covering the read
+and switch of the model and the submission, so a runtime that stops answering ends the send
+with `503`, the model put back, and the hold released.
+
 Each person-sent message is stored as a `taskto.input` entry. Its `data` includes version `1`
 and the sender's user ID; optional `text` and `attached` fields preserve the original text and
 conversation links separately from the content sent to the model. Exported conversations keep
@@ -5794,7 +5816,8 @@ What the model sees next, simplified to role and text:
 `GET` answers the conversation's model. `PUT` with a model switches to it from the
 conversation's next model request on, also in the middle of a run: `200` with the model;
 `400 unknown model` for one the caller may not use or that isn't configured; `409` for an
-archived conversation.
+archived conversation; `409 conversation_busy` when a message that names an agent is still
+changing the model (the `PUT` waits a few seconds for it, then changes nothing).
 
 ### `GET /api/workspaces/{workspace}/conversations/{conversation}/continue-models`
 

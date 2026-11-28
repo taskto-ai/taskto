@@ -28,32 +28,37 @@ import (
 const password = "a-long-enough-password"
 
 type fakeRuntime struct {
-	mu         sync.Mutex
-	next       int64
-	models     map[int64]agentrt.ModelRef
-	created    []agentrt.ModelRef
-	inputs     map[int64][]agentrt.Input
-	notes      map[int64][]agentrt.NoteInput
-	watches    []*fakeWatch
-	aborts     map[int64]int
-	resumes    map[int64]int
-	resumed    []continueCall
-	sets       int
-	err        error
-	onAbort    func(ctx context.Context)
-	replies    map[int64][]agentrt.Message
-	rawEntries map[int64][]json.RawMessage
-	settle     chan struct{}
-	waited     atomic.Int64
-	waitErr    error
-	onEntries  func()
-	onContinue func()
+	mu           sync.Mutex
+	next         int64
+	models       map[int64]agentrt.ModelRef
+	created      []agentrt.ModelRef
+	inputs       map[int64][]agentrt.Input
+	notes        map[int64][]agentrt.NoteInput
+	calls        []string
+	watches      []*fakeWatch
+	aborts       map[int64]int
+	resumes      map[int64]int
+	resumed      []continueCall
+	sets         int
+	err          error
+	onAbort      func(ctx context.Context)
+	replies      map[int64][]agentrt.Message
+	rawEntries   map[int64][]json.RawMessage
+	settle       chan struct{}
+	waited       atomic.Int64
+	waitErr      error
+	submitErr    error
+	onSubmit     func()
+	stallSend    bool
+	stallPutBack bool
+	onEntries    func()
+	onContinue   func()
 }
 
 var setupToken = auth.NewSetupToken()
 
 func newFakeRuntime() *fakeRuntime {
-	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, notes: map[int64][]agentrt.NoteInput{}, aborts: map[int64]int{}, resumes: map[int64]int{}}
+	return &fakeRuntime{next: 100, models: map[int64]agentrt.ModelRef{}, inputs: map[int64][]agentrt.Input{}, notes: map[int64][]agentrt.NoteInput{}, aborts: map[int64]int{}, replies: map[int64][]agentrt.Message{}, resumes: map[int64]int{}}
 }
 
 var defaultModel = agentrt.ModelRef{Provider: "script", ModelID: "script-1"}
@@ -73,13 +78,35 @@ func (f *fakeRuntime) CreateConversationOn(_ context.Context, model agentrt.Mode
 	return f.next, nil
 }
 
-func (f *fakeRuntime) Submit(_ context.Context, conv int64, in agentrt.Input) (int64, error) {
+func (f *fakeRuntime) Submit(ctx context.Context, conv int64, in agentrt.Input) (int64, error) {
+	f.mu.Lock()
+	hook := f.onSubmit
+	stall := f.stallSend
+	f.mu.Unlock()
+	if stall {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return 0, f.err
 	}
+	if f.submitErr != nil {
+		return 0, f.submitErr
+	}
+	if in.RequestID != "" {
+		for i, prior := range f.inputs[conv] {
+			if prior.RequestID == in.RequestID {
+				return int64(1000 + i + 1), nil
+			}
+		}
+	}
 	f.inputs[conv] = append(f.inputs[conv], in)
+	f.calls = append(f.calls, "submit")
 	return int64(1000 + len(f.inputs[conv])), nil
 }
 
@@ -149,13 +176,19 @@ func (f *fakeRuntime) Model(_ context.Context, conv int64) (agentrt.ModelRef, er
 	return f.models[conv], f.err
 }
 
-func (f *fakeRuntime) SetModel(_ context.Context, conv int64, model agentrt.ModelRef) error {
+func (f *fakeRuntime) SetModel(ctx context.Context, conv int64, model agentrt.ModelRef) error {
 	f.mu.Lock()
+	if f.stallPutBack && len(f.calls) > 0 && strings.HasPrefix(f.calls[len(f.calls)-1], "set-model ") {
+		f.mu.Unlock()
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
 	f.models[conv] = model
+	f.calls = append(f.calls, "set-model "+model.Provider+"/"+model.ModelID)
 	f.sets++
 	return nil
 }

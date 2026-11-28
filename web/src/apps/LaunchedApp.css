@@ -2,4 +2,22 @@
   .ui-launched-loading {
     display: grid;
   }
+
+  .ui-standalone {
+    position: relative;
+    block-size: 100%;
+    background: var(--color-bg);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  .ui-standalone-main {
+    block-size: 100%;
+    min-inline-size: 0;
+    min-block-size: 0;
+  }
+
+  .ui-standalone-main:focus {
+    outline: none;
+  }
 }

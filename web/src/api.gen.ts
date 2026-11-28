@@ -568,6 +568,14 @@ export type Conversation = {
   created_at: string
   updated_at: string
   cli_permissions: string
+  origin: ConversationOrigin | null
+}
+
+export type ConversationOrigin = {
+  kind: string
+  space_id?: number
+  app_id?: number
+  routine_id?: number
 }
 
 export type ConversationsModelRef = {
@@ -919,6 +927,11 @@ export type SearchResult = {
 export type SearchSegment = {
   text: string
   match?: boolean
+}
+
+export type SendReply = {
+  submission_id: number
+  model?: ConversationsModelRef
 }
 
 export type Space = {

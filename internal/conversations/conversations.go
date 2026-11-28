@@ -52,16 +52,21 @@ type Service struct {
 	questions    CLIQuestions
 	models       Models
 	language     func(r *http.Request, browser string) string
+	userLanguage func(ctx context.Context, user int64) string
 	watchSession func(r *http.Request, every time.Duration) (context.Context, context.CancelFunc)
 
 	closing    context.Context
 	endStreams context.CancelFunc
 
-	mu      sync.Mutex
-	streams map[int64]int
-	guards  map[int64]*guard
+	mu         sync.Mutex
+	streams    map[int64]int
+	modelHolds map[int64]*modelHold
+	guards     map[int64]*guard
 
 	readyWait     time.Duration
+	modelWait     time.Duration
+	holdLimit     time.Duration
+	putBackLimit  time.Duration
 	exportTimeout time.Duration
 	heartbeat     time.Duration
 	writeTimeout  time.Duration
@@ -73,8 +78,8 @@ type Service struct {
 func New(sqlDB *sql.DB, agent Agent) *Service {
 	closing, end := context.WithCancel(context.Background())
 	return &Service{
-		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{}, guards: map[int64]*guard{},
-		readyWait: 5 * time.Second, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
+		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{}, modelHolds: map[int64]*modelHold{}, guards: map[int64]*guard{},
+		readyWait: 5 * time.Second, modelWait: modelWait, holdLimit: holdLimit, putBackLimit: putBackLimit, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
 		maxStreams: 16,
 	}
 }
@@ -131,24 +136,41 @@ func (s *Service) lock(ctx context.Context, id int64) (func(), bool) {
 func (s *Service) EndStreams() { s.endStreams() }
 
 type Conversation struct {
-	ID             int64   `json:"id"`
-	WorkspaceID    int64   `json:"workspace_id"`
-	Title          string  `json:"title"`
-	ArchivedAt     *string `json:"archived_at"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
-	CLIPermissions string  `json:"cli_permissions"`
+	ID             int64               `json:"id"`
+	WorkspaceID    int64               `json:"workspace_id"`
+	Title          string              `json:"title"`
+	ArchivedAt     *string             `json:"archived_at"`
+	CreatedAt      string              `json:"created_at"`
+	UpdatedAt      string              `json:"updated_at"`
+	CLIPermissions string              `json:"cli_permissions"`
+	Origin         *ConversationOrigin `json:"origin"`
 
 	agentID int64
 }
 
+type ConversationOrigin struct {
+	Kind      string `json:"kind"`
+	SpaceID   int64  `json:"space_id,omitempty"`
+	AppID     int64  `json:"app_id,omitempty"`
+	RoutineID int64  `json:"routine_id,omitempty"`
+}
+
 var errNotFound = errors.New("conversation not found")
 
-const columns = `id, workspace_id, agent_id, title, archived_at, created_at, updated_at, cli_permissions`
+const columns = `id, workspace_id, agent_id, title, archived_at, created_at, updated_at, cli_permissions,
+	CASE WHEN origin IS NULL THEN NULL ELSE json_object('kind', origin_kind, 'space_id', origin_space_id, 'app_id', origin_app_id, 'routine_id', origin_routine_id) END`
 
 func scan(row interface{ Scan(...any) error }) (Conversation, error) {
 	var c Conversation
-	err := row.Scan(&c.ID, &c.WorkspaceID, &c.agentID, &c.Title, &c.ArchivedAt, &c.CreatedAt, &c.UpdatedAt, &c.CLIPermissions)
+	var origin sql.NullString
+	err := row.Scan(&c.ID, &c.WorkspaceID, &c.agentID, &c.Title, &c.ArchivedAt, &c.CreatedAt, &c.UpdatedAt, &c.CLIPermissions, &origin)
+	if err == nil && origin.Valid {
+		var value ConversationOrigin
+		err = json.Unmarshal([]byte(origin.String), &value)
+		if err == nil {
+			c.Origin = &value
+		}
+	}
 	return c, err
 }
 
@@ -207,4 +229,44 @@ func (s *Service) update(ctx context.Context, workspace, user, id int64, title *
 func (s *Service) touch(ctx context.Context, id, agentID int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND agent_id = ?`, id, agentID)
 	return err
+}
+
+const (
+	modelWait    = 3 * time.Second
+	holdLimit    = 20 * time.Second
+	putBackLimit = 5 * time.Second
+)
+
+type modelHold struct {
+	turn  chan struct{}
+	users int
+}
+
+func (s *Service) holdModel(ctx context.Context, conversation int64) (func(), error) {
+	s.mu.Lock()
+	h := s.modelHolds[conversation]
+	if h == nil {
+		h = &modelHold{turn: make(chan struct{}, 1)}
+		s.modelHolds[conversation] = h
+	}
+	h.users++
+	s.mu.Unlock()
+	leave := func() {
+		s.mu.Lock()
+		h.users--
+		if h.users == 0 {
+			delete(s.modelHolds, conversation)
+		}
+		s.mu.Unlock()
+	}
+	select {
+	case h.turn <- struct{}{}:
+		return func() {
+			<-h.turn
+			leave()
+		}, nil
+	case <-ctx.Done():
+		leave()
+		return nil, ctx.Err()
+	}
 }

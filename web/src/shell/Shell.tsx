@@ -1,5 +1,6 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react'
 import type { Me, Workspace } from '../api'
+import { parseRunPath } from '../apps/route'
 import { setPreferences, useT } from '../i18n'
 import { EMAIL_CONFIRM_PATH, parseNotificationPath } from '../notifications/api'
 import { ConfirmEmail } from '../notifications/ConfirmEmail'
@@ -15,9 +16,11 @@ import { ErrorBoundary } from './ErrorBoundary'
 import { NoWorkspace } from './NoWorkspace'
 import { MAIN_ID } from './nav'
 import { PhoneBar } from './PhoneBar'
-import { SectionPage } from './SectionPage'
+import { Loading, SectionPage } from './SectionPage'
 import { Sidebar } from './Sidebar'
 import './Shell.css'
+
+const StandaloneApp = lazy(() => import('../apps/StandaloneApp').then((m) => ({ default: m.StandaloneApp })))
 
 const LAST_WORKSPACE = 'taskto.workspace'
 
@@ -52,6 +55,23 @@ function ShellRoute({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe
   const path = usePath()
   const opening = parseNotificationPath(path)
   const first = homeWorkspace(me)?.id ?? null
+  const running = parseRunPath(path)
+  if (running) {
+    return (
+      <ErrorBoundary fallback={<PageFailed />} resetKey={path}>
+        <Suspense fallback={<Loading />}>
+          <StandaloneApp
+            key={path}
+            me={me}
+            workspace={running.workspace}
+            space={running.space}
+            app={running.app}
+            screen={running.screen}
+          />
+        </Suspense>
+      </ErrorBoundary>
+    )
+  }
   if (path === EMAIL_CONFIRM_PATH) {
     const page = <ConfirmEmail token={window.location.hash.slice(1)} workspace={first} />
     return <Frame me={me} onLogout={onLogout} onMe={onMe} special={{ section: 'settings', workspace: first, page }} />

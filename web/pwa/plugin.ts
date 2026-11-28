@@ -3,7 +3,14 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import type { Plugin } from 'vite'
 
-const SKIP = [/^sw\.js$/, /\.map$/, /^vendor\//, /(^|\/)zxing_writer[^/]*\.wasm$/, /(^|\/)THIRD_PARTY_NOTICES\.txt$/]
+const SKIP = [
+  /^sw\.js$/,
+  /\.map$/,
+  /^vendor\//,
+  /(^|\/)zxing_writer[^/]*\.wasm$/,
+  /(^|\/)(docx-preview|jszip)[^/]*\.js$/,
+  /(^|\/)THIRD_PARTY_NOTICES\.txt$/,
+]
 
 export function precacheEntries(files: string[]): string[] {
   const urls = files

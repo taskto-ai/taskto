@@ -112,11 +112,12 @@ test("lists every space's apps, and changes only the ones the user may", async (
   expect(within(team).getByText(/^3 rows · published/)).toBeTruthy()
   expect(within(team).getByRole('link', { name: 'Open Team tracker' })).toBeTruthy()
   expect(within(team).queryByRole('link', { name: /with AI/ })).toBeNull()
-  expect(await menuItems(team, 'Team tracker')).toEqual(['Duplicate as template'])
+  expect(await menuItems(team, 'Team tracker')).toEqual(['Open in a new window', 'Duplicate as template'])
 
   await within(mine).findByText('Expenses')
   expect(within(mine).getByText('Live · release 1')).toBeTruthy()
   expect(await menuItems(mine, 'Expenses')).toEqual([
+    'Open in a new window',
     'History',
     'Rename',
     'Change icon',
@@ -259,7 +260,7 @@ test("an app user can launch it but isn't offered what only builders and publish
   const crew = await screen.findByRole('region', { name: 'Crew' })
   await within(crew).findByRole('link', { name: 'Open Expenses' })
   expect(within(crew).queryByRole('link', { name: /with AI/ })).toBeNull()
-  expect(await menuItems(crew, 'Expenses')).toEqual(['Duplicate as template'])
+  expect(await menuItems(crew, 'Expenses')).toEqual(['Open in a new window', 'Duplicate as template'])
 })
 
 test('a builder sets the roles of members of a shared space', async () => {
@@ -383,7 +384,7 @@ test('shows what is live and what is only a draft, and offers Publish only to th
   expect(await items('Builders')).not.toContain('Publish…')
   expect(within(row('Users')).getByText('Live · release 1')).toBeTruthy()
   expect(within(row('Users')).queryByText('Unpublished changes')).toBeNull()
-  expect(await items('Users')).toEqual(['Duplicate as template'])
+  expect(await items('Users')).toEqual(['Open in a new window', 'Duplicate as template'])
   expect(within(row('Fresh')).getByText('Not published')).toBeTruthy()
   expect(within(row('Fresh')).queryByRole('link', { name: /^Open/ })).toBeNull()
   expect(within(row('Fresh')).getByRole('link', { name: 'Preview the draft of Fresh' })).toBeTruthy()
@@ -760,7 +761,7 @@ test('Move is offered only to those who may design the app, and Duplicate only w
   render(<Routed />)
   const team = await screen.findByRole('region', { name: 'Team' })
   await within(team).findByRole('link', { name: 'Open Viewed' })
-  expect(within(team).queryByRole('button', { name: 'More actions for Viewed' })).toBeNull()
+  expect(await menuItems(team, 'Viewed')).toEqual(['Open in a new window'])
 })
 
 test('in the list’s publish dialog, the confirmation takes the focus, described by what it does', async () => {
@@ -785,6 +786,40 @@ test('in the list’s publish dialog, the confirmation takes the focus, describe
   await waitFor(() =>
     expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Review and publish…' })),
   )
+})
+
+test('the menu opens an app in a window of its own, one per app, and not an app that is offline or a draft for a user', async () => {
+  const popup = { closed: false, opener: {} as unknown, location: { href: '' }, focus: vi.fn() }
+  const open = vi.fn(() => popup)
+  vi.stubGlobal('open', open)
+  const noDesign = { ...everything, design: false, publish: false, roles: ['user'], restricted: true }
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': {
+      body: {
+        spaces: [
+          { id: 4, workspace_id: 1, kind: 'shared', name: 'Crew', archived_at: null, role: 'editor', access: 'write' },
+        ],
+      },
+    },
+    'GET /api/workspaces/1/spaces/4/apps?archived=true': {
+      body: {
+        apps: [
+          app({ id: 1, space_id: 4, name: 'Expenses' }),
+          app({ id: 2, space_id: 4, name: 'Gone', archived_at: '2026-11-18T00:00:00.000Z' }),
+          app({ id: 3, space_id: 4, name: 'Soon', live: null, access: noDesign }),
+        ],
+      },
+    },
+  })
+  render(<Routed />)
+  const crew = await screen.findByRole('region', { name: 'Crew' })
+  await choose(crew, 'Expenses', 'Open in a new window')
+  expect(open).toHaveBeenCalledWith('', 'taskto-app-4-1', 'popup,width=480,height=800')
+  expect(popup.opener).toBeNull()
+  expect(popup.location.href).toBe('/w/1/run/4-1')
+  popup.closed = true
+  expect(await menuItems(crew, 'Gone')).not.toContain('Open in a new window')
+  expect(await menuItems(crew, 'Soon')).not.toContain('Open in a new window')
 })
 
 test('an icon is picked from the list or typed, saved with the version the person saw, and shown in the row', async () => {

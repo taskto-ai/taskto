@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { AppAvatar } from '../apps/AppAvatar'
 import { AppView } from '../apps/AppView'
+import { appPath } from '../apps/route'
 import type { AppTransport } from '../apps/transport'
 import { useFormat, useT } from '../i18n'
-import { Button } from '../ui/Button'
+import { BRAND } from '../shell/nav'
+import { Button, ButtonLink } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { Heading } from '../ui/Heading'
 import { Notice } from '../ui/Notice'
@@ -14,17 +16,44 @@ import { Row, Rows } from '../ui/Rows'
 import { useOfflineData, useRuntime } from './hooks'
 import { OutboxList, SyncNotice } from './OutboxList'
 import type { Runtime } from './runtime'
-import { type Download, kindOf, type OutboxItem, scopeKey } from './store'
+import { type Download, kindOf, type OutboxItem, type Scope, scopeKey } from './store'
 import { type OfflineTransport, offlineTransport } from './transport'
 import { WriterNotice } from './WriterNotice'
 import './OfflineShell.css'
 
-export function OfflineShell({ user, onReconnect }: { user: string; onReconnect: () => void }) {
+export function OfflineShell({
+  user,
+  onReconnect,
+  requested,
+}: {
+  user: string
+  onReconnect: () => void
+  requested?: Scope
+}) {
   const t = useT()
   const { runtime, problem } = useRuntime()
   const data = useOfflineData(runtime)
-  const [open, setOpen] = useState<string | null>(null)
+  const [chosen, setChosen] = useState<string | null | undefined>(undefined)
+  const requestedKey = requested ? scopeKey(requested) : null
+  const [seenKey, setSeenKey] = useState(requestedKey)
+  if (seenKey !== requestedKey) {
+    setSeenKey(requestedKey)
+    setChosen(undefined)
+  }
+  const open = chosen === undefined ? requestedKey : chosen
   const download = data.downloads.find((d) => d.key === open)
+  const standalone = chosen === undefined && download !== undefined
+  const missing = chosen === undefined && requestedKey !== null && data.loaded && !download
+  const name = standalone ? download.name : undefined
+
+  useEffect(() => {
+    if (!name) return
+    const before = document.title
+    document.title = `${name} · ${BRAND}`
+    return () => {
+      document.title = before
+    }
+  }, [name])
 
   useEffect(() => {
     window.addEventListener('online', onReconnect)
@@ -36,18 +65,30 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
     <main className="ui-offline-shell" id="main">
       <Page width="list">
         <PageHeader
-          title={t('offline.shell.title')}
+          title={standalone ? download.name : t('offline.shell.title')}
           help={
             <>
               {t('offline.shell.intro')} <span className="ui-offline-shell-user">{user}</span>
             </>
           }
           actions={
-            <Button icon="offline" onClick={onReconnect}>
-              {t('offline.shell.reconnect')}
-            </Button>
+            <>
+              {standalone && requested && (
+                <ButtonLink
+                  variant="ghost"
+                  icon="apps"
+                  href={appPath(requested.workspace, requested.space, requested.app)}
+                >
+                  {t('apps.openInTaskto')}
+                </ButtonLink>
+              )}
+              <Button icon="offline" onClick={onReconnect}>
+                {t('offline.shell.reconnect')}
+              </Button>
+            </>
           }
         />
+        {missing && <Notice tone="neutral">{t('offline.shell.notDownloaded')}</Notice>}
         {problem === 'schema' && (
           <Notice
             tone="danger"
@@ -79,7 +120,7 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
                         <Button
                           size="sm"
                           aria-label={t('offline.shell.openNamed', { name: d.name })}
-                          onClick={() => setOpen(d.key)}
+                          onClick={() => setChosen(d.key)}
                         >
                           {t('offline.shell.open')}
                         </Button>
@@ -93,10 +134,11 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
         )}
         {runtime && download && (
           <>
-            <Button variant="ghost" icon="back" className="ui-offline-shell-back" onClick={() => setOpen(null)}>
+            <Button variant="ghost" icon="back" className="ui-offline-shell-back" onClick={() => setChosen(null)}>
               {t('offline.shell.back')}
             </Button>
             <OfflineApp
+              key={download.key}
               runtime={runtime}
               download={download}
               items={data.items.filter((i) => i.scopeKey === download.key)}

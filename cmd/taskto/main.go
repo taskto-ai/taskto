@@ -37,6 +37,7 @@ import (
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/live"
 	"taskto.ai/taskto/internal/lockfile"
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/privcheck"
@@ -312,6 +313,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		}
 	}
 	convs := conversations.New(sqlDB, convAgent)
+	liveHub := live.New(live.Config{})
 	convs.SetCapabilities(tools.Capability)
 	if cfg.Agent {
 		index.SetConversations(convs)
@@ -375,6 +377,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		Providers:        providerSvc,
 		Search:           index,
 		Conversations:    convs,
+		Live:             liveHub,
 		Tools:            tools,
 		CLIAccounts:      cliAccounts,
 		Browser:          browsers,
@@ -408,11 +411,12 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 
 	inflight := drain.New()
 	srv := &http.Server{
-		Handler:           inflight.Handler(wrapHandler(handler, sqlDB)),
+		Handler:           inflight.Handler(wrapHandler(handler, sqlDB, liveHub)),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
 	srv.RegisterOnShutdown(convs.EndStreams)
+	srv.RegisterOnShutdown(liveHub.EndStreams)
 	ln, err := listen(ctx, cfg.Addr)
 	if err != nil {
 		return err
@@ -463,7 +467,7 @@ func keepLock(f *os.File) {
 
 var (
 	shutdownGrace = defaultShutdownGrace
-	wrapHandler   = func(h http.Handler, _ *sql.DB) http.Handler { return h }
+	wrapHandler   = func(h http.Handler, _ *sql.DB, _ *live.Hub) http.Handler { return h }
 	listen        = func(ctx context.Context, addr string) (net.Listener, error) {
 		return new(net.ListenConfig).Listen(ctx, "tcp", addr)
 	}

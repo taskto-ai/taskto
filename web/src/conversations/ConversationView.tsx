@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import {
   ApiError,
   api,
@@ -18,6 +18,7 @@ import { useChanged } from '../memo'
 import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
+import { agentChoices } from './agentMention'
 import { ChatTranscript } from './ChatTranscript'
 import { CliPermissionsSwitch, CliQuestions } from './CliPermissions'
 import { Composer } from './Composer'
@@ -105,6 +106,15 @@ export function ConversationView({
   const newestRead = useRef(0)
   const pickedAt = useRef(0)
   const [picked, setPicked] = useState<ModelRef | null>(null)
+  const choices = useRef(0)
+  const readModel = () => {
+    const began = choices.current
+    api<ModelRef>(`${base}/model`).then(setPicked, () => {
+      if (choices.current !== began) return
+      setPicked(null)
+      loadedModel.reload()
+    })
+  }
   const [continuing, setContinuing] = useState(false)
   const modelWrites = useRef(0)
   if (useChanged(base)) {
@@ -123,6 +133,7 @@ export function ConversationView({
     const mine = ++modelWrites.current
     return (m: ModelRef) => {
       if (mine !== modelWrites.current) return
+      choices.current++
       pickedAt.current = ++order.current
       setPicked(m)
     }
@@ -134,6 +145,11 @@ export function ConversationView({
     setSeenTurn(turnKey)
     if (seenTurn !== undefined && !running) loadedModel.reload()
   }
+  const agents = useMemo(
+    () =>
+      agentChoices(providers.data ?? [], (provider, model) => t('conversations.model.cliOption', { provider, model })),
+    [providers.data, t],
+  )
   const usesCli = Boolean(cliOfProvider(model?.provider) || providers.data?.some((p) => p.scope === 'cli'))
   const cli = useLoad(() => (usesCli ? api<CliAccounts>(CLI_ACCOUNTS) : Promise.resolve(null)), [usesCli])
   const asks = messages.reduce((n, m) => n + m.tools.filter((t) => t.cli && t.output?.includes('⚠')).length, 0)
@@ -266,6 +282,9 @@ export function ConversationView({
         unreadable={unreadable}
         running={running}
         onSent={onChanged}
+        agents={agents}
+        onSwitched={readModel}
+        choices={() => choices.current}
       >
         {providers.data && model && (
           <ModelPicker

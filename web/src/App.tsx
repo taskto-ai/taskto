@@ -10,6 +10,7 @@ import {
   SESSION_LOST,
 } from './api'
 import { forgetOperationsOf } from './apps/operations'
+import { parseRunPath } from './apps/route'
 import {
   InviteScreen,
   LoginScreen,
@@ -53,7 +54,7 @@ import {
   unsentOf,
 } from './offline/runtime'
 import { approvalOf } from './offline/store'
-import { beforeLeaving, navigate } from './router'
+import { beforeLeaving, navigate, usePath } from './router'
 import { beginSession, endSession, sameSession } from './session'
 import { Shell } from './shell/Shell'
 import {
@@ -69,6 +70,11 @@ import { toast } from './ui/Toast'
 import { claimDrafts } from './uiState'
 
 const OfflineShell = lazy(() => import('./offline/OfflineShell').then((m) => ({ default: m.OfflineShell })))
+
+function OfflineRoute({ user, onReconnect }: { user: string; onReconnect: () => void }) {
+  const path = usePath()
+  return <OfflineShell user={user} onReconnect={onReconnect} requested={parseRunPath(path) ?? undefined} />
+}
 
 type Session =
   | { state: 'loading' }
@@ -581,7 +587,7 @@ export function App() {
     case 'offline':
       return (
         <Suspense fallback={<StartingScreen />}>
-          <OfflineShell user={session.name} onReconnect={load} />
+          <OfflineRoute user={session.name} onReconnect={load} />
         </Suspense>
       )
     case 'in': {

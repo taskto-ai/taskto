@@ -25,6 +25,8 @@ export type Contract = [
   Is<Check<Gen.BoardsAuthor, NonNullable<Api.Author>>>,
   Is<Check<Gen.Conversation, Api.Conversation>>,
   Is<Check<Gen.SwitchingState, Api.CliSwitching, 'queue[].model_id'>>,
+  Is<Check<Gen.ConversationsModelRef, Api.ModelRef>>,
+  Is<Check<Gen.SendReply, Api.SendReply>>,
   Is<Check<Gen.SubmissionReply, Api.SubmissionReply>>,
   Is<Check<Gen.ContinueModels, Api.ContinueModels>>,
   Is<Check<Gen.NotificationItem, Notifications.NotificationItem>>,
