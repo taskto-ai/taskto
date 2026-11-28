@@ -129,10 +129,30 @@ export function runs(values: readonly (number | null)[]): Run[] {
   return out
 }
 
-export function axisPicks(count: number, longest: number, width = 272, charWidth = 6.2, gap = 10): number[] {
-  const room = Math.floor((width + gap) / (longest * charWidth + gap))
-  const wanted = Math.max(1, Math.min(count, count > 6 ? Math.min(room, 3) : room))
-  if (wanted >= count) return Array.from({ length: count }, (_, i) => i)
-  if (wanted === 1) return [0]
-  return Array.from({ length: wanted }, (_, i) => Math.round((i * (count - 1)) / (wanted - 1)))
+export function axisPicks(
+  count: number,
+  longest: number,
+  band = false,
+  width = 272,
+  charWidth = 6.2,
+  gap = 10,
+): number[] {
+  const textWidth = longest * charWidth
+  const extent = (i: number): [number, number] => {
+    const x = band ? ((i + 0.5) * width) / count : count === 1 ? width / 2 : (i * width) / (count - 1)
+    if (count === 1) return [x - textWidth / 2, x + textWidth / 2]
+    if (i === 0) return [x, x + textWidth]
+    if (i === count - 1) return [x - textWidth, x]
+    return [x - textWidth / 2, x + textWidth / 2]
+  }
+  const fits = (picks: number[]) => {
+    const gaps = picks.slice(1).map((p, k) => p - picks[k])
+    if (gaps.length > 1 && Math.min(...gaps) * 4 < Math.max(...gaps) * 3) return false
+    return picks.every((p, k) => k === 0 || extent(p)[0] - extent(picks[k - 1])[1] >= gap)
+  }
+  for (let wanted = count > 6 ? 3 : count; wanted > 1; wanted--) {
+    const picks = Array.from({ length: wanted }, (_, i) => Math.round((i * (count - 1)) / (wanted - 1)))
+    if (fits(picks)) return picks
+  }
+  return [0]
 }

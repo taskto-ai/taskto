@@ -507,6 +507,31 @@ describe('the numbers behind the picture', () => {
     expect(axisPicks(6, 60)).toEqual([0])
   })
 
+  test('names never overlap, whatever their anchor, and the last gap is not left short', () => {
+    expect(axisPicks(4, 13)).toEqual([0, 3])
+    const width = 272
+    const extent = (i: number, count: number, longest: number, band: boolean) => {
+      const x = band ? ((i + 0.5) * width) / count : count === 1 ? width / 2 : (i * width) / (count - 1)
+      const w = longest * 6.2
+      if (count === 1) return [x - w / 2, x + w / 2]
+      if (i === 0) return [x, x + w]
+      if (i === count - 1) return [x - w, x]
+      return [x - w / 2, x + w / 2]
+    }
+    for (const band of [false, true]) {
+      for (let count = 2; count <= 40; count++) {
+        for (let longest = 1; longest <= 14; longest++) {
+          const picks = axisPicks(count, longest, band)
+          expect(picks[0]).toBe(0)
+          const boxes = picks.map((i) => extent(i, count, longest, band))
+          for (let k = 1; k < boxes.length; k++) expect(boxes[k][0] - boxes[k - 1][1]).toBeGreaterThanOrEqual(10)
+          const gaps = picks.slice(1).map((p, k) => p - picks[k])
+          if (gaps.length > 1) expect(Math.min(...gaps) * 4).toBeGreaterThanOrEqual(Math.max(...gaps) * 3)
+        }
+      }
+    }
+  })
+
   test('reading takes only own properties and keeps the series in step with the points', () => {
     const inherited = Object.create({ x: stages.x, series: stages.series })
     expect(readChart(inherited)).toBeNull()

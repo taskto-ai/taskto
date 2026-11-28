@@ -227,7 +227,7 @@ function ChartDrawing({
   const band = variant === 'bar'
   const texts = data.x.map((p) => cut(pointText(p, t, f), AXIS_LABEL))
   const longest = Math.max(...texts.map((s) => Array.from(s).length))
-  const picks = axisPicks(count, longest)
+  const picks = axisPicks(count, longest, band)
   const plot: Plot = { variant, stacked, min: scale.min, max: scale.max, count }
   return (
     <>
