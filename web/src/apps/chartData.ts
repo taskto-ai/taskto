@@ -84,12 +84,16 @@ export function chartScale(values: readonly number[]): Scale {
   const top = niceMax(extent > 0 ? extent : 1)
   const intervals = intervalsOf(top)
   const step = top / intervals
-  let max = Math.ceil(hi / step - 1e-9) * step
-  const min = Math.floor(lo / step + 1e-9) * step
-  if (max <= min) max = min + step * intervals
+  const slack = extent * 1e-12
+  const round = (n: number) => Number(n.toPrecision(12))
+  let min = round(Math.floor(lo / step + 1e-9) * step)
+  if (min > lo + slack) min = round(min - step)
+  let max = round(Math.ceil(hi / step - 1e-9) * step)
+  if (max < hi - slack) max = round(max + step)
+  if (max <= min) max = round(min + step * intervals)
   const ticks: number[] = []
-  for (let i = Math.round(min / step); i <= Math.round(max / step); i++) ticks.push(Number((i * step).toPrecision(12)))
-  return { min: Number(min.toPrecision(12)), max: Number(max.toPrecision(12)), ticks }
+  for (let i = Math.round(min / step); i <= Math.round(max / step); i++) ticks.push(round(i * step))
+  return { min, max, ticks }
 }
 
 export function stackLayers(series: readonly ChartLine[]): Layer[][] {

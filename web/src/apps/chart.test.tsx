@@ -442,6 +442,31 @@ describe('the numbers behind the picture', () => {
     expect(chartScale([-30, 10])).toEqual({ min: -30, max: 10, ticks: [-30, -20, -10, 0, 10] })
   })
 
+  test('the scale never leaves out a value, however small it is beside the others', () => {
+    expect(chartScale([1, -1e-10]).min).toBeLessThan(0)
+    expect(chartScale([-1, 1e-10]).max).toBeGreaterThan(0)
+    const inputs = [
+      [1, -1e-10],
+      [-1, 1e-10],
+      [1e-10, -1],
+      [0.1 + 0.2, 0.3],
+      [1e15, -1e-3],
+      [-7.5, 2.4999999999, 1e-12],
+      [24.999999999, -0.0000001],
+      [2e-9, 1],
+    ]
+    for (const values of inputs) {
+      const scale = chartScale(values)
+      const slack = Math.max(...values.map(Math.abs)) * 1e-12
+      for (const v of values) {
+        expect(scale.min).toBeLessThanOrEqual(v + slack)
+        expect(scale.max).toBeGreaterThanOrEqual(v - slack)
+      }
+      expect(scale.ticks[0]).toBe(scale.min)
+      expect(scale.ticks.at(-1)).toBe(scale.max)
+    }
+  })
+
   test('stacked layers add up, a null adds nothing and has no layer of its own', () => {
     const lines: ChartLine[] = [
       { key: 'a', label: 'a', values: [1, null, 3] },
