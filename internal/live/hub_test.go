@@ -426,17 +426,21 @@ func TestAOneEventBufferStillOverflowsWithoutBlockingAndKeepsBothControlFrames(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	published := make(chan struct{})
+	published := make(chan error, 1)
 	go func() {
-		defer close(published)
 		for range 3 {
 			if _, err := h.Publish(room, "stroke", json.RawMessage(`1`)); err != nil {
+				published <- err
 				return
 			}
 		}
+		published <- nil
 	}()
 	select {
-	case <-published:
+	case err := <-published:
+		if err != nil {
+			t.Fatal(err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("publishing blocked on a subscriber whose buffer was requested as one event")
 	}

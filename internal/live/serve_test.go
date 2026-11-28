@@ -519,6 +519,15 @@ func serveGated(g *rig, w http.ResponseWriter, session string, recheck Recheck) 
 	return done
 }
 
+func await(t *testing.T, ch <-chan struct{}, stage string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s never happened", stage)
+	}
+}
+
 func finished(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 	select {
@@ -570,7 +579,7 @@ func TestARevocationAfterAnEventWasTakenStopsItsWrite(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	g.publish(`{"taken":1}`)
-	<-checking
+	await(t, checking, "the resource check starting")
 	returned := make(chan struct{})
 	go func() {
 		defer close(returned)
@@ -602,7 +611,7 @@ func TestAnEndedSessionWritesNoEventThatWasAlreadyTaken(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	g.publish(`{"taken":1}`)
-	<-checking
+	await(t, checking, "the resource check starting")
 	g.endSession("a")
 	close(release)
 	finished(t, done)
@@ -615,6 +624,8 @@ func TestAStreamKeepsItsSlotUntilItsHandlerReturns(t *testing.T) {
 	g := newRig(t, Config{MaxStreams: 1, Buffer: 2})
 	w := newGatedWriter()
 	done := serveGated(g, w, "a", func(context.Context) error { return nil })
+	var open sync.Once
+	t.Cleanup(func() { open.Do(func() { close(w.gate) }) })
 	<-w.first
 	for range 3 {
 		g.publish(`1`)
@@ -628,7 +639,7 @@ func TestAStreamKeepsItsSlotUntilItsHandlerReturns(t *testing.T) {
 	if code, _ := errorBody(t, rec.Result()); rec.Code != http.StatusTooManyRequests || code != apierr.CodeTooManyStreams {
 		t.Fatalf("a second stream while the first handler is still open = %d %q, want 429", rec.Code, code)
 	}
-	close(w.gate)
+	open.Do(func() { close(w.gate) })
 	finished(t, done)
 	g.waitSubscribers(0)
 }
@@ -833,7 +844,7 @@ func TestARevocationWaitsForAWriteThatIsAlreadyInFlight(t *testing.T) {
 	w.waitFor(t, "ready")
 	w.armedWrite.Store(true)
 	g.publish(`{"inflight":1}`)
-	<-w.paused
+	await(t, w.paused, "the write starting")
 	returned := make(chan struct{})
 	go func() {
 		defer close(returned)
@@ -855,4 +866,251 @@ func TestARevocationWaitsForAWriteThatIsAlreadyInFlight(t *testing.T) {
 	if got := w.written(); !strings.Contains(got, "inflight") {
 		t.Fatalf("the write that had started was lost: %q", got)
 	}
+}
+
+type cleanupWriter struct {
+	*gatedWriter
+	armed   atomic.Bool
+	paused  chan struct{}
+	resume  chan struct{}
+	release sync.Once
+}
+
+func newCleanupWriter(t *testing.T) *cleanupWriter {
+	w := &cleanupWriter{gatedWriter: newGatedWriter(), paused: make(chan struct{}), resume: make(chan struct{})}
+	close(w.gate)
+	t.Cleanup(w.letGo)
+	return w
+}
+
+func (w *cleanupWriter) letGo() { w.release.Do(func() { close(w.resume) }) }
+
+func (w *cleanupWriter) SetWriteDeadline(t time.Time) error {
+	if t.IsZero() && w.armed.CompareAndSwap(true, false) {
+		close(w.paused)
+		<-w.resume
+	}
+	return nil
+}
+
+func TestAStreamKeepsItsSlotWhileItsWriterIsStillBeingCleanedUp(t *testing.T) {
+	g := newRig(t, Config{MaxStreams: 1})
+	w := newCleanupWriter(t)
+	done := serveGated(g, w, "a", func(context.Context) error { return nil })
+	<-w.first
+	w.waitFor(t, "ready")
+	w.armed.Store(true)
+	g.endSession("a")
+	await(t, w.paused, "the writer's cleanup starting")
+	second := g.open("b", "")
+	defer func() { _ = second.Body.Close() }()
+	if second.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("a second stream while the first is still cleaning up = %d, want 429", second.StatusCode)
+	}
+	w.letGo()
+	finished(t, done)
+	g.waitSubscribers(0)
+	again := g.open("b", "")
+	defer func() { _ = again.Body.Close() }()
+	if again.StatusCode != http.StatusOK {
+		t.Fatalf("a stream after the first returned = %d, want 200", again.StatusCode)
+	}
+}
+
+type probe struct {
+	w        *gatedWriter
+	checking chan struct{}
+	release  chan struct{}
+	ctx      atomic.Pointer[context.Context]
+	once     sync.Once
+	letGo    sync.Once
+	done     <-chan struct{}
+}
+
+func (p *probe) open() { p.letGo.Do(func() { close(p.release) }) }
+
+func (p *probe) cancelled() bool {
+	ctx := p.ctx.Load()
+	return ctx != nil && (*ctx).Err() != nil
+}
+
+func (p *probe) wrote(text string) bool { return strings.Contains(p.w.written(), text) }
+
+func TestEveryRevokedStreamRefusesItsTakenEventWhileTheHookWaitsOnAnotherStream(t *testing.T) {
+	g := newRig(t, Config{})
+	probes := make([]*probe, 0, 2)
+	for _, session := range []string{"a", "b"} {
+		p := &probe{w: newGatedWriter(), checking: make(chan struct{}), release: make(chan struct{})}
+		close(p.w.gate)
+		t.Cleanup(p.open)
+		p.done = serveGated(g, p.w, session, func(ctx context.Context) error {
+			if p.w.written() == "" {
+				return nil
+			}
+			p.ctx.Store(&ctx)
+			p.once.Do(func() { close(p.checking) })
+			<-p.release
+			return nil
+		})
+		probes = append(probes, p)
+	}
+	for _, p := range probes {
+		<-p.w.first
+		p.w.waitFor(t, "ready")
+	}
+	g.waitSubscribers(2)
+	g.publish(`{"taken":1}`)
+	for _, p := range probes {
+		await(t, p.checking, "a resource check starting")
+	}
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		g.hub.EndUserIn(room.SpaceID, 1)
+	}()
+	g.waitRevoked(2)
+	var first, other *probe
+	for deadline := time.Now().Add(5 * time.Second); first == nil; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the revocation never reached a stream")
+		}
+		for i, p := range probes {
+			if p.cancelled() {
+				first, other = p, probes[1-i]
+			}
+		}
+	}
+	other.open()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		select {
+		case <-other.done:
+		default:
+			if !other.wrote("taken") {
+				continue
+			}
+		}
+		break
+	}
+	if other.wrote("taken") {
+		t.Errorf("a stream wrote %q after the revocation detached it, while the hook waited on another stream", other.w.written())
+	}
+	first.open()
+	finished(t, returned)
+	for _, p := range probes {
+		finished(t, p.done)
+	}
+}
+
+type stallingWriter struct {
+	*gatedWriter
+	stallNext atomic.Bool
+	stalled   chan struct{}
+
+	mu       sync.Mutex
+	deadline time.Time
+	changed  chan struct{}
+	lastSet  time.Time
+	left     time.Duration
+}
+
+func newStallingWriter(t *testing.T) *stallingWriter {
+	w := &stallingWriter{gatedWriter: newGatedWriter(), stalled: make(chan struct{}), changed: make(chan struct{}, 1)}
+	close(w.gate)
+	t.Cleanup(func() { _ = w.SetWriteDeadline(time.Now()) })
+	return w
+}
+
+func (w *stallingWriter) SetWriteDeadline(t time.Time) error {
+	w.mu.Lock()
+	w.deadline = t
+	if !t.IsZero() {
+		w.lastSet = time.Now()
+	}
+	w.mu.Unlock()
+	select {
+	case w.changed <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (w *stallingWriter) Write(p []byte) (int, error) {
+	if bytes.HasPrefix(p, []byte("data: ")) {
+		w.mu.Lock()
+		w.left = time.Until(w.deadline)
+		w.mu.Unlock()
+	}
+	if !w.stallNext.CompareAndSwap(true, false) {
+		return w.gatedWriter.Write(p)
+	}
+	close(w.stalled)
+	for {
+		w.mu.Lock()
+		deadline := w.deadline
+		w.mu.Unlock()
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			return 0, errors.New("i/o timeout")
+		}
+		wait := time.Hour
+		if !deadline.IsZero() {
+			wait = time.Until(deadline)
+		}
+		select {
+		case <-w.changed:
+		case <-time.After(wait):
+		}
+	}
+}
+
+func (w *stallingWriter) remaining() time.Duration {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.left
+}
+
+func TestARevocationInterruptsAWriteThatIsStalledOnItsClient(t *testing.T) {
+	g := newRig(t, Config{WriteTimeout: time.Hour})
+	w := newStallingWriter(t)
+	done := serveGated(g, w, "a", func(context.Context) error { return nil })
+	<-w.first
+	w.waitFor(t, "ready")
+	w.stallNext.Store(true)
+	g.publish(`{"stalled":1}`)
+	await(t, w.stalled, "the write stalling")
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		g.hub.EndUserIn(room.SpaceID, 1)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("revocation did not interrupt a stalled write")
+	}
+	finished(t, done)
+}
+
+func TestASlowAccessCheckDoesNotUseUpTheWriteDeadline(t *testing.T) {
+	const timeout = 400 * time.Millisecond
+	g := newRig(t, Config{WriteTimeout: timeout})
+	w := newStallingWriter(t)
+	done := serveGated(g, w, "a", func(ctx context.Context) error {
+		if w.written() == "" {
+			return nil
+		}
+		select {
+		case <-time.After(2 * timeout):
+		case <-ctx.Done():
+		}
+		return nil
+	})
+	<-w.first
+	w.waitFor(t, "ready")
+	g.publish(`{"slow":1}`)
+	w.waitFor(t, "slow")
+	if left := w.remaining(); left < timeout/2 {
+		t.Fatalf("the write began with %v of its %v deadline left after a slow access check", left, timeout)
+	}
+	g.hub.EndStreams()
+	finished(t, done)
 }

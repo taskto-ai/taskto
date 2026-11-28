@@ -37,21 +37,6 @@ type liveStack struct {
 	resume chan struct{}
 }
 
-type pausingResponse struct {
-	http.ResponseWriter
-	l *liveStack
-}
-
-func (w pausingResponse) Unwrap() http.ResponseWriter { return w.ResponseWriter }
-
-func (w pausingResponse) SetWriteDeadline(t time.Time) error {
-	if !t.IsZero() && time.Until(t) > time.Second && w.l.armed.CompareAndSwap(true, false) {
-		close(w.l.paused)
-		<-w.l.resume
-	}
-	return http.NewResponseController(w.ResponseWriter).SetWriteDeadline(t)
-}
-
 func newLiveStack(t *testing.T) *liveStack {
 	t.Helper()
 	l := &liveStack{paused: make(chan struct{}), resume: make(chan struct{})}
@@ -82,11 +67,18 @@ func newLiveStack(t *testing.T) *liveStack {
 			sp, _ := access.SpaceFrom(r.Context())
 			u, _ := auth.UserFrom(r.Context())
 			n, _ := strconv.ParseInt(r.PathValue("room"), 10, 64)
-			recheck := live.RecheckSpace(checker, u.ID, sp)
+			check := live.RecheckSpace(checker, u.ID, sp)
 			if r.URL.Query().Get("lenient") != "" {
-				recheck = func(context.Context) error { return nil }
+				check = func(context.Context) error { return nil }
 			}
-			l.hub.Serve(pausingResponse{w, l}, r, live.Topic{Kind: "room", SpaceID: sp.ID, Generation: sp.Generation, ResourceID: n}, u.ID, recheck)
+			recheck := func(ctx context.Context) error {
+				if l.armed.CompareAndSwap(true, false) {
+					close(l.paused)
+					<-l.resume
+				}
+				return check(ctx)
+			}
+			l.hub.Serve(w, r, live.Topic{Kind: "room", SpaceID: sp.ID, Generation: sp.Generation, ResourceID: n}, u.ID, recheck)
 		})))
 		mux.Handle("POST "+room+"/events", auth.CSRF(checker.RequireSpace(access.Write, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			sp, _ := access.SpaceFrom(r.Context())

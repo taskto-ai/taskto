@@ -21,17 +21,24 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, topic Topic, user in
 		return
 	}
 	sessionCtx, stopWatch := h.cfg.WatchSession(r, h.cfg.Heartbeat)
-	defer stopWatch()
 	if sessionCtx.Err() != nil {
+		stopWatch()
 		apierr.Write(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
 		return
 	}
 	ctx, cancel := context.WithCancel(sessionCtx)
-	defer cancel()
 
 	rc := http.NewResponseController(w)
 	out := &eventWriter{w: w, rc: rc, timeout: h.cfg.WriteTimeout, ctx: ctx}
-	defer out.close()
+	var sub *subscriber
+	defer func() {
+		out.close()
+		cancel()
+		stopWatch()
+		if sub != nil {
+			h.unsubscribe(sub)
+		}
+	}()
 	sub, err := h.subscribe(topic, user, func() { cancel(); out.end() })
 	switch {
 	case errors.Is(err, ErrTooManyStreams):
@@ -46,7 +53,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, topic Topic, user in
 		apierr.Internal(w)
 		return
 	}
-	defer h.unsubscribe(sub)
+	out.revoked = sub.revoked
 	events := sub.ch
 
 	if err := recheck(ctx); err != nil {
@@ -122,6 +129,7 @@ type eventWriter struct {
 	rc      *http.ResponseController
 	timeout time.Duration
 	ctx     context.Context
+	revoked <-chan struct{}
 
 	mu       sync.Mutex
 	ended    bool
@@ -140,22 +148,34 @@ func (e *eventWriter) event(ev Event, allowed func() bool) error {
 func (e *eventWriter) deliver(p []byte, allowed func() bool) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.ended || e.ctx.Err() != nil {
+	if e.stopped() {
+		return errStreamEnded
+	}
+	if allowed != nil && !allowed() {
 		return errStreamEnded
 	}
 	if err := e.rc.SetWriteDeadline(time.Now().Add(e.timeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		return err
 	}
-	if allowed != nil && !allowed() {
-		return errStreamEnded
-	}
-	if e.ended || e.ctx.Err() != nil {
+	if e.stopped() {
 		return errStreamEnded
 	}
 	if _, err := e.w.Write(p); err != nil {
 		return err
 	}
 	return e.rc.Flush()
+}
+
+func (e *eventWriter) stopped() bool {
+	if e.ended || e.ctx.Err() != nil {
+		return true
+	}
+	select {
+	case <-e.revoked:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *eventWriter) end() {
