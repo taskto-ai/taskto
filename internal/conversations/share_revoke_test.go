@@ -151,31 +151,53 @@ func TestAStaleActorCannotWriteAShare(t *testing.T) {
 }
 
 func TestARosterReadBelongsToTheConversationThatWasAuthorized(t *testing.T) {
-	e := newEnv(t, false)
-	owner, ws := e.setup()
-	reader := e.invite(owner, ws, "reader@example.com")
-	other := e.invite(owner, ws, "other@example.com")
-	conv := owner.create(ws, nil)
-	e.shareWith(owner, ws, conv.ID, reader)
-	read, err := e.svc.reach(t.Context(), ws, owner.id, conv.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, err := e.svc.members(t.Context(), read); err != nil || len(got.Members) != 1 {
-		t.Fatalf("the roster of the conversation itself = %+v, %v", got, err)
-	}
-	if _, err := e.db.Exec(`DELETE FROM conversations WHERE id = ?`, conv.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.db.Exec(`INSERT INTO conversations (id, workspace_id, owner_id, agent_id, title) VALUES (?, ?, ?, 9999, '')`,
-		conv.ID, ws, other.id); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.db.Exec(`INSERT INTO conversation_members (conversation_id, user_id, role, added_by) VALUES (?, ?, 'viewer', ?)`,
-		conv.ID, reader.id, other.id); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := e.svc.members(t.Context(), read); !errors.Is(err, errNotFound) || len(got.Members) != 0 {
-		t.Fatalf("the roster of a conversation that took the ID = %+v, %v; want nothing", got, err)
+	for _, tc := range []struct {
+		name                       string
+		otherWorkspace, otherOwner bool
+		otherAgentConversation     bool
+	}{
+		{name: "only the workspace differs", otherWorkspace: true},
+		{name: "only the owner differs", otherOwner: true},
+		{name: "only the agent conversation differs", otherAgentConversation: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t, false)
+			owner, ws := e.setup()
+			reader := e.invite(owner, ws, "reader@example.com")
+			other := e.invite(owner, ws, "other@example.com")
+			conv := owner.create(ws, nil)
+			e.shareWith(owner, ws, conv.ID, reader)
+			read, err := e.svc.reach(t.Context(), ws, reader.id, conv.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := e.svc.members(t.Context(), read); err != nil || len(got.Members) != 1 {
+				t.Fatalf("the roster of the conversation itself = %+v, %v", got, err)
+			}
+			agent, replacementWorkspace, replacementOwner := conv.agentIDForTest(t, e), ws, owner.id
+			if tc.otherWorkspace {
+				replacementWorkspace = e.workspace(owner, reader, other)
+			}
+			if tc.otherOwner {
+				replacementOwner = other.id
+			}
+			if tc.otherAgentConversation {
+				agent = 9999
+			}
+			if _, err := e.db.Exec(`DELETE FROM conversations WHERE id = ?`, conv.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.db.Exec(`INSERT INTO conversations (id, workspace_id, owner_id, agent_id, title) VALUES (?, ?, ?, ?, '')`,
+				conv.ID, replacementWorkspace, replacementOwner, agent); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.db.Exec(`INSERT INTO conversation_members (conversation_id, user_id, role, added_by) VALUES (?, ?, 'viewer', ?)`,
+				conv.ID, reader.id, replacementOwner); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := e.svc.members(t.Context(), read); !errors.Is(err, errNotFound) || len(got.Members) != 0 {
+				t.Fatalf("the roster of a conversation that took the ID = %+v, %v; want nothing", got, err)
+			}
+		})
 	}
 }

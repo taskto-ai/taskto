@@ -2,6 +2,8 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { setPreferences } from '../i18n'
+import ptBR from '../i18n/locales/pt-BR.json'
 import { fakeFetch, fakeStreams } from '../test/fakes'
 import { ConversationsPage } from './ConversationsPage'
 import { ConversationView } from './ConversationView'
@@ -100,6 +102,28 @@ test('the owner shares with a member of the workspace and stops sharing again', 
     expect(within(within(dialog).getByRole('list', { name: 'People it is shared with' })).queryByText('Cy')).toBeNull(),
   )
   expect(calls.some((c) => c.method === 'DELETE' && c.path.endsWith('/members/3'))).toBe(true)
+})
+
+test('in Portuguese the picker with no one left to add does not say everyone can read it', async () => {
+  fakeFetch({
+    ...MODELS,
+    'GET /api/workspaces/1/conversations/7': { body: conversation() },
+    'GET /api/workspaces/1/conversations/7/members': {
+      body: { members: [{ user: { id: 2, name: 'Bo' }, role: 'viewer', added_at: '2026-11-19T10:00:00.000Z' }] },
+    },
+    'GET /api/workspaces/1/members': { body: { members: [person(1, 'Ana'), person(2, 'Bo')] } },
+  })
+  await act(() => setPreferences({ user: 'pt-BR' }))
+  try {
+    render(view(fakeStreams().factory))
+    fireEvent.click(await screen.findByRole('button', { name: ptBR.conversations.share.button }))
+    const dialog = await screen.findByRole('dialog', { name: ptBR.conversations.share.title })
+    expect(await within(dialog).findByText(ptBR.conversations.share.noOthers)).toBeTruthy()
+    expect(ptBR.conversations.share.noOthers).toBe('Não há mais ninguém para adicionar.')
+    expect(within(dialog).queryByText(/já podem/)).toBeNull()
+  } finally {
+    await act(() => setPreferences({ user: null }))
+  }
 })
 
 test('a refused share says why and the list stays as it was', async () => {

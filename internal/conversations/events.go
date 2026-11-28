@@ -81,6 +81,7 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	defer stopHeartbeat()
 	const maxFailedChecks = 3
 	failedChecks := 0
+	filter := new(viewerFilter)
 	for {
 		select {
 		case ev := <-events:
@@ -95,7 +96,7 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 			data := []byte(ev.Raw)
 			if c.Role != RoleOwner {
 				var err error
-				if data, err = redactForViewer(data); err != nil {
+				if data, err = filter.redact(data); err != nil {
 					slog.WarnContext(ctx, "conversations: an event for a viewer couldn't be read", "conversation", c.ID, "err", err)
 					_ = out.event(interrupted)
 					return

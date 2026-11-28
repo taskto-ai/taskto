@@ -62,6 +62,8 @@ func TestAViewerNeverReceivesTheOwnersCLIPermissionsOrAccountNotices(t *testing.
 		line(map[string]any{"type": "ops", "ops": []any{[]any{"s", []any{"docs", "pi.live"}, map[string]any{"tools": []any{cliSlot("done")}}}}}),
 		line(map[string]any{"type": "ops", "ops": []any{[]any{"p", []any{"entries"}, 1, 0, []any{cliEntry(2)}}}}),
 		line(map[string]any{"type": "ops", "ops": []any{[]any{"r", map[string]any{"entries": []any{cliEntry(1)}, "docs": live}}}}),
+		line(map[string]any{"type": "ops", "ops": []any{[]any{"a", []any{"docs", "pi.live", "tools", 0, "details", "transcript"}, "  ✗ not allowed (the owner said no)\n"}}}),
+		line(map[string]any{"type": "ops", "ops": []any{[]any{"s", []any{"entries", 0, "model", 1, "details", "transcript"}, cliTranscript()}}}),
 	}
 	plain := line(map[string]any{"type": "ops", "ops": []any{[]any{"a", []any{"docs", "pi.live", "generation", "message", "content", 0, "text"}, "visible to both"}}})
 
@@ -100,6 +102,65 @@ func TestAViewerNeverReceivesTheOwnersCLIPermissionsOrAccountNotices(t *testing.
 	}
 	if mine := owner.expect(http.StatusOK, http.MethodGet, one, nil).Body.String(); !strings.Contains(mine, "asks to use") || !strings.Contains(mine, "work laptop") {
 		t.Fatalf("the owner's history lost its transcript: %s", mine)
+	}
+}
+
+func liveSlot(name, callID string) map[string]any {
+	return map[string]any{"callId": callID, "name": name, "status": "running", "output": ""}
+}
+
+func appendOutput(slot int, text string) string {
+	return line(map[string]any{"type": "ops", "ops": []any{[]any{"a", []any{"docs", "pi.live", "tools", slot, "output"}, text}}})
+}
+
+func TestAViewerKeepsANonCLIToolsProgressAndLosesOnlyTheCLIs(t *testing.T) {
+	e, srv, owner, ws, conv := newStreamEnv(t)
+	reader := e.invite(owner, ws, "reader@example.com")
+	e.shareWith(owner, ws, conv.ID, reader)
+	e.svc.heartbeat = time.Hour
+	e.svc.heartbeatTicks = func() (<-chan time.Time, func()) { return make(chan time.Time), func() {} }
+
+	live := map[string]any{"pi.live": map[string]any{"tools": []any{liveSlot("pause_safe", "p1"), liveSlot("cli_turn", "c1")}}}
+	snapshot := line(map[string]any{"type": "value", "value": map[string]any{"entries": []any{}, "docs": live}})
+	progress := appendOutput(0, "waited 200ms\n")
+	secret := appendOutput(1, cliTranscript())
+	removeFirst := line(map[string]any{"type": "ops", "ops": []any{[]any{"p", []any{"docs", "pi.live", "tools"}, 0, 1, []any{}}}})
+	shifted := appendOutput(0, cliTranscript())
+	unknownSlot := appendOutput(7, cliTranscript())
+	added := line(map[string]any{"type": "ops", "ops": []any{[]any{"p", []any{"docs", "pi.live", "tools"}, 1, 0, []any{liveSlot("pause_safe", "p2")}}}})
+	laterProgress := appendOutput(1, "waited 400ms\n")
+	removed := line(map[string]any{"type": "ops", "ops": []any{[]any{"d", []any{"docs", "pi.live", "tools", 1}}}})
+	afterRemoval := appendOutput(1, "waited 600ms\n")
+
+	mine := owner.openEvents(srv, ws, conv.ID)
+	theirs := reader.openEvents(srv, ws, conv.ID)
+	ownerWatch, readerWatch := e.rt.watch(t, 0), e.rt.watch(t, 1)
+	sent := func(l string) (ownerGot, readerGot string) {
+		t.Helper()
+		ownerWatch.send(t, l)
+		readerWatch.send(t, l)
+		return mine.next().data, theirs.next().data
+	}
+	for _, l := range []string{snapshot, progress, secret, removeFirst, shifted, unknownSlot, added, laterProgress, removed, afterRemoval, snapshot, progress} {
+		ownerGot, readerGot := sent(l)
+		if ownerGot != l {
+			t.Fatalf("the owner's stream changed %s into %s", l, ownerGot)
+		}
+		for _, hidden := range ownerOnlyCLI {
+			if strings.Contains(readerGot, hidden) {
+				t.Fatalf("the viewer's stream carries %q: %s", hidden, readerGot)
+			}
+		}
+		switch l {
+		case progress, laterProgress:
+			if readerGot != l {
+				t.Fatalf("the viewer lost a non-CLI tool's progress: sent %s, got %s", l, readerGot)
+			}
+		case secret, shifted, unknownSlot, afterRemoval:
+			if !strings.Contains(readerGot, `"ops":[]`) {
+				t.Fatalf("the viewer's stream kept an operation on a CLI or unknown slot: %s", readerGot)
+			}
+		}
 	}
 }
 

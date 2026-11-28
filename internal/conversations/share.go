@@ -65,10 +65,9 @@ func (s *Service) members(ctx context.Context, c Conversation) (Members, error) 
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT u.id, u.name, m.role, m.added_at
 		FROM conversation_members m
-		JOIN conversations c ON c.id = m.conversation_id
 		JOIN users u ON u.id = m.user_id
-		WHERE c.id = ? AND c.workspace_id = ? AND c.owner_id = ? AND c.agent_id = ?
-		ORDER BY m.added_at, u.id`, c.ID, c.WorkspaceID, c.Owner.ID, c.agentID)
+		WHERE m.conversation_id = ?
+		ORDER BY m.added_at, u.id`, c.ID)
 	if err != nil {
 		return Members{}, err
 	}
