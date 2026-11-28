@@ -530,7 +530,8 @@ shell, or later a pane of the desk, gives it, and never assumes it is the only p
 
 - **Address.** A page and a `Link` move through `useNavigate()`, which is the place's own
   `navigate`, or the router's when there is no place; `usePlacePath()` is the place's path. Only the
-  shell, `App.tsx` and the notification sync use the router's `navigate` and `usePath` directly.
+  shell, the desk, `App.tsx` and the notification sync use the router's `navigate` and `usePath`
+  directly.
 - **Leave guards.** `useBeforeLeave` registers under its place (`null` when there is none), and a
   navigation or a Back asks the guards of the place the desk says is focused
   (`setFocusedPlace`). `beforeLeaving` (sign-out) and `navigateWholeApp` (a workspace switch, in
@@ -603,6 +604,36 @@ Opened with no connection, the run address of an app downloaded on this device o
 the offline view (the same local copy, queue and writer checks as the offline list), with the app's
 name as the page and the tab's title and the same "Open in taskto" link; "Back to the downloaded
 apps" shows the list. A run address of an app that isn't downloaded says so above the list.
+
+## The desk
+
+On a wide screen (over 56.25rem) the shell's main area is a desk (`web/src/desk/`): one or more
+panes side by side or stacked, each with a row of tabs, each tab any page of the app. Tablet and
+phone draw the single page as before. The layout is the person's own, saved per workspace through
+the desks API ([api.md](api.md#desks)), so it comes back on reload and on another computer.
+
+- **The tree.** `layout.ts` holds the layout (a split of `row`s and `column`s, whose rows follow
+  the writing direction, ending in groups of tabs) and the pure operations on it. Each returns the
+  layout unchanged, with a reason, when its result would break a limit the server checks too (6
+  panes, 20 tabs a pane, 60 in all, 3 levels, 2 to 4 children a split, sizes from 0.1 to 0.9).
+  Closing the last tab of a pane removes the pane and a split left with one child gives way to it;
+  the desk's only tab has no close button. A desk read from the server is used only if it
+  passes the same rules and every path is in the workspace; otherwise the address is shown as one
+  pane, and the stored one is left alone until the person changes something.
+- **The address.** It is always the focused tab's path. A change from outside the desk (a sidebar
+  link, Back and Forward, a deep link, the inbox) goes to the focused tab, unless another tab has
+  exactly that path, which is activated and its pane focused. Focusing another pane replaces the
+  address, so Back walks addresses, not focus. A page in the focused pane navigates through the
+  router, so the leave guards ask; a page in another pane asks its own place's guard first, and so
+  does closing a tab. Only the active tab of each pane is mounted.
+- **Saving.** `useDesk` shows the address as one pane until the desk arrives, and saves 800 ms
+  after the last change, at once when the page is hidden (a `keepalive` request), never before the
+  desk has loaded and never after the session changed. A refused save is said and sent
+  again with the next change, never in a loop; when another browser saved first, the server's layout
+  and version are adopted.
+- **Not yet.** The bars between panes (so every pane has the size the split gave it), the arrow keys
+  among a pane's tabs (they are in the tab order for now), and moving tabs by drag and drop come
+  after this first part.
 
 ## The logo
 

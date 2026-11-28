@@ -2544,6 +2544,16 @@
       "offline": "Offline, as telas do app ainda abrem, mas suas conversas, documentos e quadros precisam da conexão com o servidor."
     }
   },
+  "desk": {
+    "tabs": "Abas",
+    "closeTab": "Fechar {title}",
+    "newTab": "Nova aba",
+    "resize": "Redimensionar painéis",
+    "splitInline": "Dividir ao lado",
+    "splitBlock": "Dividir abaixo",
+    "saveFailed": "Não foi possível salvar o layout da sua mesa.",
+    "loadFailed": "Não foi possível carregar a sua mesa salva."
+  },
   "shell": {
     "sections": {
       "conversations": "Conversas",

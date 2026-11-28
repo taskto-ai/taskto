@@ -140,7 +140,8 @@ scenario('a Word preview stays inside the page at phone widths and in both writi
     data: await wordFile('Master agreement', 'Globex'),
   })
   assert.ok(res.ok(), `PUT ${url}: ${res.status()}`)
-  await page.getByRole('link', { name: 'Knowledge base' }).click()
+  await page.setViewportSize({ width: 390, height: 800 })
+  await page.goto('/w/1/knowledge')
   await page
     .getByRole('list', { name: 'Documents' })
     .getByRole('button', { name: /^contract\.docx/ })
@@ -157,6 +158,9 @@ scenario('a Word preview stays inside the page at phone widths and in both writi
         box.x >= 0 && box.x + box.width <= width + 0.5,
         `the frame leaves the page at ${width} (${dir}): ${JSON.stringify(box)}`,
       )
+      await page
+        .waitForFunction(() => document.documentElement.scrollWidth <= window.innerWidth, null, { timeout: 3_000 })
+        .catch(() => {})
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
       assert.ok(overflow <= 0, `the page scrolls sideways by ${overflow}px at ${width} (${dir})`)
       const download = page.getByRole('link', { name: 'Download' })

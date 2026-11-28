@@ -1,7 +1,9 @@
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react'
 import type { Me, Workspace } from '../api'
 import { parseRunPath } from '../apps/route'
+import { Desk } from '../desk/Desk'
 import { setPreferences, useT } from '../i18n'
+import { useMediaQuery } from '../media'
 import { EMAIL_CONFIRM_PATH, parseNotificationPath } from '../notifications/api'
 import { ConfirmEmail } from '../notifications/ConfirmEmail'
 import { OpenNotification } from '../notifications/NotificationsPage'
@@ -30,6 +32,11 @@ function lastWorkspace(): number | null {
   } catch {
     return null
   }
+}
+
+function focusPane(main: HTMLElement | null) {
+  const pane = main?.querySelector<HTMLElement>('[data-place][data-focused="true"]')
+  ;(pane ?? main)?.focus({ preventScroll: true })
 }
 
 function homeWorkspace(me: Me): Workspace | undefined {
@@ -123,6 +130,7 @@ function Frame({
   const sidebar = useRef<HTMLDivElement>(null)
   const main = useRef<HTMLElement>(null)
   const t = useT()
+  const wide = useMediaQuery('(min-width: 56.2501rem)')
 
   const target = route && !special ? routePath(route) : null
   useEffect(() => {
@@ -148,7 +156,7 @@ function Frame({
   }, [shownPage])
   useEffect(() => {
     if (drawer || !focusPage.current) return
-    main.current?.focus({ preventScroll: true })
+    focusPane(main.current)
     if (followedFrom.current !== null && followedFrom.current === shownPage) return
     focusPage.current = false
     followedFrom.current = null
@@ -185,9 +193,10 @@ function Frame({
   if (!route) return special ? special.page : <NoWorkspace me={me} onLogout={onLogout} onMe={onMe} />
 
   const workspace = me.workspaces.find((w) => w.id === route.workspace) ?? me.workspaces[0]
+  const desk = wide && !special
   return (
     <div className="ui-shell" data-drawer={drawer ? 'open' : 'closed'}>
-      <Button className="ui-shell-skip" onClick={() => main.current?.focus()}>
+      <Button className="ui-shell-skip" onClick={() => focusPane(main.current)}>
         {t('shell.skipToContent')}
       </Button>
       <PhoneBar drawer={drawer} onToggle={() => setDrawer((d) => !d)} menuButton={menuButton} t={t} />
@@ -206,12 +215,18 @@ function Frame({
         id={MAIN_ID}
         ref={main}
         tabIndex={-1}
-        className="ui-shell-main"
+        className={desk ? 'ui-shell-main desk-main' : 'ui-shell-main'}
         inert={drawer || undefined}
-        key={special ? path : `${workspace.id}/${route.section}`}
+        key={special ? path : desk ? `desk/${workspace.id}` : `${workspace.id}/${route.section}`}
       >
         <ErrorBoundary fallback={<PageFailed />} resetKey={path}>
-          {special ? special.page : <SectionPage route={route} me={me} workspace={workspace} />}
+          {special ? (
+            special.page
+          ) : desk && target ? (
+            <Desk me={me} workspace={workspace} path={target} failed={<PageFailed />} />
+          ) : (
+            <SectionPage route={route} me={me} workspace={workspace} />
+          )}
         </ErrorBoundary>
       </main>
     </div>
