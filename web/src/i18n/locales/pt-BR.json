@@ -43,6 +43,14 @@
       "more": "Mostrando {shown} de {total}",
       "open": "Abrir {title}"
     },
+    "chart": {
+      "empty": "Ainda sem dados",
+      "table": "Dados de {label}",
+      "group": "Grupo",
+      "value": "Valor",
+      "other": "Outros",
+      "week": "Semana {week}, {year}"
+    },
     "invalidScreen": "O app enviou uma tela que não pode ser mostrada: {error}",
     "noDataChanges": "Seu papel neste app permite ver, mas não alterar os dados.",
     "ownRecords": "Você vê apenas os registros que adicionou.",
@@ -975,6 +983,13 @@
     "session_current": "Esta é a sessão que você está usando: saia da conta.",
     "token_expiry_invalid": "A expiração precisa ser um momento no futuro.",
     "too_many_tokens": "Você pode ter no máximo {max} tokens de acesso em um espaço de trabalho: revogue um primeiro.",
+    "skill_not_found": "Habilidade não encontrada.",
+    "skill_name_invalid": "O nome de uma habilidade começa com uma letra minúscula e tem de 2 a 40 letras minúsculas, dígitos e hífens.",
+    "skill_name_taken": "Já existe uma habilidade com este nome.",
+    "skill_title_length": "O título de uma habilidade tem de 1 a {max} caracteres em uma linha.",
+    "skill_description_length": "A descrição de uma habilidade tem de 1 a {max} caracteres em uma linha.",
+    "skill_body_length": "As instruções de uma habilidade são um texto de até {max_kib} KiB, e não vazio.",
+    "too_many_skills": "Cabem no máximo {max} habilidades aqui: remova uma primeiro.",
     "space_not_found": "Espaço não encontrado.",
     "space_read_only": "Você só pode ler este espaço.",
     "space_archived": "Este espaço está arquivado: é somente leitura.",
@@ -2215,6 +2230,9 @@
         "app_integration_approved": "Uso de uma integração por um app aprovado",
         "app_integration_rejected": "Uso de uma integração por um app recusado",
         "app_integration_revoked": "Uso de uma integração por um app revogado",
+        "skill_created": "Habilidade adicionada",
+        "skill_updated": "Habilidade alterada",
+        "skill_removed": "Habilidade removida",
         "data_export_started": "Exportação de dados iniciada",
         "workspace_export_started": "Exportação do espaço de trabalho iniciada",
         "server_update_requested": "Atualização pedida",
@@ -2235,7 +2253,8 @@
         "provider_account": "Conta de provedor de modelos",
         "shared_cli_account": "Conta de CLI compartilhada",
         "integration": "Integração",
-        "app_integration_approval": "Aprovação de integração de app"
+        "app_integration_approval": "Aprovação de integração de app",
+        "skill": "Habilidade"
       },
       "details": {
         "account": "Conta",
@@ -2292,7 +2311,9 @@
         "app_id": "Número do app",
         "integration_id": "Número da integração",
         "effect_id": "Número do pagamento",
-        "space_allowed": "Espaço também permitido"
+        "space_allowed": "Espaço também permitido",
+        "name": "Nome",
+        "space_id": "Número do espaço"
       },
       "values": {
         "admin": "Administrador",
@@ -2328,7 +2349,12 @@
         "currencies": "Moedas",
         "webhook_secret": "Segredo do webhook",
         "test": "Teste",
-        "live": "Real"
+        "live": "Real",
+        "space": "Espaço compartilhado",
+        "title": "Título",
+        "description": "Descrição",
+        "body": "Instruções",
+        "enabled": "Ativada ou desativada"
       },
       "event": "Evento",
       "when": "Quando"
@@ -2803,6 +2829,10 @@
     "archived": "Arquivadas",
     "showArchivedTitle": "Mostrar as conversas arquivadas",
     "new": "Nova",
+    "origin": {
+      "app": "App",
+      "routine": "Rotina"
+    },
     "nothingArchived": "Nenhuma conversa arquivada.",
     "none": "Nenhuma conversa ainda.",
     "noneHelp": "Comece uma em Nova, ou peça ao agente para criar um app.",

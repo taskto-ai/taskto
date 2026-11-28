@@ -22,8 +22,14 @@
     { "date": "2026-01-05T00:00:00Z", "valid": false },
     { "date": "２０２６-01-05", "valid": false },
     { "date": "", "valid": false },
-    { "date": " 2026-01-05 ", "valid": false, "field": true },
-    { "date": "2026-01-05\n", "valid": false, "field": true },
+    { "date": " 2026-01-05 ", "valid": false, "field": true, "stored": "2026-01-05" },
+    { "date": "2026-01-05\n", "valid": false, "field": true, "stored": "2026-01-05" },
+    { "date": "\u00852026-01-05", "valid": false, "field": true, "stored": "2026-01-05" },
+    { "date": "2026-01-05\u00a0", "valid": false, "field": true, "stored": "2026-01-05" },
+    { "date": "\u30002026-01-05\u2003", "valid": false, "field": true, "stored": "2026-01-05" },
+    { "date": "\ufeff2026-01-05", "valid": false, "field": false },
+    { "date": "2026-01-05\ufeff", "valid": false, "field": false },
+    { "date": "\u200b2026-01-05", "valid": false, "field": false },
     { "date": "\t2026-02-30 ", "valid": false, "field": false }
   ]
 }

@@ -34,6 +34,7 @@ interface State {
 let state: State = { items: [], said: [], owners: [] }
 let next = 1
 const listeners = new Set<() => void>()
+const announcing = new Map<number, ReturnType<typeof setTimeout>>()
 let raise: (() => void) | null = null
 
 const MAX = 4
@@ -57,7 +58,13 @@ export function toast(options: ToastOptions | string): number {
   ensureToaster()
   raise?.()
   set({ items: [...state.items, item].slice(-MAX), said: [...state.said, item] })
-  setTimeout(() => set({ said: state.said.filter((s) => s.id !== item.id) }), ANNOUNCE_MS)
+  announcing.set(
+    item.id,
+    setTimeout(() => {
+      announcing.delete(item.id)
+      set({ said: state.said.filter((s) => s.id !== item.id) })
+    }, ANNOUNCE_MS),
+  )
   return item.id
 }
 
@@ -67,6 +74,8 @@ export function dismissToast(id: number): void {
 }
 
 export function clearToasts(): void {
+  for (const timer of announcing.values()) clearTimeout(timer)
+  announcing.clear()
   set({ items: [], said: [] })
 }
 export const resetToasts = clearToasts

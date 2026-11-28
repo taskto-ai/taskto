@@ -163,7 +163,13 @@ func (e *eventWriter) deliver(p []byte, allowed func() bool) error {
 	if _, err := e.w.Write(p); err != nil {
 		return err
 	}
-	return e.rc.Flush()
+	if err := e.rc.Flush(); err != nil {
+		return err
+	}
+	if err := e.rc.SetWriteDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		return err
+	}
+	return nil
 }
 
 func (e *eventWriter) stopped() bool {

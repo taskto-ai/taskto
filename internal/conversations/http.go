@@ -22,6 +22,14 @@ import (
 
 func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	s.language = a.Language
+	s.userLanguage = func(ctx context.Context, user int64) string {
+		locale, err := a.UserLocale(ctx, user)
+		if err != nil {
+			slog.WarnContext(ctx, "conversations: reading the user's language for a server-started turn", "user", user, "err", err)
+			return ""
+		}
+		return locale
+	}
 	s.watchSession = a.WatchSession
 	member := func(h http.HandlerFunc) http.Handler { return a.RequireMember(h) }
 	const base = "/api/workspaces/{workspace}/conversations"
@@ -641,9 +649,18 @@ func (s *Service) handleSetModel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, req)
 }
 
-func validTitle(w http.ResponseWriter, title string) (string, bool) {
+func cleanTitle(title string) (string, bool) {
 	title = strings.TrimSpace(title)
-	if utf8.RuneCountInString(title) > maxTitleLen || strings.IndexFunc(title, func(r rune) bool { return !unicode.IsPrint(r) && r != ' ' }) >= 0 {
+	if !utf8.ValidString(title) || utf8.RuneCountInString(title) > maxTitleLen ||
+		strings.IndexFunc(title, func(r rune) bool { return !unicode.IsPrint(r) && r != ' ' }) >= 0 {
+		return "", false
+	}
+	return title, true
+}
+
+func validTitle(w http.ResponseWriter, title string) (string, bool) {
+	title, ok := cleanTitle(title)
+	if !ok {
 		writeError(w, http.StatusBadRequest, apierr.CodeConversationTitleInvalid,
 			fmt.Sprintf("title must be up to %d printable characters", maxTitleLen), apierr.Params{"max": maxTitleLen})
 		return "", false
