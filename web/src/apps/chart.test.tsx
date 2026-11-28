@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
+import { INTER_ADVANCE_EM, INTER_STRING_PX } from '../test/interWidths'
 import { AppView } from './AppView'
 import { ChartApi } from './Chart'
 import { APPS_CATALOG_ID, DEFINITION_VERSION } from './catalog'
@@ -21,7 +22,6 @@ import {
   stackLayers,
   TICK_SIZE,
 } from './chartData'
-import { INTER_ADVANCE_EM, INTER_STRING_PX } from './chartInterWidths'
 
 afterEach(async () => {
   cleanup()
