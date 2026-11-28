@@ -23,7 +23,7 @@ func question(t *testing.T, w *cliworker.Worker, user int64) cliworker.Permissio
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		if qs := w.Permissions(user, 7); len(qs) > 0 {
+		if qs := w.Permissions(acct(user), 7); len(qs) > 0 {
 			if len(qs) != 1 {
 				t.Fatalf("questions = %+v", qs)
 			}
@@ -70,16 +70,16 @@ func TestPermissionAskedAndAnswered(t *testing.T) {
 				if q.Tool != "Bash" || q.Input != "touch proof.txt" || q.CLI != cli || q.Turn != "ask-"+name {
 					t.Errorf("question = %+v", q)
 				}
-				if err := h.w.Answer(2, 7, q.ID, true); !errors.Is(err, cliworker.ErrNoPermission) {
+				if err := h.w.Answer(acct(2), 7, q.ID, true); !errors.Is(err, cliworker.ErrNoPermission) {
 					t.Errorf("another user's answer: %v", err)
 				}
-				if err := h.w.Answer(1, 8, q.ID, true); !errors.Is(err, cliworker.ErrNoPermission) {
+				if err := h.w.Answer(acct(1), 8, q.ID, true); !errors.Is(err, cliworker.ErrNoPermission) {
 					t.Errorf("an answer from another conversation: %v", err)
 				}
-				if qs := h.w.Permissions(2, 7); len(qs) != 0 {
+				if qs := h.w.Permissions(acct(2), 7); len(qs) != 0 {
 					t.Errorf("another user sees %+v", qs)
 				}
-				if err := h.w.Answer(1, 7, q.ID, allow); err != nil {
+				if err := h.w.Answer(acct(1), 7, q.ID, allow); err != nil {
 					t.Fatal(err)
 				}
 				events := waitDone(t, turn, 20*time.Second)
@@ -99,10 +99,10 @@ func TestPermissionAskedAndAnswered(t *testing.T) {
 				if len(ps) != 2 || ps[0].Status != cliworker.PermissionAsked || ps[0].Input != "touch proof.txt" || ps[1].Status != wantStatus || ps[1].ID != q.ID {
 					t.Errorf("permission events = %+v", ps)
 				}
-				if qs := h.w.Permissions(1, 7); len(qs) != 0 {
+				if qs := h.w.Permissions(acct(1), 7); len(qs) != 0 {
 					t.Errorf("still waiting: %+v", qs)
 				}
-				if err := h.w.Answer(1, 7, q.ID, true); !errors.Is(err, cliworker.ErrNoPermission) {
+				if err := h.w.Answer(acct(1), 7, q.ID, true); !errors.Is(err, cliworker.ErrNoPermission) {
 					t.Errorf("a second answer: %v", err)
 				}
 			})
@@ -162,7 +162,7 @@ func TestPermissionUnanswered(t *testing.T) {
 	if done.Status != cliworker.StatusStopped && !denied {
 		t.Errorf("done = %+v", done)
 	}
-	if qs := h.w.Permissions(1, 7); len(qs) != 0 {
+	if qs := h.w.Permissions(acct(1), 7); len(qs) != 0 {
 		t.Errorf("still waiting after the stop: %+v", qs)
 	}
 }
@@ -209,7 +209,7 @@ func (h *harness) approveSocket(t *testing.T) string {
 			} `json:"hooks"`
 		} `json:"hooks"`
 	}
-	b, err := os.ReadFile(filepath.Join(h.layout.User(1).Config(cliworker.Codex), "hooks.json"))
+	b, err := os.ReadFile(filepath.Join(h.home(1).Config(cliworker.Codex), "hooks.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,14 +306,14 @@ func TestPermissionsThroughTheRemote(t *testing.T) {
 	}
 	q := question(t, h.w, 1)
 	ctx := context.Background()
-	qs, err := remote.Permissions(ctx, 1, 7)
+	qs, err := remote.Permissions(ctx, acct(1), 7)
 	if err != nil || len(qs) != 1 || qs[0].ID != q.ID || qs[0].Tool != "Bash" {
 		t.Fatalf("remote questions = %+v, %v", qs, err)
 	}
-	if err := remote.Answer(ctx, 2, 7, q.ID, true); !errors.Is(err, cliworker.ErrNoPermission) {
+	if err := remote.Answer(ctx, acct(2), 7, q.ID, true); !errors.Is(err, cliworker.ErrNoPermission) {
 		t.Errorf("another user's answer through the remote: %v", err)
 	}
-	if err := remote.Answer(ctx, 1, 7, q.ID, true); err != nil {
+	if err := remote.Answer(ctx, acct(1), 7, q.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	if got := toolOutcome(last(waitDone(t, turn, 20*time.Second)).Text); got != "ran" {
@@ -336,7 +336,7 @@ func TestApproveNeedsTheTurnsCLI(t *testing.T) {
 	if code := cliworker.RunApproveForTest([]string{sock, "codex"}, strings.NewReader(input), &out, &bytes.Buffer{}); code != 2 || !strings.Contains(out.String(), "no running turn") {
 		t.Errorf("another CLI's hook: exit %d, %s", code, out.String())
 	}
-	if err := h.w.Answer(1, 7, q.ID, true); err != nil {
+	if err := h.w.Answer(acct(1), 7, q.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	waitDone(t, turn, 20*time.Second)
@@ -362,9 +362,10 @@ func TestApprovalSocketFallback(t *testing.T) {
 
 func TestPermissionOnAnotherAccountSlot(t *testing.T) {
 	h := newHarness(t, nil)
+	h.introduce(t, 1, 2)
 	for _, cli := range cliworker.CLIs {
 		t.Run(string(cli), func(t *testing.T) {
-			dirs, err := h.layout.EnsureSlot(1, cli, "2")
+			dirs, err := h.layout.EnsureSlot(h.w.HomeForTest(acct(1)), cli, "2")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -377,7 +378,7 @@ func TestPermissionOnAnotherAccountSlot(t *testing.T) {
 				t.Fatal(err)
 			}
 			q := question(t, h.w, 1)
-			if err := h.w.Answer(1, 7, q.ID, false); err != nil {
+			if err := h.w.Answer(acct(1), 7, q.ID, false); err != nil {
 				t.Fatal(err)
 			}
 			if got := toolOutcome(last(waitDone(t, turn, 20*time.Second)).Text); !strings.HasPrefix(got, "denied") {

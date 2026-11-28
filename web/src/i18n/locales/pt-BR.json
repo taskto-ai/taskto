@@ -1135,6 +1135,7 @@
     "cli_workers_no_boundary": "Os workers de CLI rodam em modo local neste servidor, sem isolamento entre usuários, então só funcionam enquanto o servidor tiver um único usuário. Um operador pode usar o contêiner do worker de CLI no lugar.",
     "cli_not_installed": "O {cli} não está instalado neste servidor.",
     "cli_worker_closing": "O worker de CLI está sendo desligado: tente de novo daqui a pouco.",
+    "cli_worker_not_ready": "O worker de CLI ainda não está pronto: tente de novo daqui a pouco.",
     "cli_account_removing": "Esta conta está sendo desconectada: tente de novo daqui a pouco.",
     "cli_account_busy": "Um processo da CLI desta conta ainda está rodando, então nada foi removido: tente de novo daqui a pouco.",
     "cli_account_forgotten": "Os arquivos de CLI desta conta foram removidos do worker. Se você não pediu isso, tente de novo daqui a pouco: o taskto.ai ainda está avisando o worker quem está aqui.",
@@ -1618,6 +1619,12 @@
       "credits": "Créditos",
       "noCredits": "Nada do que este espaço de trabalho usa agora pede um crédito aqui.",
       "credit": "<work>{name}</work>, de {by}, sob <licenceLink>{licence}</licenceLink>.",
+      "cliWorker": {
+        "title": "Worker das CLIs",
+        "otherInstallation": "O volume do worker das CLIs pertence a outra instalação do taskto (outro diretório de dados). Ele não aceita censo, exclusão nem conta nova deste servidor até um operador entregá-lo: nunca rode duas instalações, nem duas cópias de um mesmo diretório de dados, com um só worker.",
+        "authorityLost": "O worker das CLIs perdeu o histórico das inicializações deste servidor. Até um operador entregá-lo a este servidor, ele não remove nada: as exclusões de contas e a limpeza das contas que uma restauração deixou ficam esperando. Todo o resto continua.",
+        "handOver": "Pare qualquer outro servidor que ainda possa falar com o worker, depois pare o worker, rode isto no volume dele e inicie o worker de novo (docs/cli-workers.md explica por quê):"
+      },
       "backups": {
         "title": "Backups",
         "health": {

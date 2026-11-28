@@ -87,6 +87,7 @@ func Roots() []Root {
 
 		root[updatestatus.Report]("UpdateReport"),
 		root[updatestatus.Requested]("UpdateRequested"),
+		root[cliaccounts.WorkerStatus]("CLIWorkerStatus"),
 		root[search.PaletteResults]("SearchPalette"),
 	}
 }

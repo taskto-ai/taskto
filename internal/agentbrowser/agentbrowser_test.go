@@ -24,6 +24,7 @@ import (
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/browser"
 	"taskto.ai/taskto/internal/cliaccounts"
+	"taskto.ai/taskto/internal/cliowner"
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/drain"
 )
@@ -36,6 +37,16 @@ type fakeBrowsers struct {
 		a    browser.Action
 	}
 	lives []int64
+	down  bool
+}
+
+func (f *fakeBrowsers) unreachable() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.down {
+		return fmt.Errorf("%w: dial unix: connect: no such file", browser.ErrUnreachable)
+	}
+	return nil
 }
 
 func newFake() *fakeBrowsers { return &fakeBrowsers{running: map[int64]map[browser.Kind]bool{}} }
@@ -44,7 +55,11 @@ func (f *fakeBrowsers) Availability(context.Context) map[browser.Kind]bool {
 	return map[browser.Kind]bool{browser.Personal: true, browser.Testing: true}
 }
 
-func (f *fakeBrowsers) Status(_ context.Context, user int64) (map[browser.Kind]browser.State, error) {
+func (f *fakeBrowsers) Status(_ context.Context, a cliowner.Account) (map[browser.Kind]browser.State, error) {
+	user := a.User
+	if err := f.unreachable(); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := map[browser.Kind]browser.State{}
@@ -67,17 +82,26 @@ func (f *fakeBrowsers) set(user int64, kind browser.Kind, on bool) {
 	f.running[user][kind] = on
 }
 
-func (f *fakeBrowsers) Start(_ context.Context, user int64, kind browser.Kind) error {
+func (f *fakeBrowsers) Start(_ context.Context, a cliowner.Account, kind browser.Kind) error {
+	user := a.User
+	if err := f.unreachable(); err != nil {
+		return err
+	}
 	f.set(user, kind, true)
 	return nil
 }
 
-func (f *fakeBrowsers) Stop(_ context.Context, user int64, kind browser.Kind) error {
+func (f *fakeBrowsers) Stop(_ context.Context, a cliowner.Account, kind browser.Kind) error {
+	user := a.User
 	f.set(user, kind, false)
 	return nil
 }
 
-func (f *fakeBrowsers) Do(_ context.Context, user int64, a browser.Action) (browser.Result, error) {
+func (f *fakeBrowsers) Do(_ context.Context, acct cliowner.Account, a browser.Action) (browser.Result, error) {
+	user := acct.User
+	if err := f.unreachable(); err != nil {
+		return browser.Result{}, err
+	}
 	f.mu.Lock()
 	f.actions = append(f.actions, struct {
 		user int64
@@ -101,9 +125,10 @@ func (f *fakeBrowsers) Do(_ context.Context, user int64, a browser.Action) (brow
 	return browser.Result{Tab: &browser.Tab{ID: "T1", URL: a.URL, Agent: true}}, nil
 }
 
-func (f *fakeBrowsers) Forget(context.Context, int64) error { return nil }
+func (f *fakeBrowsers) Forget(context.Context, cliowner.Account) error { return nil }
 
-func (f *fakeBrowsers) OpenLive(_ context.Context, user int64) (io.ReadWriteCloser, error) {
+func (f *fakeBrowsers) OpenLive(_ context.Context, a cliowner.Account) (io.ReadWriteCloser, error) {
+	user := a.User
 	f.mu.Lock()
 	running := f.running[user][browser.Personal]
 	if running {
@@ -135,7 +160,7 @@ type env struct {
 	h   http.Handler
 }
 
-func newEnv(t *testing.T, b browser.Browsers, usable func(context.Context) error) *env {
+func newEnv(t *testing.T, b browser.Browsers, usable func(context.Context, int64) error) *env {
 	t.Helper()
 	ctx := context.Background()
 	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), db.FileName))
@@ -146,7 +171,7 @@ func newEnv(t *testing.T, b browser.Browsers, usable func(context.Context) error
 	if _, err := db.Migrate(ctx, sqlDB); err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, db: sqlDB, svc: New(b, usable)}
+	e := &env{t: t, db: sqlDB, svc: New(b, usable, testAccount)}
 	if f, ok := b.(*fakeBrowsers); ok {
 		e.b = f
 	}
@@ -252,7 +277,7 @@ func TestOff(t *testing.T) {
 }
 
 func TestUnusable(t *testing.T) {
-	e := newEnv(t, newFake(), func(context.Context) error { return errors.New("no OS boundary between users") })
+	e := newEnv(t, newFake(), func(context.Context, int64) error { return errors.New("no OS boundary between users") })
 	owner, _ := e.setup()
 	st := decode[Status](t, owner.do(http.MethodGet, base, nil))
 	if st.Enabled || st.Reason != "no OS boundary between users" || st.ReasonCode != apierr.CodeBrowserUnusable {
@@ -267,7 +292,7 @@ func TestUnusable(t *testing.T) {
 		cliaccounts.ErrOff:        apierr.CodeBrowserCLIWorkersOff,
 		cliaccounts.ErrNoBoundary: apierr.CodeBrowserSingleUser,
 	} {
-		other := newEnv(t, newFake(), func(context.Context) error { return why })
+		other := newEnv(t, newFake(), func(context.Context, int64) error { return why })
 		owner, _ := other.setup()
 		if st := decode[Status](t, owner.do(http.MethodGet, base, nil)); st.ReasonCode != code {
 			t.Errorf("%v: reason_code = %q, want %q", why, st.ReasonCode, code)
@@ -540,7 +565,7 @@ func refusedWith(err error, status int, text string) bool {
 
 func TestTools(t *testing.T) {
 	f := newFake()
-	s := New(f, nil)
+	s := New(f, nil, testAccount)
 	ctx := context.Background()
 	call := func(name, args string) (map[string]any, error) {
 		out, err := s.Call(ctx, 7, 3, name, json.RawMessage(args))
@@ -656,4 +681,71 @@ func TestLiveViewEndsWithTheShutdown(t *testing.T) {
 	if !liveEnds(ws) {
 		t.Fatal("the live view outlived the shutdown")
 	}
+}
+
+func TestNotReadyKeepsItsCode(t *testing.T) {
+	notReady := apierr.New(http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, "the CLI worker isn't ready yet: try again in a moment")
+	var asked []int64
+	e := newEnv(t, newFake(), func(_ context.Context, user int64) error {
+		asked = append(asked, user)
+		return notReady
+	})
+	owner, _ := e.setup()
+	for _, r := range []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodGet, base, nil},
+		{http.MethodPost, base + "/start", map[string]string{}},
+		{http.MethodPost, base + "/stop", map[string]string{}},
+	} {
+		rec := owner.do(r.method, r.path, r.body)
+		if rec.Code != http.StatusServiceUnavailable || decode[map[string]any](t, rec)["code"] != string(apierr.CodeCLIWorkerNotReady) {
+			t.Errorf("%s %s = %d %s, want 503 %s", r.method, r.path, rec.Code, rec.Body.String(), apierr.CodeCLIWorkerNotReady)
+		}
+	}
+	for _, user := range asked {
+		if user != owner.id {
+			t.Errorf("readiness was asked for user %d, not the caller %d", user, owner.id)
+		}
+	}
+	if _, err := New(e.b, func(context.Context, int64) error { return notReady }, testAccount).Call(context.Background(), owner.id, 1, "browser_tabs", json.RawMessage(`{}`)); !refusedWith(err, http.StatusServiceUnavailable, "isn't ready") {
+		t.Errorf("a tool while the worker isn't ready: %v", err)
+	}
+	if len(e.b.actions) != 0 || len(e.b.running) != 0 {
+		t.Fatal("the browser was reached")
+	}
+}
+
+func TestAnUnreachableWorkerIsNotReady(t *testing.T) {
+	f := newFake()
+	e := newEnv(t, f, nil)
+	owner, _ := e.setup()
+	f.down = true
+	for _, r := range []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodGet, base, nil},
+		{http.MethodPost, base + "/start", map[string]string{}},
+	} {
+		rec := owner.do(r.method, r.path, r.body)
+		if rec.Code != http.StatusServiceUnavailable || decode[map[string]any](t, rec)["code"] != string(apierr.CodeCLIWorkerNotReady) {
+			t.Errorf("%s %s = %d %s, want 503 %s", r.method, r.path, rec.Code, rec.Body.String(), apierr.CodeCLIWorkerNotReady)
+		}
+	}
+	_, err := New(f, nil, testAccount).Call(context.Background(), owner.id, 1, "browser_tabs", json.RawMessage(`{}`))
+	var refused *agenttools.Refusal
+	if !errors.As(err, &refused) || refused.Status != http.StatusServiceUnavailable || refused.Code != apierr.CodeCLIWorkerNotReady {
+		t.Errorf("a tool with the worker unreachable: %#v", err)
+	}
+	if _, err := New(e.b, func(context.Context, int64) error {
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeCLIWorkerNotReady, "not ready")
+	}, testAccount).Call(context.Background(), owner.id, 1, "browser_tabs", json.RawMessage(`{}`)); !errors.As(err, &refused) || refused.Code != apierr.CodeCLIWorkerNotReady {
+		t.Errorf("a tool before the worker is ready keeps no code: %#v", err)
+	}
+}
+
+func testAccount(_ context.Context, user int64) (cliowner.Account, error) {
+	return cliowner.Account{User: user, Identity: fmt.Sprintf("%032x", user)}, nil
 }

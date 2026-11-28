@@ -3,7 +3,7 @@ import { t } from '../i18n'
 import { type Changed, changeOf, isId } from './changes'
 
 export type ConversationView = {
-  entries?: { id: number; kind: string; model?: unknown[]; data?: unknown }[]
+  entries?: { id: number; kind: string; data?: unknown; model?: unknown[] }[]
   before?: number
   docs?: Record<string, unknown>
 }
@@ -38,6 +38,7 @@ export type ChatMessage = {
   author?: number
   error?: string
   pending?: boolean
+  attached?: { conversation: number; title: string }[]
 }
 
 export type Transcript = {
@@ -143,6 +144,29 @@ function toMessage(key: string, message: unknown, kept: Kept, pending = false): 
   return out
 }
 
+function inputData(value: unknown): {
+  author?: number
+  text?: string
+  attached?: { conversation: number; title: string }[]
+} {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const data = value as Record<string, unknown>
+  const parsed: { author?: number; text?: string; attached?: { conversation: number; title: string }[] } = {}
+  if (isId(data.author)) parsed.author = data.author
+  if (typeof data.text === 'string') parsed.text = data.text
+  if (Array.isArray(data.attached)) {
+    const attached = data.attached.flatMap((item) => {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) return []
+      const ref = item as Record<string, unknown>
+      return isId(ref.conversation) && typeof ref.title === 'string'
+        ? [{ conversation: ref.conversation, title: ref.title }]
+        : []
+    })
+    if (attached.length) parsed.attached = attached
+  }
+  return parsed
+}
+
 function toNote(entry: { id: number; kind: string; data?: unknown }): ChatMessage | null {
   if (entry.kind !== NOTE_KIND) return null
   const data = entry.data as { text?: unknown; author?: unknown } | undefined
@@ -206,6 +230,12 @@ export function transcript(view: ConversationView | null | undefined): Transcrip
     if (note) messages.push(note)
     entry.model?.forEach((message, i) => {
       const m = toMessage(`${entry.id}.${i}`, message, results)
+      if (m?.role === 'user' && entry.kind === 'taskto.input') {
+        const data = inputData(entry.data)
+        if (data.text !== undefined) m.text = data.text
+        if (data.author !== undefined) m.author = data.author
+        if (data.attached !== undefined) m.attached = data.attached
+      }
       if (m) messages.push(m)
     })
   }

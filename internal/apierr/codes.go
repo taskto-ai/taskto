@@ -286,6 +286,7 @@ const (
 	CodeCLIWorkersNoBoundary   Code = "cli_workers_no_boundary"
 	CodeCLINotInstalled        Code = "cli_not_installed"
 	CodeCLIWorkerClosing       Code = "cli_worker_closing"
+	CodeCLIWorkerNotReady      Code = "cli_worker_not_ready"
 	CodeCLIAccountForgotten    Code = "cli_account_forgotten"
 	CodeCLIAccountRemoving     Code = "cli_account_removing"
 	CodeCLIAccountBusy         Code = "cli_account_busy"

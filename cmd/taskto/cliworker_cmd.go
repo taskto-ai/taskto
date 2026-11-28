@@ -25,13 +25,32 @@ import (
 	"taskto.ai/taskto/internal/privcheck"
 )
 
+func runTrustServer(args []string, stderr io.Writer) error {
+	fs := flag.NewFlagSet("cli-worker trust-server", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	homes := fs.String("homes", "/homes", "the worker's volume")
+	boot := fs.String("boot", "", "the current server's boot, as it logs it and Settings → About shows it")
+	installation := fs.String("installation", "", "the current server's installation, to move the volume to it (another data directory); empty: the volume keeps its own")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := cliworker.TrustServer(cliworker.Layout{Root: *homes}, *boot, *installation); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(stderr, "the CLI worker on %s now takes censuses and deletions from the server with boot %s only\n", *homes, *boot)
+	return nil
+}
+
 func runCLIWorker(args []string, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "trust-server" {
+		return runTrustServer(args[1:], stderr)
+	}
 	fs := flag.NewFlagSet("cli-worker", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	socket := fs.String("socket", "/run/taskto-cli/worker.sock", "the socket the server connects to")
 	owner := fs.String("socket-owner", "65532:65532", "uid:gid of the server, the only one who may open the socket")
 	homes := fs.String("homes", "/homes", "where each user's directory is (a volume of its own)")
-	uidBase := fs.Int("uid-base", 100000, "the first uid: taskto user N runs as this plus N")
+	uidBase := fs.Int("uid-base", 100000, "the first uid: the account with home number H runs as this plus H (docs/cli-workers.md)")
 	path := fs.String("path", os.Getenv("PATH"), "PATH for the CLIs and the commands they run")
 	unsafe := fs.Bool(privcheck.OverrideFlag, false, "development only: start even if the image has setuid or setgid programs")
 	browserIdle := fs.Duration("browser-idle", 5*time.Minute, "how long an agent browser runs unused before it stops")
@@ -88,8 +107,11 @@ func runCLIWorker(args []string, stderr io.Writer) error {
 		Idle:      *browserIdle,
 		Max:       *browserMax,
 		NoSandbox: true,
+		Allow:     w.BrowserAllowed,
+		Fence:     w.FenceDeletion,
 	})
 	defer browsers.Close()
+	w.SetBrowsers(browsers)
 	mux := http.NewServeMux()
 	mux.Handle("/browser/", browser.NewHandler(browsers))
 	mux.Handle("/", w.Handler())

@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"taskto.ai/taskto/internal/cliowner"
 )
 
 type CLI string
@@ -117,6 +119,9 @@ type Limit struct {
 type TurnSpec struct {
 	ID           string      `json:"id"`
 	User         int64       `json:"user"`
+	Identity     string      `json:"identity"`
+	Boot         string      `json:"boot,omitempty"`
+	Installation string      `json:"installation,omitempty"`
 	CLI          CLI         `json:"cli"`
 	Slot         Slot        `json:"slot,omitempty"`
 	Proxy        *Proxy      `json:"proxy,omitempty"`
@@ -200,13 +205,17 @@ var errUnsupported = errors.New("CLI workers need a Unix system")
 
 const maxPrompt = 96 << 10
 
+func (s TurnSpec) Account() cliowner.Account {
+	return cliowner.Account{User: s.User, Identity: s.Identity, Boot: s.Boot, Installation: s.Installation}
+}
+
 func (s TurnSpec) check() error {
 	toolsErr := s.Tools.check()
 	switch {
 	case !turnIDPattern.MatchString(s.ID):
 		return fmt.Errorf("turn ID must be 1-64 of A-Z a-z 0-9 _ -")
-	case s.User <= 0:
-		return fmt.Errorf("a turn needs a user")
+	case !s.Account().Valid():
+		return fmt.Errorf("a turn needs an account")
 	case !s.CLI.Valid():
 		return fmt.Errorf("unknown CLI %q", s.CLI)
 	case !s.Slot.Valid():

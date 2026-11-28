@@ -62,4 +62,5 @@ export type Contract = [
   Is<Check<Gen.AppIntegrationApprovalList, Api.IntegrationApprovalList>>,
   Is<Check<Gen.UpdateReport, Api.UpdateStatus>>,
   Is<Check<Gen.UpdateRequested, Api.UpdateRequested>>,
+  Is<Check<Gen.CLIWorkerStatus, Api.CLIWorkerStatus>>,
 ]
