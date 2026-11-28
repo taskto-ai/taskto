@@ -286,3 +286,40 @@ test('the picker shows the model the server says the run was admitted on, not th
   await waitFor(() => expect(picker.disabled).toBe(false))
   expect(picker.value).toBe(JSON.stringify(['script', 's']))
 })
+
+const privateNote = { id: 3, kind: 'taskto.note', data: { v: 1, author: 1, text: 'for the record' } }
+
+test('a private note after a failed reply keeps the failure offered and ties the continue to the failed reply', async () => {
+  const calls = await show([asked, failed, privateNote], { [`POST ${BASE}/continue`]: accepted })
+  fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
+  await waitFor(() => expect(writes(calls)).toEqual([`POST ${BASE}/continue`]))
+  expect(continues(calls)).toEqual([{ model: { provider: 'script', model_id: 's' }, after_entry: 2 }])
+})
+
+test('a note added after the buttons are shown does not take them away or move the failure they answer', async () => {
+  const calls = await show([asked, failed], { [`POST ${BASE}/continue`]: accepted })
+  act(() => stream?.send({ type: 'value', value: { entries: [asked, failed, privateNote], docs: {} } }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
+  await waitFor(() =>
+    expect(continues(calls)).toEqual([{ model: { provider: 'script', model_id: 's' }, after_entry: 2 }]),
+  )
+})
+
+test('a picker response that arrives after a later continue does not replace the model the continue chose', async () => {
+  let releasePut: () => void = () => {}
+  const calls = await show([asked, failed], {
+    [`PUT ${BASE}/model`]: (call) =>
+      new Promise((done) => {
+        releasePut = () => done({ body: call.body })
+      }),
+    [`POST ${BASE}/continue`]: accepted,
+  })
+  const picker = (await screen.findByLabelText('Model')) as HTMLSelectElement
+  fireEvent.change(picker, { target: { value: JSON.stringify(['script', 't']) } })
+  await waitFor(() => expect(writes(calls)).toEqual([`PUT ${BASE}/model`]))
+  choose('Claude Code: Default')
+  await waitFor(() => expect(writes(calls)).toEqual([`PUT ${BASE}/model`, `POST ${BASE}/continue`]))
+  await act(async () => releasePut())
+  await waitFor(() => expect(picker.disabled).toBe(false))
+  expect(picker.value).toBe(JSON.stringify(['cli-claude', 'default']))
+})

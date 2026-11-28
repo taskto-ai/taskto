@@ -16,7 +16,7 @@ import {
   type SubmissionId,
 } from '@earendil-works/pi-durable'
 import { cliTools } from './cli.js'
-import { ContinuePin, pinHolds } from './continue.js'
+import { ContinuePin, latestReplyEntryId, pinHolds } from './continue.js'
 import { InputError, type NoteInput, noteEntry, parseNote, type TasktoInputEntry, validInputEntry } from './input.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
 import { Lifecycle } from './lifecycle.js'
@@ -337,7 +337,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         await conv.commit(async (tx) => {
           if ((await tx.doc(Lifecycle, conv.id)).retiredAt != null) throw new HttpError(404, 'unknown conversation')
           const pin = await tx.doc(ContinuePin, conv.id)
-          if (afterEntry <= pin.consumed || (await tx.latestEntryId(conv.id)) !== afterEntry) {
+          if (afterEntry <= pin.consumed || (await latestReplyEntryId(tx, conv.id)) !== afterEntry) {
             throw new HttpError(409, 'the conversation moved on', 'moved')
           }
           submissionId = await conv.submit(tx, { type: 'continue' })

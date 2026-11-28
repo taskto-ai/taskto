@@ -14,14 +14,14 @@ export function ContinueBar({
   base,
   current,
   afterEntry,
-  onChosen,
+  claim,
   onContinued,
   onPending,
 }: {
   base: string
   current: ModelRef
   afterEntry: number
-  onChosen: (m: ModelRef) => void
+  claim: () => (m: ModelRef) => void
   onContinued: () => void
   onPending: (pending: boolean) => void
 }) {
@@ -36,10 +36,11 @@ export function ContinueBar({
     setError(null)
     onPending(true)
     const same = sameSession()
+    const choose = claim()
     try {
       const reply = await continueConversation(base, { model, after_entry: afterEntry })
       if (!same()) return
-      onChosen(reply.model)
+      choose(reply.model)
       onContinued()
     } catch (e) {
       if (!same()) return

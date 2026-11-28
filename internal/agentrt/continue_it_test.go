@@ -161,22 +161,84 @@ func TestContinueOfAFailureThatMovedOnIsRefusedAndStartsNothing(t *testing.T) {
 	ctx := ctxFor(t)
 	conv := failedConversation(t, s)
 	stale := lastEntryID(t, s.client, conv)
-	sub, _, err := s.client.Continue(ctx, conv, backupModel, stale)
+	again, err := s.client.Submit(ctx, conv, Input{Content: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
-		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	if settled, err := s.client.Wait(ctx, again); err != nil || settled.Status != "done" {
+		t.Fatalf("the next request settled %+v, %v; want done", settled, err)
 	}
 	before := lastEntryID(t, s.client, conv)
+	if before == stale {
+		t.Fatal("the next request wrote no entry")
+	}
 	if _, _, err := s.client.Continue(ctx, conv, scriptModel, stale); conflictReason(err) != "moved" {
-		t.Fatalf("a second continue from the same failure: err = %v, want a 409 with reason moved", err)
+		t.Fatalf("a continue of a failure the conversation moved past: err = %v, want a 409 with reason moved", err)
 	}
 	if after := lastEntryID(t, s.client, conv); after != before {
 		t.Fatalf("a refused continue changed the conversation: last entry %d, was %d", after, before)
 	}
-	if got, err := s.client.Model(ctx, conv); err != nil || got != backupModel {
-		t.Fatalf("a refused continue changed the model to %+v, %v; want backup", got, err)
+	if got, err := s.client.Model(ctx, conv); err != nil || got != scriptModel {
+		t.Fatalf("a refused continue changed the model to %+v, %v; want script", got, err)
+	}
+}
+
+func addNote(t *testing.T, s *sidecar, conv int64) int64 {
+	t.Helper()
+	if _, err := s.client.Note(ctxFor(t), conv, NoteInput{Text: "a private note", Author: 7}); err != nil {
+		t.Fatal(err)
+	}
+	return lastEntryID(t, s.client, conv)
+}
+
+func TestAPrivateNoteDoesNotMoveTheFailureAContinueAnswers(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv := failedConversation(t, s)
+	failure := lastEntryID(t, s.client, conv)
+	note := addNote(t, s, conv)
+	if note == failure {
+		t.Fatal("the note wrote no entry")
+	}
+	if _, _, err := s.client.Continue(ctx, conv, backupModel, note); conflictReason(err) != "moved" {
+		t.Fatalf("a continue after the note's entry: err = %v, want a 409 with reason moved: the note is not the failed reply", err)
+	}
+	sub, _, err := s.client.Continue(ctx, conv, backupModel, failure)
+	if err != nil {
+		t.Fatalf("a continue of the failed reply with a note after it: %v", err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	}
+}
+
+func TestAPrivateNoteDoesNotReopenAFailureAContinueConsumed(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered, err := s.client.Submit(ctx, conv, Input{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, answered); err != nil || settled.Status != "done" {
+		t.Fatalf("the request settled %+v, %v; want done", settled, err)
+	}
+	reply := lastEntryID(t, s.client, conv)
+	first, _, err := s.client.Continue(ctx, conv, backupModel, reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, first); err != nil || settled.Status != "unanswered" {
+		t.Fatalf("the continue settled %+v, %v; want unanswered", settled, err)
+	}
+	note := addNote(t, s, conv)
+	for _, entry := range []int64{note, reply} {
+		if _, _, err := s.client.Continue(ctx, conv, backupModel, entry); conflictReason(err) != "moved" {
+			t.Fatalf("a continue of entry %d after a continue consumed the reply %d and a note came: err = %v, want a 409 with reason moved", entry, reply, err)
+		}
 	}
 }
 

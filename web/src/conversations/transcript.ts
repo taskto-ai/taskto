@@ -251,7 +251,7 @@ export function transcript(view: ConversationView | null | undefined): Transcrip
     if (m) messages.push(m)
   }
   liveOutput(messages, live?.tools)
-  const lastEntry = view?.entries?.at(-1)?.id
+  const lastEntry = view?.entries?.findLast((e) => e?.kind !== NOTE_KIND)?.id
   return {
     messages,
     ...(lastEntry === undefined ? {} : { lastEntry }),

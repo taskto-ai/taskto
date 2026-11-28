@@ -96,28 +96,36 @@ func (s *Service) openStream(user int64) (func(), bool) {
 }
 
 type guard struct {
-	sync.Mutex
+	held  chan struct{}
 	users int
 }
 
-func (s *Service) lock(id int64) func() {
+func (s *Service) lock(ctx context.Context, id int64) (func(), bool) {
 	s.mu.Lock()
 	g := s.guards[id]
 	if g == nil {
-		g = &guard{}
+		g = &guard{held: make(chan struct{}, 1)}
 		s.guards[id] = g
 	}
 	g.users++
 	s.mu.Unlock()
-	g.Lock()
-	return func() {
-		g.Unlock()
+	release := func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if g.users--; g.users == 0 {
 			delete(s.guards, id)
 		}
 	}
+	select {
+	case g.held <- struct{}{}:
+	case <-ctx.Done():
+		release()
+		return nil, false
+	}
+	return func() {
+		<-g.held
+		release()
+	}, true
 }
 
 func (s *Service) EndStreams() { s.endStreams() }

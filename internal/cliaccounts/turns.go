@@ -207,6 +207,13 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request, p conversat
 }
 
 func (s *Service) start(ctx context.Context, p conversations.Principal, req turnRequest, id string, c choice, note string) (Turn, error) {
+	if c.shared != nil && c.row.id == 0 {
+		r, err := s.createUsageRow(ctx, p.User, *c.shared)
+		if err != nil {
+			return nil, err
+		}
+		c.row = r
+	}
 	acct, cli := c.row, c.cli()
 	perms, err := s.conversationPermissions(ctx, p.Conversation)
 	if err != nil {

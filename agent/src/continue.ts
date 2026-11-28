@@ -1,4 +1,5 @@
-import { defineDoc } from '@earendil-works/pi-durable'
+import { type ConversationId, type Cursor, defineDoc, type EntryId, type Tx } from '@earendil-works/pi-durable'
+import { NOTE_KIND } from './input.js'
 
 type ContinueState = { consumed: number; submission: number }
 
@@ -16,4 +17,17 @@ export function pinHolds(pin: ContinueState | undefined, live: { run?: { inputs:
   return (
     pin !== undefined && pin.submission !== 0 && live?.run?.inputs.some((id) => Number(id) === pin.submission) === true
   )
+}
+
+const SCAN_PAGE = 50
+
+export async function latestReplyEntryId(tx: Tx, conversation: ConversationId): Promise<EntryId | undefined> {
+  let cursor: Cursor | undefined
+  do {
+    const page = await tx.scanEntries({ conversationId: conversation, order: 'descending' }, SCAN_PAGE, cursor)
+    const found = page.items.find((entry) => entry.kind !== NOTE_KIND)
+    if (found) return found.id
+    cursor = page.next
+  } while (cursor !== undefined)
+  return undefined
 }

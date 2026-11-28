@@ -104,6 +104,13 @@ export function ConversationView({
   const loadedModel = useLoad(() => api<ModelRef>(`${base}/model`), [base])
   const [picked, setPicked] = useState<ModelRef | null>(null)
   const [continuing, setContinuing] = useState(false)
+  const modelWrites = useRef(0)
+  const claimModel = () => {
+    const mine = ++modelWrites.current
+    return (m: ModelRef) => {
+      if (mine === modelWrites.current) setPicked(m)
+    }
+  }
   const model = picked ?? loadedModel.data
   const usesCli = Boolean(cliOfProvider(model?.provider) || providers.data?.some((p) => p.scope === 'cli'))
   const cli = useLoad(() => (usesCli ? api<CliAccounts>(CLI_ACCOUNTS) : Promise.resolve(null)), [usesCli])
@@ -129,6 +136,7 @@ export function ConversationView({
   }
 
   const last = messages.at(-1)
+  const reply = messages.findLast((m) => m.role !== 'note')
 
   return (
     <section className="ui-chat" aria-label={t('conversations.conversation')}>
@@ -216,13 +224,13 @@ export function ConversationView({
         loadingEarlier={older.loading}
         earlierError={older.error}
         footer={
-          last?.failed && !running && !archived && !unreadable && model && lastEntry !== undefined ? (
+          reply?.failed && !running && !archived && !unreadable && model && lastEntry !== undefined ? (
             <ContinueBar
               key={lastEntry}
               base={base}
               current={model}
               afterEntry={lastEntry}
-              onChosen={setPicked}
+              claim={claimModel}
               onContinued={onChanged}
               onPending={setContinuing}
             />
@@ -244,7 +252,7 @@ export function ConversationView({
             providers={providers.data}
             current={model}
             cli={cli.data}
-            onChosen={setPicked}
+            claim={claimModel}
             disabled={archived || unreadable || continuing}
           />
         )}

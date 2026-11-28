@@ -16,7 +16,7 @@ export function ModelPicker({
   providers,
   current,
   cli,
-  onChosen,
+  claim,
   disabled,
 }: {
   workspace: number
@@ -24,7 +24,7 @@ export function ModelPicker({
   providers: ModelProvider[]
   current: ModelRef
   cli: CliAccounts | null | undefined
-  onChosen: (m: ModelRef) => void
+  claim: () => (m: ModelRef) => void
   disabled: boolean
 }) {
   const t = useT()
@@ -50,11 +50,12 @@ export function ModelPicker({
   const choose = async (key: string) => {
     const [provider, model_id] = JSON.parse(key) as [string, string]
     const model = { provider, model_id }
+    const choose = claim()
     setPending(model)
     setBusy(true)
     setError(null)
     try {
-      onChosen(await api<ModelRef>(url, { method: 'PUT', body: model }))
+      choose(await api<ModelRef>(url, { method: 'PUT', body: model }))
     } catch (e) {
       setError(errorText(e))
     } finally {

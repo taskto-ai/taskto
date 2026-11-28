@@ -1,10 +1,12 @@
 package conversations
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -334,5 +336,67 @@ func TestTheReplyOfAContinueNamesTheModelTheRuntimeAdmittedItOn(t *testing.T) {
 	got := decode[SubmissionReply](t, owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("backup", "b-1", 7)))
 	if got.Model != (modelRef{Provider: "backup", ModelID: "b-1"}) {
 		t.Fatalf("the reply names %+v, want the model the run was admitted on", got.Model)
+	}
+}
+
+func (c *client) sendCancelled(ctx context.Context, method, path string, body any) <-chan *httptest.ResponseRecorder {
+	c.e.t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		c.e.t.Fatal(err)
+	}
+	r := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(ctx)
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	r.AddCookie(c.cookie)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	rec := httptest.NewRecorder()
+	go func() {
+		c.e.h.ServeHTTP(rec, r)
+		done <- rec
+	}()
+	return done
+}
+
+func TestACancelledRequestStopsWaitingForTheAdmissionLock(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	unlock, ok := e.svc.lock(context.Background(), c.ID)
+	if !ok {
+		t.Fatal("the lock of a free conversation was refused")
+	}
+	requests := map[string]struct {
+		method, path string
+		body         any
+	}{
+		"an archive": {http.MethodPatch, path(ws, fmt.Sprintf("/%d", c.ID)), map[string]any{"archived": true}},
+		"a continue": {http.MethodPost, path(ws, fmt.Sprintf("/%d/continue", c.ID)), e.continueBody("script", "script-1", 7)},
+	}
+	for name, q := range requests {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := owner.sendCancelled(ctx, q.method, q.path, q.body)
+		select {
+		case <-done:
+			t.Fatalf("%s finished while the lock was held", name)
+		case <-time.After(200 * time.Millisecond):
+		}
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s kept waiting for the lock after its request was cancelled", name)
+		}
+	}
+	unlock()
+	if got := e.continues(); len(got) != 0 {
+		t.Fatalf("a cancelled continue reached the runtime: %+v", got)
+	}
+	owner.expect(http.StatusOK, http.MethodPatch, path(ws, fmt.Sprintf("/%d", c.ID)), map[string]any{"archived": true})
+	e.svc.mu.Lock()
+	left := len(e.svc.guards)
+	e.svc.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d conversation locks are left after every waiter went", left)
 	}
 }

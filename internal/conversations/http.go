@@ -264,7 +264,11 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		req.Title = &title
 	}
 	if req.Archived != nil && *req.Archived {
-		defer s.lock(c.ID)()
+		unlock, ok := s.lock(r.Context(), c.ID)
+		if !ok {
+			return
+		}
+		defer unlock()
 	}
 	user, workspace := caller(r)
 	c, err := s.update(r.Context(), workspace, user, c.ID, req.Title, req.Archived, req.CLIPermissions)
@@ -445,7 +449,11 @@ func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
 	if !s.runnable(w, r, p, model) {
 		return
 	}
-	defer s.lock(c.ID)()
+	unlock, ok := s.lock(r.Context(), c.ID)
+	if !ok {
+		return
+	}
+	defer unlock()
 	if !s.stillWritable(w, r) {
 		return
 	}

@@ -199,3 +199,35 @@ func TestAPinnedTurnIsNotMovedToAnotherAccountByALimit(t *testing.T) {
 		t.Fatalf("a pinned turn ran %d turns on Codex and wrote the model %v", n, models.list())
 	}
 }
+
+func (e *turnEnv) accountRows() int {
+	e.t.Helper()
+	var n int
+	if err := e.db.QueryRow(`SELECT count(*) FROM cli_accounts`).Scan(&n); err != nil {
+		e.t.Fatal(err)
+	}
+	return n
+}
+
+func TestListingRunnableModelsWritesNoAccountRows(t *testing.T) {
+	e := newTurnEnv(t)
+	p := newProvider(t)
+	a := e.owner.addShared(e.ws, cliworker.Claude, p.URL)
+	b := e.owner.addShared(e.ws, cliworker.Claude, p.URL)
+	e.setMode(e.other, "shared")
+	e.other.setSwitching(map[string]any{"enabled": true, "queue": []map[string]any{{"shared": a.ID}, {"shared": b.ID}}})
+	conv := e.conversation(e.other)
+	before := e.accountRows()
+	if got := e.offered(e.other, conv, cliworker.Claude); len(got) != 3 {
+		t.Fatalf("a shared account offers %v, want every model", got)
+	}
+	if after := e.accountRows(); after != before {
+		t.Fatalf("listing the models changed cli_accounts: %d rows before, %d after", before, after)
+	}
+	if d := done(e.turn(conv, turnBody{Turn: "t1", CLI: "claude", Model: "opus", Prompt: "hello"})); d.Status != cliworker.StatusOK {
+		t.Fatalf("the turn = %+v", d)
+	}
+	if after := e.accountRows(); after != before+1 {
+		t.Fatalf("the turn left %d rows, want the shared account's usage row added to the %d before", after, before)
+	}
+}
