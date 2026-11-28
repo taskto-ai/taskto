@@ -12,6 +12,7 @@ import {
   createRegistry,
   type EntryId,
   Harness,
+  InboxDoc,
   LiveDoc,
   type SubmissionId,
 } from '@earendil-works/pi-durable'
@@ -103,7 +104,7 @@ class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly reason?: 'unknown_model' | 'no_model' | 'busy' | 'moved',
+    readonly reason?: 'unknown_model' | 'no_model' | 'busy' | 'moved' | 'queued',
   ) {
     super(message)
   }
@@ -339,6 +340,9 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
           const pin = await tx.doc(ContinuePin, conv.id)
           if (afterEntry <= pin.consumed || (await latestReplyEntryId(tx, conv.id)) !== afterEntry) {
             throw new HttpError(409, 'the conversation moved on', 'moved')
+          }
+          if ((await tx.doc(InboxDoc, conv.id)).items.length > 0) {
+            throw new HttpError(409, 'messages are queued behind the failed reply', 'queued')
           }
           submissionId = await conv.submit(tx, { type: 'continue' })
           pin.consumed = afterEntry

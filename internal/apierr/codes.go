@@ -238,6 +238,7 @@ const (
 	CodeConversationNoModel      Code = "conversation_no_model"
 	CodeConversationBusy         Code = "conversation_busy"
 	CodeConversationMoved        Code = "conversation_moved"
+	CodeConversationQueued       Code = "conversation_queued"
 	CodeModelUnavailable         Code = "model_unavailable"
 	CodeAgentOff                 Code = "agent_off"
 	CodeAgentNotReady            Code = "agent_not_ready"

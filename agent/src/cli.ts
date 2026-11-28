@@ -151,19 +151,40 @@ function recorder(api: ToolExecutionApi): { api: ToolExecutionApi; text: () => s
   return { api: { ...api, output } as ToolExecutionApi, text: () => text }
 }
 
+const MAX_FINISHED_RESULT = 2000
+const MAX_FINISHED = 16 << 10
+
+function finishedWork(results: readonly Message[]): string {
+  let size = 0
+  const lines: string[] = []
+  for (let i = results.length - 1; i >= 0; i--) {
+    const m = results[i]
+    const line = `- ${m?.toolName ?? 'tool'}: ${textOf(m?.content).trim().slice(0, MAX_FINISHED_RESULT)}`
+    if (size + line.length > MAX_FINISHED) break
+    size += line.length
+    lines.unshift(line)
+  }
+  return `These tool calls already finished for this request. Do not run them again; use their results and answer the request:\n${lines.join('\n')}`
+}
+
 export function splitTurn(messages: readonly Message[]): { prompt: string; history: { role: string; text: string }[] } {
   let end = messages.length
   const current = (m: Message | undefined) =>
     (m?.role === 'assistant' && !textOf(m.content).trim()) ||
     (m?.role === 'toolResult' && (m.details as { reason?: unknown } | undefined)?.reason === 'missing_result')
   while (end > 0 && current(messages[end - 1])) end--
-  let start = end
+  let work = end
+  while (work > 0 && (messages[work - 1]?.role === 'assistant' || messages[work - 1]?.role === 'toolResult')) work--
+  const finished = messages.slice(work, end).filter((m) => m.role === 'toolResult')
+  const requestEnd = finished.length > 0 ? work : end
+  let start = requestEnd
   while (start > 0 && messages[start - 1]?.role === 'user') start--
-  const prompt = messages
-    .slice(start, end)
+  const request = messages
+    .slice(start, requestEnd)
     .map((m) => textOf(m.content).trim())
     .filter(Boolean)
     .join('\n\n')
+  const prompt = request && finished.length > 0 ? `${request}\n\n${finishedWork(finished)}` : request
   const history: { role: string; text: string }[] = []
   let size = 0
   for (let i = start - 1; i >= 0; i--) {

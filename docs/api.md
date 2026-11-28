@@ -327,6 +327,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `conversation_no_model` | 409 | The conversation has no model: choose one. |
 | `conversation_busy` | 409 | The conversation is working: a continue is only for an idle one. Also, a message that names an agent is still changing the conversation's model, so `PUT …/model` gave up waiting for it (a few seconds), and nothing changed. |
 | `conversation_moved` | 409 | The conversation has entries after the one the continue was for: it was already continued, or changed meanwhile. |
+| `conversation_queued` | 409 | A message was sent while the failed reply was still being worked on, and it is waiting behind it: a continue would answer that message instead of retrying the failed one, so nothing is started and the message keeps its place. The next message placed in the conversation answers it. |
 | `model_unavailable` | 409 | The caller can't run that model now: a CLI whose account isn't connected, or that the member's account mode leaves no account for. |
 | `agent_off` | 503 | The agent runtime is off: the server runs without `-agent`. |
 | `agent_not_ready` | 503 | The agent runtime is starting or restarting; `Retry-After` says when to try again. |
@@ -5823,7 +5824,7 @@ that is not a private note, as the caller saw it: the failed reply the caller is
 answer arrives through the events stream. The run keeps that model until it ends: a `PUT …/model` meanwhile is refused with `409 conversation_busy`, a CLI turn of the run is refused when its account choice no longer runs that model, and it is not moved to another account by a usage limit. Only the conversation's owner, and only while the
 conversation is idle: `409 conversation_busy` while it works (a continue never queues, and a
 refused one leaves the running work's model alone), `409 conversation_moved` when the conversation
-has entries other than notes after `after_entry`, or an earlier continue already took that entry, even one that added nothing, such as one that was stopped (nothing is started), `409 model_unavailable` for a model that `continue-models` doesn't
+has entries other than notes after `after_entry`, or an earlier continue already took that entry, even one that added nothing, such as one that was stopped (nothing is started), `409 conversation_queued` while a message sent during the failed reply is still queued behind it (a continue would answer that message and not retry the failed one; it stays queued and nothing is started), `409 model_unavailable` for a model that `continue-models` doesn't
 offer now, `400` for a missing or malformed body or a model the caller may not use, `409
 conversation_archived` for an archived one, `404` for one the caller doesn't own or that doesn't
 exist. The archive is checked again, under a lock an archiving request takes too (a request that is cancelled stops waiting for it), immediately before the request goes to the agent runtime, so no archive finishes between the check and the run's start. The web app offers it, with the models of `continue-models`, on a failed last

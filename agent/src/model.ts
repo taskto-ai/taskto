@@ -26,6 +26,8 @@ function textOf(content: unknown): string {
     .join('')
 }
 
+const FAIL_AFTER_TOOL = /^fail-after-tool:(?<on>[a-z0-9-]+);(?<then>.*)$/s
+
 export function installScriptModel(models: ReturnType<typeof createModels>, provider: string): void {
   const faux = fauxProvider({
     provider,
@@ -34,17 +36,25 @@ export function installScriptModel(models: ReturnType<typeof createModels>, prov
   })
   const answer = (context: { messages: Message[] }) => {
     const last = context.messages.findLast((m) => m.role !== 'system')
+    const failure = (on: string | undefined) =>
+      on === provider
+        ? fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'rate limit reached' })
+        : undefined
     if (last?.role === 'toolResult') {
-      return fauxAssistantMessage(fauxText(`finished ${last.toolName}: ${textOf(last.content)}`))
+      const request = textOf(context.messages.findLast((m) => m.role === 'user')?.content)
+      const afterTool = testHooks.scriptFailures ? FAIL_AFTER_TOOL.exec(request.trim())?.groups : undefined
+      return (
+        failure(afterTool?.on) ?? fauxAssistantMessage(fauxText(`finished ${last.toolName}: ${textOf(last.content)}`))
+      )
     }
     const written = textOf(last?.content)
     const failing = testHooks.scriptFailures
       ? /^fail:(?<on>[a-z0-9-]+)(?:;(?<then>.*))?$/s.exec(written.trim())?.groups
       : undefined
-    if (failing?.on === provider) {
-      return fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'rate limit reached' })
-    }
-    const text = failing?.then ?? written
+    const failingAfterTool = testHooks.scriptFailures ? FAIL_AFTER_TOOL.exec(written.trim())?.groups : undefined
+    const refused = failure(failing?.on)
+    if (refused) return refused
+    const text = failing?.then ?? failingAfterTool?.then ?? written
     if (text.trim() === 'system') {
       const sections: Record<string, string> = {}
       for (const m of context.messages) if (m.role === 'system') Object.assign(sections, m.sections)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -392,8 +393,9 @@ func TestAnEntryThatAContinueConsumedIsNotContinuedAgainWhenTheRunAddedNoEntry(t
 }
 
 type turnRecorder struct {
-	mu     sync.Mutex
-	pinned []bool
+	mu      sync.Mutex
+	pinned  []bool
+	prompts []string
 }
 
 func (r *turnRecorder) serve(t *testing.T) string {
@@ -411,11 +413,13 @@ func (r *turnRecorder) serve(t *testing.T) string {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /cli/turn", func(w http.ResponseWriter, req *http.Request) {
 		var body struct {
-			Pinned bool `json:"pinned"`
+			Pinned bool   `json:"pinned"`
+			Prompt string `json:"prompt"`
 		}
 		_ = json.NewDecoder(req.Body).Decode(&body)
 		r.mu.Lock()
 		r.pinned = append(r.pinned, body.Pinned)
+		r.prompts = append(r.prompts, body.Prompt)
 		r.mu.Unlock()
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		_, _ = w.Write([]byte(`{"seq":1,"type":"done","status":"ok","text":"ok"}` + "\n"))
@@ -424,6 +428,12 @@ func (r *turnRecorder) serve(t *testing.T) string {
 	go func() { _ = srv.Serve(l) }()
 	t.Cleanup(func() { srv.Close() })
 	return path
+}
+
+func (r *turnRecorder) asked() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.prompts...)
 }
 
 func (r *turnRecorder) seen() []bool {
@@ -472,5 +482,130 @@ func TestACLITurnOfAContinuedRunSaysItIsPinnedAndALaterOneDoesNot(t *testing.T) 
 	}
 	if got := rec.seen(); len(got) != 2 || !got[0] || got[1] {
 		t.Fatalf("the CLI turns said pinned = %v, want [true false]: the continued run's, then an ordinary message's", got)
+	}
+}
+
+func cliSidecar(t *testing.T, rec *turnRecorder) *sidecar {
+	t.Helper()
+	config := map[string]any{"providers": []any{
+		map[string]any{"id": "script", "kind": "script"},
+		map[string]any{"id": "cli-claude", "kind": "cli", "name": "Claude Code", "cli": "claude", "models": []any{map[string]any{"id": "default", "name": "Default"}}},
+	}}
+	path := filepath.Join(t.TempDir(), "providers.json")
+	if err := os.WriteFile(path, []byte(mustJSON(config)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return startSidecar(t, "TASKTO_AGENT_PROVIDERS="+path, "TASKTO_AGENT_TOOLS_SOCKET="+rec.serve(t))
+}
+
+func TestAFailureAfterAFinishedToolCallIsContinuedOnACLIWithTheToolResult(t *testing.T) {
+	rec := &turnRecorder{}
+	s := cliSidecar(t, rec)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := "fail-after-tool:script;tool:pause_safe:200"
+	failed, err := s.client.Submit(ctx, conv, Input{Content: request, Capability: "cap"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, failed); err != nil || settled.Reason != "model_error" {
+		t.Fatalf("the request settled %+v, %v; want model_error after its tool call finished", settled, err)
+	}
+	sub, _, err := s.client.Continue(ctx, conv, ModelRef{Provider: "cli-claude", ModelID: "default"}, lastEntryID(t, s.client, conv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	}
+	prompts := rec.asked()
+	if len(prompts) != 1 {
+		t.Fatalf("the CLI worker ran %d turns, want 1", len(prompts))
+	}
+	for _, want := range []string{request, "pause_safe: paused 200ms"} {
+		if !strings.Contains(prompts[0], want) {
+			t.Fatalf("the CLI's prompt %q lacks %q", prompts[0], want)
+		}
+	}
+}
+
+func answered(t *testing.T, s *sidecar, conv int64, text string) bool {
+	t.Helper()
+	msgs, err := s.client.Messages(ctxFor(t), conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range msgs {
+		if m.Role == "assistant" && m.Text == text {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAContinueNeverPlacesAFollowUpQueuedBehindTheFailedRequest(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv, err := s.client.CreateConversation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.client.Watch(ctx, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	failed, err := s.client.Submit(ctx, conv, Input{Content: "fail-after-tool:script;tool:pause_safe:1000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForOps(t, w, "waited 200ms")
+	queued, err := s.client.Submit(ctx, conv, Input{Content: "second question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, failed); err != nil || settled.Reason != "model_error" {
+		t.Fatalf("the first request settled %+v, %v; want model_error", settled, err)
+	}
+	after := lastEntryID(t, s.client, conv)
+	if _, _, err := s.client.Continue(ctx, conv, backupModel, after); conflictReason(err) != "queued" {
+		t.Fatalf("a continue with a follow-up queued behind the failure: err = %v, want a 409 with reason queued", err)
+	}
+	if now := lastEntryID(t, s.client, conv); now != after {
+		t.Fatalf("the refused continue added entry %d after %d", now, after)
+	}
+	if answered(t, s, conv, "echo: second question") {
+		t.Fatal("the refused continue answered the queued follow-up")
+	}
+	third, err := s.client.Submit(ctx, conv, Input{Content: "third question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{queued, third} {
+		if settled, err := s.client.Wait(ctx, id); err != nil || settled.Status != "done" {
+			t.Fatalf("submission %d settled %+v, %v; want done", id, settled, err)
+		}
+	}
+	if !answered(t, s, conv, "echo: second question") {
+		t.Fatal("the follow-up that stayed queued was never answered")
+	}
+}
+
+func TestAContinueOfTheFailedRequestRetriesItWhenNothingIsQueued(t *testing.T) {
+	s := startSidecar(t, twoScriptModels(t)...)
+	ctx := ctxFor(t)
+	conv := failedConversationOf(t, s, "fail-after-tool:script;tool:pause_safe:200")
+	sub, _, err := s.client.Continue(ctx, conv, backupModel, lastEntryID(t, s.client, conv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.client.Wait(ctx, sub); err != nil || settled.Status != "done" {
+		t.Fatalf("the continue settled %+v, %v; want done", settled, err)
+	}
+	if got := lastAssistant(t, s.client, conv); got != "finished pause_safe: paused 200ms" {
+		t.Fatalf("the retried request answered %q, want the tool's result used by the backup model", got)
 	}
 }

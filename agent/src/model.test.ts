@@ -29,6 +29,29 @@ describe('the scripted model', () => {
     expect(message.errorMessage).toBe('rate limit reached')
   })
 
+  it('fails after a finished tool call only once the test entry has turned failures on', async () => {
+    const asked = [
+      { role: 'user' as const, content: 'fail-after-tool:script;tool:pause_safe:10', timestamp: 1 },
+      {
+        role: 'toolResult' as const,
+        toolCallId: 't',
+        toolName: 'pause_safe',
+        content: [],
+        isError: false,
+        timestamp: 2,
+      },
+    ]
+    const models = createModels()
+    installScriptModel(models, 'script')
+    const model = models.getModel('script', SCRIPT_MODEL_ID)
+    if (!model) throw new Error('no scripted model')
+    const plain = await models.completeSimple(model, { messages: asked })
+    expect(plain.stopReason).not.toBe('error')
+    testHooks.scriptFailures = true
+    const failing = await models.completeSimple(model, { messages: asked })
+    expect(failing.stopReason).toBe('error')
+  })
+
   it('leaves the test entry alone: only it turns failures on', async () => {
     expect(testHooks.scriptFailures).toBe(false)
   })

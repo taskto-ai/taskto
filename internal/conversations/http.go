@@ -151,6 +151,7 @@ var agentRefusals = map[string]apierr.Code{
 	"no_model":      apierr.CodeConversationNoModel,
 	"busy":          apierr.CodeConversationBusy,
 	"moved":         apierr.CodeConversationMoved,
+	"queued":        apierr.CodeConversationQueued,
 }
 
 func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
