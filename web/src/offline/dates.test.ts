@@ -3,12 +3,12 @@ import shared from '../../../internal/apps/testdata/dates.json'
 import { isCalendarDate, isInMonth } from './dates'
 import { parseField } from './local'
 
-for (const c of shared.cases as { date: string; valid: boolean; field?: boolean }[]) {
+for (const c of shared.cases as { date: string; valid: boolean; field?: boolean; stored?: string }[]) {
   test(`date ${JSON.stringify(c.date)} is ${c.valid ? 'accepted' : 'refused'}, as the server says`, () => {
     expect(isCalendarDate(c.date)).toBe(c.valid)
     const field = { name: 'on', type: 'date' } as Parameters<typeof parseField>[0]
     const stores = c.field ?? c.valid
-    if (stores) expect(parseField(field, c.date)).toBe(c.date.trim())
+    if (stores) expect(parseField(field, c.date)).toBe(c.stored ?? c.date)
     else if (c.date !== '') expect(() => parseField(field, c.date)).toThrow()
   })
 }

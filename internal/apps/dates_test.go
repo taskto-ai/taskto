@@ -13,9 +13,10 @@ func TestDatesAreAcceptedAsTheSharedCasesSay(t *testing.T) {
 	}
 	var file struct {
 		Cases []struct {
-			Date  string
-			Valid bool
-			Field *bool
+			Date   string
+			Valid  bool
+			Field  *bool
+			Stored string
 		}
 	}
 	if err := json.Unmarshal(raw, &file); err != nil {
@@ -29,8 +30,12 @@ func TestDatesAreAcceptedAsTheSharedCasesSay(t *testing.T) {
 			stores = *tt.Field
 		}
 		t.Run(tt.Date, func(t *testing.T) {
-			if _, present, err := field.stored(tt.Date); (err == nil && present) != stores {
+			value, present, err := field.stored(tt.Date)
+			if (err == nil && present) != stores {
 				t.Fatalf("a field stores %q: got err %v, present %v, want stored %v", tt.Date, err, present, stores)
+			}
+			if stores && tt.Stored != "" && value != tt.Stored {
+				t.Fatalf("a field stores %q as %v, want %q", tt.Date, value, tt.Stored)
 			}
 			rule := Rule{Field: "on", Op: "eq", Value: tt.Date}
 			if err := rule.check(collection); (err == nil) != tt.Valid {
