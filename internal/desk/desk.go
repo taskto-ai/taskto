@@ -148,27 +148,25 @@ func (s *Service) SaveLayout(ctx context.Context, workspaceID, userID, id, versi
 }
 
 func (s *Service) updateLayout(ctx context.Context, workspaceID, userID, id, version int64, checked []byte) (Desk, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE desks SET layout = ?, version = version + 1, updated_at = ?
-		WHERE user_id = ? AND workspace_id = ? AND id = ? AND version = ?`,
-		string(checked), s.now().UTC().Format("2006-01-02T15:04:05.000Z"), userID, workspaceID, id, version)
-	if err != nil {
-		return Desk{}, err
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return Desk{}, err
-	}
-	if changed == 0 {
-		current, err := s.getByID(ctx, workspaceID, userID, id)
-		if errors.Is(err, ErrNotFound) {
-			return Desk{}, ErrNotFound
-		}
-		if err != nil {
-			return Desk{}, err
+	var d Desk
+	var raw string
+	err := s.db.QueryRowContext(ctx, `UPDATE desks SET layout = ?, version = version + 1, updated_at = ?
+		WHERE user_id = ? AND workspace_id = ? AND id = ? AND version = ?
+		RETURNING id, name, layout, version, updated_at`,
+		string(checked), s.now().UTC().Format("2006-01-02T15:04:05.000Z"), userID, workspaceID, id, version).
+		Scan(&d.ID, &d.Name, &raw, &d.Version, &d.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		current, readErr := s.getByID(ctx, workspaceID, userID, id)
+		if readErr != nil {
+			return Desk{}, readErr
 		}
 		return current, ErrChanged
 	}
-	return s.getByID(ctx, workspaceID, userID, id)
+	if err != nil {
+		return Desk{}, err
+	}
+	d.Layout = json.RawMessage(raw)
+	return d, nil
 }
 
 func (s *Service) getMain(ctx context.Context, workspaceID, userID int64) (Desk, error) {
@@ -201,4 +199,26 @@ func (s *Service) getByID(ctx context.Context, workspaceID, userID, id int64) (D
 
 type queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *Service) Export(ctx context.Context, workspaceID, userID int64) ([]Desk, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, layout, version, updated_at FROM desks
+		WHERE user_id = ? AND workspace_id = ?
+		ORDER BY id`, userID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Desk
+	for rows.Next() {
+		var d Desk
+		var raw string
+		if err := rows.Scan(&d.ID, &d.Name, &raw, &d.Version, &d.UpdatedAt); err != nil {
+			return nil, err
+		}
+		d.Layout = json.RawMessage(raw)
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }

@@ -179,6 +179,7 @@ func TestCheckAcceptsTheKnowledgePathsTheWebAppBuilds(t *testing.T) {
 		}
 	}
 	for _, path := range []string{
+		"/w/12/knowledge/abc%3Af%2Fx",
 		"/w/12/knowledge/3%3A..%2Fx",
 		"/w/12/knowledge/3%3Afolder%2F..%2Fx",
 		"/w/12/knowledge/3%3Afolder%2F..",

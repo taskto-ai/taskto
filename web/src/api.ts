@@ -143,6 +143,8 @@ export function errorText(e: unknown, fieldLabels?: ReadonlyMap<string, string>)
         const label = typeof code === 'string' ? fieldLabels?.get(code) : undefined
         if (label) params[name] = label
       }
+      const reasonKey = `${key}_reason.${String(params.reason)}`
+      if (e.code === 'desk_invalid' && has(reasonKey)) params.reason = t(reasonKey as Key)
       return t(key as Key, params)
     }
     const said = (e.body as { error?: unknown } | undefined)?.error

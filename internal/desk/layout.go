@@ -14,6 +14,8 @@ import (
 
 const maxLayoutBytes = 32 * 1024
 
+const maxRequestBytes = maxLayoutBytes + 1024
+
 var layoutID = regexp.MustCompile(`^[a-z0-9]{1,16}$`)
 
 type tab struct {

@@ -60,7 +60,7 @@ func (s *Service) handleSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body LayoutWrite
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxLayoutBytes))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil {
 		var tooBig *http.MaxBytesError
