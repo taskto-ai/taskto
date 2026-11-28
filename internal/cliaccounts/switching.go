@@ -214,7 +214,7 @@ func (s *Service) startChoice(ctx context.Context, p conversations.Principal, cl
 		return c, "", err
 	}
 	for _, k := range cands {
-		if k.row.id == last && k.cli() == cli && k.key() != c.key() {
+		if last != 0 && k.row.id == last && k.cli() == cli && k.key() != c.key() {
 			if limited, _ := k.limited(now); !limited {
 				return k, "", nil
 			}

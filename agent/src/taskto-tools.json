@@ -1210,6 +1210,11 @@
           "minLength": 1,
           "maxLength": 100
         },
+        "icon": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "one emoji shown for the app wherever it is listed; empty to show the initials of its name"
+        },
         "definition": {
           "type": "object",
           "description": "what the app is made of: read app_catalog first. The server checks it strictly against the catalog.",
@@ -1718,7 +1723,7 @@
   },
   {
     "name": "update_app",
-    "description": "Change an app: rename it, replace its DRAFT definition, or take it offline (archived: true; its rows are kept) and back. Only what is given changes. A new definition changes nothing people use: they keep the live release until a person who may publish the app publishes the draft, which checks it against the app's rows (add new fields as optional, and keep the names and types of fields that have data, or the publisher has to acknowledge the change); you can't publish or roll back. The user's role in the app decides: renaming and redefining need the right to design it, taking it offline the right to publish it; without it the call is refused (403), and only the user's own roles count, not anything in the definition.",
+    "description": "Change an app: rename it, give it an icon, replace its DRAFT definition, or take it offline (archived: true; its rows are kept) and back. Only what is given changes. A new definition changes nothing people use: they keep the live release until a person who may publish the app publishes the draft, which checks it against the app's rows (add new fields as optional, and keep the names and types of fields that have data, or the publisher has to acknowledge the change); you can't publish or roll back. The user's role in the app decides: renaming, changing the icon and redefining need the right to design it, taking it offline the right to publish it; without it the call is refused (403), and only the user's own roles count, not anything in the definition.",
     "read_only": false,
     "input_schema": {
       "type": "object",
@@ -1742,6 +1747,11 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 100
+        },
+        "icon": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "one emoji shown for the app wherever it is listed; empty to show the initials of its name"
         },
         "definition": {
           "type": "object",

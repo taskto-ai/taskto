@@ -50,12 +50,12 @@ export function ModelPicker({
   const choose = async (key: string) => {
     const [provider, model_id] = JSON.parse(key) as [string, string]
     const model = { provider, model_id }
-    const settle = claim()
+    const choose = claim()
     setPending(model)
     setBusy(true)
     setError(null)
     try {
-      settle(await api<ModelRef>(url, { method: 'PUT', body: model }))
+      choose(await api<ModelRef>(url, { method: 'PUT', body: model }))
     } catch (e) {
       setError(errorText(e))
     } finally {

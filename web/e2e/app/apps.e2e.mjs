@@ -52,3 +52,36 @@ scenario(
     assert.ok(plain.length > 0, 'no bundled template publishes without approval')
   },
 )
+
+scenario('an icon of joined pictographs stays inside its avatar in the list of apps', async (s) => {
+  const { page, context } = s
+  await setUp(s)
+  const { spaces } = await api(context, 'GET', '/api/workspaces/1/spaces')
+  const space = spaces.find((x) => x.kind === 'private')
+  const spacePath = `/api/workspaces/1/spaces/${space.id}`
+  const { templates } = await api(context, 'GET', '/api/workspaces/1/app-templates')
+  const template = templates.find((t) => t.name === 'Expense tracker')
+  const app = await api(context, 'POST', `${spacePath}/app-templates/${template.id}/install`, {})
+  const joined = '🧾‍🧾‍🧾‍🧾🏻'
+  await api(context, 'PATCH', `${spacePath}/apps/${app.id}`, { version: app.version, icon: joined })
+
+  await page.getByRole('link', { name: 'Apps', exact: true }).click()
+  const avatar = page.locator('.apps-avatar-icon').first()
+  await avatar.waitFor()
+  const measured = await avatar.evaluate((el) => {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    return {
+      overflow: getComputedStyle(el).overflow,
+      box: el.getBoundingClientRect().width,
+      glyphs: range.getBoundingClientRect().width,
+    }
+  })
+  assert.ok(
+    measured.glyphs > measured.box,
+    `the icon is not wider than its avatar (${JSON.stringify(measured)}): the test no longer exercises the overflow`,
+  )
+  assert.equal(measured.overflow, 'hidden')
+  const before = await avatar.boundingBox()
+  assert.ok(before.width <= 44, `the avatar grew to ${before.width}px`)
+})

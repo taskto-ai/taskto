@@ -35,6 +35,8 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	mux.Handle("GET "+base+"/{conversation}/messages", member(s.handleMessages))
 	mux.Handle("GET "+base+"/{conversation}/model", member(s.handleModel))
 	mux.Handle("PUT "+base+"/{conversation}/model", member(s.handleSetModel))
+	mux.Handle("GET "+base+"/{conversation}/continue-models", member(s.handleContinueModels))
+	mux.Handle("POST "+base+"/{conversation}/continue", member(s.handleContinue))
 	mux.Handle("POST "+base+"/{conversation}/stop", member(s.handleStop))
 	mux.Handle("GET "+base+"/{conversation}/entries", member(s.handleEntries))
 	mux.Handle("GET "+base+"/{conversation}/events", member(s.handleEvents))
@@ -147,6 +149,8 @@ func agentError(w http.ResponseWriter, r *http.Request, err error) {
 var agentRefusals = map[string]apierr.Code{
 	"unknown_model": apierr.CodeModelUnknown,
 	"no_model":      apierr.CodeConversationNoModel,
+	"busy":          apierr.CodeConversationBusy,
+	"moved":         apierr.CodeConversationMoved,
 }
 
 func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
@@ -259,6 +263,13 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Title = &title
 	}
+	if req.Archived != nil && *req.Archived {
+		unlock, ok := s.lock(r.Context(), c.ID)
+		if !ok {
+			return
+		}
+		defer unlock()
+	}
 	user, workspace := caller(r)
 	c, err := s.update(r.Context(), workspace, user, c.ID, req.Title, req.Archived, req.CLIPermissions)
 	if errors.Is(err, errNotFound) {
@@ -346,6 +357,117 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	s.markWhenSettled(rt, Principal{Conversation: c.ID, AgentConversation: c.agentID, Workspace: c.WorkspaceID, User: user}, model.Provider, sub)
 	writeJSON(w, http.StatusAccepted, map[string]int64{"submission_id": sub})
+}
+
+type SubmissionReply struct {
+	SubmissionID int64    `json:"submission_id"`
+	Model        modelRef `json:"model"`
+}
+
+type ContinueModels struct {
+	Providers []providers.Choice `json:"providers"`
+}
+
+type Models func(ctx context.Context, p Principal) ([]providers.Choice, error)
+
+func (s *Service) SetContinueModels(m Models) { s.models = m }
+
+func (s *Service) runnableModels(ctx context.Context, p Principal) ([]providers.Choice, error) {
+	if s.models == nil {
+		return []providers.Choice{}, nil
+	}
+	return s.models(ctx, p)
+}
+
+func principalOf(r *http.Request, c Conversation) Principal {
+	user, _ := caller(r)
+	return Principal{Conversation: c.ID, AgentConversation: c.agentID, Workspace: c.WorkspaceID, User: user}
+}
+
+func (s *Service) handleContinueModels(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.writable(w, r)
+	if !ok {
+		return
+	}
+	choices, err := s.runnableModels(r.Context(), principalOf(r, c))
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ContinueModels{Providers: choices})
+}
+
+func (s *Service) runnable(w http.ResponseWriter, r *http.Request, p Principal, m agentrt.ModelRef) bool {
+	choices, err := s.runnableModels(r.Context(), p)
+	if err != nil {
+		serverError(w, r, err)
+		return false
+	}
+	for _, c := range choices {
+		if c.Provider != m.Provider {
+			continue
+		}
+		for _, mc := range c.Models {
+			if mc.ID == m.ModelID {
+				return true
+			}
+		}
+	}
+	writeError(w, http.StatusConflict, apierr.CodeModelUnavailable, "that model can't be used now: connect its account or choose another")
+	return false
+}
+
+func (s *Service) handleContinue(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.writable(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Model      modelRef `json:"model"`
+		AfterEntry int64    `json:"after_entry"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.AfterEntry < 1 {
+		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "after_entry must be the id of the conversation's last entry")
+		return
+	}
+	model, ok := usable(w, r, req.Model)
+	if !ok {
+		return
+	}
+	rt, ok := s.runtime(w, r)
+	if !ok {
+		return
+	}
+	if err := s.ensureUsageMark(r.Context(), rt, c.ID, c.agentID); err != nil {
+		conversationError(w, r, c, err)
+		return
+	}
+	p := principalOf(r, c)
+	if !s.runnable(w, r, p, model) {
+		return
+	}
+	unlock, ok := s.lock(r.Context(), c.ID)
+	if !ok {
+		return
+	}
+	defer unlock()
+	if !s.stillWritable(w, r) {
+		return
+	}
+	sub, admitted, err := rt.Continue(r.Context(), c.agentID, model, req.AfterEntry)
+	if err != nil {
+		conversationError(w, r, c, err)
+		return
+	}
+	if err := s.touch(context.WithoutCancel(r.Context()), c.ID, c.agentID); err != nil {
+		slog.WarnContext(r.Context(), "conversations: marking a conversation updated", "conversation", c.ID, "err", err)
+	}
+	s.markWhenSettled(rt, p, admitted.Provider, sub)
+	slog.InfoContext(r.Context(), "conversation continued", "conversation", c.ID, "provider", admitted.Provider, "by", p.User)
+	writeJSON(w, http.StatusAccepted, SubmissionReply{SubmissionID: sub, Model: modelRef{Provider: admitted.Provider, ModelID: admitted.ModelID}})
 }
 
 func (s *Service) handleMessages(w http.ResponseWriter, r *http.Request) {

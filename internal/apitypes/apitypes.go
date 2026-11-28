@@ -52,6 +52,8 @@ func Roots() []Root {
 		root[boards.Thread]("CardThread"),
 
 		root[conversations.Conversation]("Conversation"),
+		root[conversations.SubmissionReply]("SubmissionReply"),
+		root[conversations.ContinueModels]("ContinueModels"),
 		root[conversations.NoteReply]("NoteReply"),
 		root[cliaccounts.SwitchingState]("SwitchingState"),
 		root[notifications.Item]("NotificationItem"),

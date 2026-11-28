@@ -21,6 +21,7 @@ import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { ChatTranscript } from './ChatTranscript'
 import { CliPermissionsSwitch, CliQuestions } from './CliPermissions'
 import { Composer } from './Composer'
+import { ContinueBar } from './ContinueBar'
 import { ConversationHead } from './ConversationHead'
 import './Conversations.css'
 import { type History, useHistory } from './history'
@@ -82,7 +83,7 @@ export function ConversationView({
   }, [status])
   const loadPage = useCallback((before: number) => api<History>(`${base}/entries?before=${before}`), [base])
   const older = useHistory(view, loadPage)
-  const { messages, running, truncated } = transcript(
+  const { messages, lastEntry, running, truncated } = transcript(
     view && older.history ? { ...view, entries: older.history.entries, before: older.history.before } : view,
   )
   const archived = Boolean(meta.data?.archived_at)
@@ -104,6 +105,8 @@ export function ConversationView({
   const newestRead = useRef(0)
   const pickedAt = useRef(0)
   const [picked, setPicked] = useState<ModelRef | null>(null)
+  const [continuing, setContinuing] = useState(false)
+  const modelWrites = useRef(0)
   if (useChanged(base) && picked) setPicked(null)
   const loadedModel = useLoad(() => {
     const at = ++order.current
@@ -113,9 +116,13 @@ export function ConversationView({
       return m
     })
   }, [base])
-  const claimModel = () => (m: ModelRef) => {
-    pickedAt.current = ++order.current
-    setPicked(m)
+  const claimModel = () => {
+    const mine = ++modelWrites.current
+    return (m: ModelRef) => {
+      if (mine !== modelWrites.current) return
+      pickedAt.current = ++order.current
+      setPicked(m)
+    }
   }
   const model = picked ?? loadedModel.data
   const turnKey = view ? (running ? 'running' : `idle:${messages.at(-1)?.key ?? ''}`) : undefined
@@ -148,6 +155,7 @@ export function ConversationView({
   }
 
   const last = messages.at(-1)
+  const reply = messages.findLast((m) => m.role !== 'note')
 
   return (
     <section className="ui-chat" aria-label={t('conversations.conversation')}>
@@ -234,6 +242,19 @@ export function ConversationView({
         onLoadEarlier={older.loadEarlier}
         loadingEarlier={older.loading}
         earlierError={older.error}
+        footer={
+          reply?.failed && !running && !archived && !unreadable && model && lastEntry !== undefined ? (
+            <ContinueBar
+              key={lastEntry}
+              base={base}
+              current={model}
+              afterEntry={lastEntry}
+              claim={claimModel}
+              onContinued={onChanged}
+              onPending={setContinuing}
+            />
+          ) : undefined
+        }
       />
       <Composer
         workspace={workspace}
@@ -251,7 +272,7 @@ export function ConversationView({
             current={model}
             cli={cli.data}
             claim={claimModel}
-            disabled={archived || unreadable}
+            disabled={archived || unreadable || continuing}
           />
         )}
       </Composer>

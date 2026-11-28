@@ -20,6 +20,14 @@ export const ALLOWED = new Map([
     },
   ],
   [
+    'src/apps/IconDialog.tsx',
+    {
+      input: 2,
+      reason:
+        'the app icon picker: a grid of emoji that are native radio buttons in one group, so the arrow keys move between them as the browser does for any radio group, each drawn as a tile; no component of src/ui/ is a group of tiles',
+    },
+  ],
+  [
     'src/markdown.tsx',
     {
       input: 1,

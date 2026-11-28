@@ -122,6 +122,25 @@ export type Me = {
   session?: string
 }
 
+export type SubmissionReply = { submission_id: number; model: { provider: string; model_id: string } }
+
+export type ContinueChoice = {
+  provider: string
+  name: string
+  scope: string
+  account?: number
+  models: { id: string; name: string }[] | null
+}
+
+export type ContinueModels = { providers: ContinueChoice[] | null }
+
+export type ContinueRequest = { model: { provider: string; model_id: string }; after_entry: number }
+
+export const continueConversation = (base: string, body: ContinueRequest) =>
+  api<SubmissionReply>(`${base}/continue`, { method: 'POST', body })
+
+export const continueModels = (base: string) => api<ContinueModels>(`${base}/continue-models`)
+
 export type Conversation = {
   id: number
   workspace_id: number
@@ -283,6 +302,7 @@ export type App = {
   id: number
   space_id: number
   name: string
+  icon: string
   archived_at: string | null
   version: number
   rows: number
@@ -310,6 +330,7 @@ export type OfflineApp = {
   app_id: number
   space_id: number
   name: string
+  icon: string
   release: number
   definition: {
     definition_version: number
@@ -362,6 +383,7 @@ export type HomeItem = {
   space_id: number
   app_id: number
   app_name: string
+  app_icon?: string
   widget_id?: string
   widget?: Widget
   label?: string
@@ -408,6 +430,7 @@ export type AvailableApp = {
   space_kind: 'private' | 'shared'
   app_id: number
   name: string
+  icon: string
   widgets: Widget[]
   pin: Pin | null
   can_set_defaults: boolean
